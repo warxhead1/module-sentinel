@@ -1,0 +1,21 @@
+{
+  "projectPath": "/path/to/your/planet_procgen",
+  "scanPaths": [
+    "/path/to/your/planet_procgen/src",
+    "/path/to/your/planet_procgen/include"
+  ],
+  "filePatterns": {
+    "source": ["**/*.cpp", "**/*.cc", "**/*.cxx"],
+    "header": ["**/*.hpp", "**/*.h", "**/*.ixx"]
+  },
+  "geminiApiKey": "YOUR_GEMINI_API_KEY_HERE",
+  "stageMapping": {
+    "noise": "noise_generation",
+    "terrain": "terrain_formation",
+    "atmosphere": "atmospheric_dynamics",
+    "geological": "geological_processes",
+    "ecosystem": "ecosystem_simulation",
+    "weather": "weather_systems",
+    "render": "final_rendering"
+  }
+}

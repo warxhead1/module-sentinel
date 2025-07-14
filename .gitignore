@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-test/
+build/
+*.js
+*.d.ts
+*.js.map
+*.d.ts.map
+
+# Package archives
+*.tgz
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+.module-sentinel/
+
+# Test databases
+.test-db/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# API Keys and secrets
+module-sentinel.config.json
+config.json
+secrets.json
+
+# Temporary and test files
+minimal-repro.js
+test-const-regex.js
+test-cross-file-fix.js
+
+# Visualization outputs (keep only the source files)
+visualizations/*.html
+visualizations/*.svg
