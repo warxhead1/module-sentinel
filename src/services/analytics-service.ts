@@ -1395,6 +1395,129 @@ export class AnalyticsService {
     return result;
   }
 
+  /**
+   * Generate enhanced analytics leveraging our rich semantic data
+   */
+  async generateEnhancedAnalytics(filePath?: string): Promise<void> {
+    console.log('🔬 Generating enhanced analytics from semantic data...');
+    
+    const fileFilter = filePath ? 'WHERE file_path = ?' : '';
+    const params = filePath ? [filePath] : [];
+    
+    // Update symbol quality analytics with our rich type data
+    const symbolMetrics = this.db.prepare(`
+      SELECT 
+        file_path,
+        COUNT(*) as total_symbols,
+        COUNT(CASE WHEN parser_confidence > 0.8 THEN 1 END) as high_confidence_symbols,
+        AVG(parser_confidence) as avg_confidence,
+        AVG(complexity) as avg_complexity,
+        
+        -- Enhanced type analytics
+        COUNT(CASE WHEN is_vulkan_type = 1 THEN 1 END) as vulkan_type_count,
+        COUNT(CASE WHEN is_std_type = 1 THEN 1 END) as std_type_count,
+        COUNT(CASE WHEN is_planetgen_type = 1 THEN 1 END) as planetgen_type_count,
+        COUNT(CASE WHEN is_enum_class = 1 THEN 1 END) as enum_class_count,
+        COUNT(CASE WHEN is_exported = 1 THEN 1 END) as exported_symbol_count,
+        COUNT(CASE WHEN is_constructor = 1 THEN 1 END) as constructor_count,
+        COUNT(CASE WHEN is_destructor = 1 THEN 1 END) as destructor_count,
+        COUNT(CASE WHEN is_operator = 1 THEN 1 END) as operator_overload_count,
+        COUNT(CASE WHEN is_template = 1 THEN 1 END) as template_count
+      FROM enhanced_symbols 
+      ${fileFilter}
+      GROUP BY file_path
+    `).all(...params) as any[];
+    
+    for (const metrics of symbolMetrics) {
+      // Calculate enhanced scores
+      const typeSafetyScore = this.calculateTypeSafetyScore(metrics);
+      const apiDesignScore = this.calculateApiDesignScore(metrics);
+      const namespaceOrgScore = this.calculateNamespaceOrganizationScore(metrics.file_path);
+      const moduleCoheScore = this.calculateModuleCohesionScore(metrics.file_path);
+      
+      // Get semantic connections for this file
+      const semanticConnections = this.db.prepare(`
+        SELECT COUNT(*) as connection_count
+        FROM semantic_connections sc
+        JOIN enhanced_symbols es1 ON sc.symbol_id = es1.id
+        WHERE es1.file_path = ?
+      `).get(metrics.file_path) as any;
+      
+      // Update analytics_symbol_quality table
+      this.db.prepare(`
+        INSERT OR REPLACE INTO analytics_symbol_quality (
+          file_path, total_symbols, high_confidence_symbols, avg_confidence, avg_complexity,
+          vulkan_type_count, std_type_count, planetgen_type_count, enum_class_count,
+          exported_symbol_count, constructor_destructor_pairs, operator_overload_count,
+          semantic_connection_count, type_safety_score, api_design_score,
+          namespace_organization_score, module_cohesion_score, last_updated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+      `).run(
+        metrics.file_path, metrics.total_symbols, metrics.high_confidence_symbols,
+        metrics.avg_confidence, metrics.avg_complexity, metrics.vulkan_type_count,
+        metrics.std_type_count, metrics.planetgen_type_count, metrics.enum_class_count,
+        metrics.exported_symbol_count, Math.min(metrics.constructor_count, metrics.destructor_count),
+        metrics.operator_overload_count, semanticConnections?.connection_count || 0,
+        typeSafetyScore, apiDesignScore, namespaceOrgScore, moduleCoheScore
+      );
+    }
+    
+    console.log(`✅ Enhanced analytics generated for ${symbolMetrics.length} files`);
+  }
+  
+  private calculateTypeSafetyScore(metrics: any): number {
+    const total = metrics.total_symbols || 1;
+    const enumClassRatio = metrics.enum_class_count / total;
+    const strongTypeRatio = (metrics.planetgen_type_count + metrics.std_type_count) / total;
+    const templateUsage = metrics.template_count / total;
+    
+    return Math.min(1.0, (enumClassRatio * 0.3 + strongTypeRatio * 0.5 + templateUsage * 0.2));
+  }
+  
+  private calculateApiDesignScore(metrics: any): number {
+    const total = metrics.total_symbols || 1;
+    const exportRatio = Math.min(1.0, metrics.exported_symbol_count / (total * 0.3));
+    const operatorRatio = Math.min(1.0, metrics.operator_overload_count / (total * 0.1));
+    const raiiScore = Math.min(1.0, Math.min(metrics.constructor_count, metrics.destructor_count) / (total * 0.1));
+    
+    return (exportRatio * 0.4 + operatorRatio * 0.3 + raiiScore * 0.3);
+  }
+  
+  private calculateNamespaceOrganizationScore(filePath: string): number {
+    const namespaceStats = this.db.prepare(`
+      SELECT 
+        COUNT(DISTINCT namespace) as namespace_count,
+        COUNT(*) as total_symbols,
+        COUNT(CASE WHEN namespace IS NOT NULL AND namespace != '' THEN 1 END) as namespaced_symbols
+      FROM enhanced_symbols 
+      WHERE file_path = ?
+    `).get(filePath) as any;
+    
+    if (!namespaceStats || namespaceStats.total_symbols === 0) return 0;
+    
+    const namespacedRatio = namespaceStats.namespaced_symbols / namespaceStats.total_symbols;
+    const namespaceComplexity = Math.min(1.0, namespaceStats.namespace_count / 5);
+    
+    return namespacedRatio * 0.7 + (1 - namespaceComplexity) * 0.3;
+  }
+  
+  private calculateModuleCohesionScore(filePath: string): number {
+    const cohesionStats = this.db.prepare(`
+      SELECT 
+        COUNT(CASE WHEN es2.file_path = es1.file_path THEN 1 END) as internal_connections,
+        COUNT(CASE WHEN es2.file_path != es1.file_path THEN 1 END) as external_connections
+      FROM semantic_connections sc
+      JOIN enhanced_symbols es1 ON sc.symbol_id = es1.id
+      JOIN enhanced_symbols es2 ON sc.connected_id = es2.id
+      WHERE es1.file_path = ?
+    `).get(filePath) as any;
+    
+    const totalConnections = (cohesionStats?.internal_connections || 0) + (cohesionStats?.external_connections || 0);
+    if (totalConnections === 0) return 0.5;
+    
+    return (cohesionStats.internal_connections || 0) / totalConnections;
+  }
+
   close(): void {
     this.symbolGraphService.close();
     this.db.close();

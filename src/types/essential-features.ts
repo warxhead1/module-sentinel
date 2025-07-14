@@ -149,6 +149,13 @@ export interface EnhancedModuleInfo {
   patterns: CodePattern[];
   imports: DetailedImport[];
   exports: DetailedExport[];
+  // Enhanced: C++20/23 Module information
+  moduleInfo?: {
+    isModule: boolean;
+    moduleName?: string | null;
+    importedModules: string[];
+    exportNamespaces: string[];
+  };
 }
 
 export interface MethodSignature {
@@ -161,7 +168,15 @@ export interface MethodSignature {
   isStatic: boolean;
   isConst: boolean;
   templateParams?: string[];
+  // Enhanced: Namespace and qualification support
+  namespace?: string;
+  qualifiedName?: string;
+  isExported?: boolean;
   location: { line: number; column: number };
+  // Enhanced: Detailed type analysis
+  enhancedSignature?: any; // EnhancedMethodSignature from enhanced-type-analyzer
+  returnTypeInfo?: any; // DetailedTypeInfo from enhanced-type-analyzer
+  enhancedParameters?: any[]; // EnhancedParameterInfo[] from enhanced-type-analyzer
 }
 
 export interface ParameterInfo {
@@ -182,7 +197,13 @@ export interface ClassInfo {
   members: MemberInfo[];
   isTemplate: boolean;
   templateParams?: string[];
+  // Enhanced: Support for enum information
+  isEnum?: boolean;
+  isEnumClass?: boolean;
+  enumValues?: string[];
   location: { line: number; column: number };
+  // Enhanced: Detailed type analysis
+  enhancedMembers?: any[]; // EnhancedMemberInfo[] from enhanced-type-analyzer
 }
 
 export interface InterfaceInfo {
@@ -209,9 +230,15 @@ export interface DetailedImport {
 
 export interface DetailedExport {
   symbol: string;
-  type: 'class' | 'function' | 'variable' | 'interface' | 'enum' | 'namespace';
+  type: 'class' | 'function' | 'variable' | 'interface' | 'enum' | 'namespace' | 'using_alias' | 'enum_value';
   signature?: string;
   location: { line: number; column: number };
+  // Enhanced: Module export information
+  namespace?: string;
+  isModuleExport?: boolean;
+  isNamespaceExport?: boolean;
+  moduleContext?: string;
+  originalType?: string; // For using aliases
 }
 
 export interface CodeContext {

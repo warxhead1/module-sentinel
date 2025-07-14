@@ -7,37 +7,17 @@ import { ArchitecturalDecision, ThoughtPattern } from '../types/index.js';
 import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
 
 export class ThoughtSignaturePreserver {
-  private db?: Database.Database;
-  private encryptionKey: Buffer;
+  private db: Database.Database;
+  private schemaManager: UnifiedSchemaManager;
 
-  constructor(db?: Database.Database) {
-    // Use provided database or fall back to shared database
+  constructor(db: Database.Database) {
     this.db = db;
-    this.encryptionKey = this.deriveEncryptionKey();
-  }
-
-  async initialize(): Promise<void> {
-    // Always use the shared database path
-    const dbPath = path.join(process.cwd(), 'module-sentinel.db'); // Use same as PatternAwareIndexer
-    
-    if (!this.db) {
-      // Ensure directory exists
-      const dir = path.dirname(dbPath);
-      await fs.mkdir(dir, { recursive: true });
-
-      this.db = new Database(dbPath);
-      
-      // Initialize with unified schema
-      const schemaManager = UnifiedSchemaManager.getInstance();
-      schemaManager.initializeDatabase(this.db);
-    }
+    this.schemaManager = UnifiedSchemaManager.getInstance();
+    this.schemaManager.initializeDatabase(this.db);
+    console.log('ThoughtSignaturePreserver initialized successfully with shared DB.');
   }
 
   recordDecision(decision: ArchitecturalDecision): void {
-    if (!this.db) {
-      console.warn('ThoughtSignaturePreserver not initialized, skipping decision recording');
-      return;
-    }
 
     const encryptedContext = this.encrypt(JSON.stringify({
       decision,
@@ -217,7 +197,7 @@ export class ThoughtSignaturePreserver {
 
   private encrypt(data: string): string {
     const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', this.encryptionKey, iv);
+    const cipher = crypto.createCipheriv('aes-256-cbc', this.deriveEncryptionKey(), iv);
     
     let encrypted = cipher.update(data, 'utf8', 'hex');
     encrypted += cipher.final('hex');
@@ -229,7 +209,7 @@ export class ThoughtSignaturePreserver {
     const [ivHex, encrypted] = data.split(':');
     const iv = Buffer.from(ivHex, 'hex');
     
-    const decipher = crypto.createDecipheriv('aes-256-cbc', this.encryptionKey, iv);
+    const decipher = crypto.createDecipheriv('aes-256-cbc', this.deriveEncryptionKey(), iv);
     
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
@@ -247,6 +227,10 @@ export class ThoughtSignaturePreserver {
     return crypto.createHash('sha256').update(data).digest('hex');
   }
 
+  /**
+   * Shuts down the ThoughtSignaturePreserver, closing the database connection.
+   * @returns A promise that resolves when the shutdown is complete.
+   */
   async shutdown(): Promise<void> {
     if (this.db) {
       this.db.close();

@@ -283,10 +283,10 @@ export class CallFlowVisualizer {
     <meta charset="UTF-8">
     <title>Call Flow: ${startSymbol} - Planet ProcGen</title>
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dagre@0.8.5/dist/dagre.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/webcola@3.4.0/WebCola/cola.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-cola@2.5.1/cytoscape-cola.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -613,8 +613,84 @@ export class CallFlowVisualizer {
             })))}
         };
         
+        // Global variables
+        let cy;
+        let showKeyPathOnly = false;
+        
+        // Layout functions
+        function changeLayout(layoutName) {
+            // Update button states
+            document.querySelectorAll('.button-group button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            
+            const layoutOptions = {
+                dagre: {
+                    name: 'dagre',
+                    rankDir: 'TB',
+                    nodeSep: 100,
+                    rankSep: 150,
+                    padding: 50
+                },
+                cola: {
+                    name: 'cola',
+                    nodeSpacing: 50,
+                    edgeLength: 200,
+                    maxSimulationTime: 2000
+                },
+                breadthfirst: {
+                    name: 'breadthfirst',
+                    directed: true,
+                    padding: 50,
+                    spacingFactor: 1.5
+                }
+            };
+            
+            cy.layout(layoutOptions[layoutName]).run();
+        }
+        
+        function toggleKeyPath() {
+            showKeyPathOnly = !showKeyPathOnly;
+            document.getElementById('keyPathBtn').classList.toggle('active');
+            
+            if (showKeyPathOnly) {
+                cy.elements().hide();
+                cy.nodes('[isKeyPath = true]').show();
+                cy.edges().filter(function(edge) {
+                    return edge.source().data('isKeyPath') && edge.target().data('isKeyPath');
+                }).show();
+            } else {
+                cy.elements().show();
+            }
+        }
+        
+        function highlightStage(stage) {
+            cy.elements().removeClass('highlighted dimmed');
+            
+            if (stage !== 'all') {
+                cy.nodes().forEach(function(node) {
+                    if (node.data('stage') === stage) {
+                        node.addClass('highlighted');
+                    } else {
+                        node.addClass('dimmed');
+                    }
+                });
+                
+                cy.edges().forEach(function(edge) {
+                    const sourceStage = edge.source().data('stage');
+                    const targetStage = edge.target().data('stage');
+                    if (sourceStage === stage || targetStage === stage) {
+                        edge.addClass('highlighted');
+                    } else {
+                        edge.addClass('dimmed');
+                    }
+                });
+            }
+        }
+
         // Initialize Cytoscape
-        const cy = cytoscape({
+        cy = cytoscape({
             container: document.getElementById('cy'),
             elements: graphData,
             style: [
@@ -745,69 +821,6 @@ export class CallFlowVisualizer {
                 cy.elements().removeClass('dimmed highlighted');
             }
         });
-        
-        // Layout functions
-        function changeLayout(layoutName) {
-            // Update button states
-            document.querySelectorAll('.button-group button').forEach(btn => {
-                btn.classList.remove('active');
-            });
-            event.target.classList.add('active');
-            
-            const layoutOptions = {
-                dagre: {
-                    name: 'dagre',
-                    rankDir: 'TB',
-                    nodeSep: 100,
-                    rankSep: 150,
-                    padding: 50
-                },
-                cola: {
-                    name: 'cola',
-                    nodeSpacing: 50,
-                    edgeLength: 200,
-                    maxSimulationTime: 2000
-                },
-                breadthfirst: {
-                    name: 'breadthfirst',
-                    directed: true,
-                    padding: 50,
-                    spacingFactor: 1.5
-                }
-            };
-            
-            cy.layout(layoutOptions[layoutName]).run();
-        }
-        
-        let showKeyPathOnly = false;
-        function toggleKeyPath() {
-            showKeyPathOnly = !showKeyPathOnly;
-            document.getElementById('keyPathBtn').classList.toggle('active');
-            
-            if (showKeyPathOnly) {
-                cy.elements().hide();
-                cy.nodes('[isKeyPath = true]').show();
-                cy.edges('[isKeyPath = true]').show();
-                
-                // Show edges connected to key path nodes
-                cy.nodes('[isKeyPath = true]').connectedEdges().show();
-                cy.nodes('[isKeyPath = true]').neighborhood().show();
-            } else {
-                cy.elements().show();
-            }
-            
-            cy.layout({ name: 'dagre', rankDir: 'TB' }).run();
-        }
-        
-        function highlightStage(stage) {
-            if (!stage) {
-                cy.elements().removeClass('dimmed highlighted');
-            } else {
-                cy.elements().addClass('dimmed');
-                cy.nodes('[stage = "' + stage + '"]').removeClass('dimmed').addClass('highlighted');
-                cy.nodes('[stage = "' + stage + '"]').connectedEdges().removeClass('dimmed');
-            }
-        }
         
         // Mouse hover for edges
         cy.on('mouseover', 'edge', function(evt) {

@@ -27,7 +27,7 @@ export class UnifiedSchemaManager {
    */
   initializeDatabase(db: Database.Database): void {
     // Use database filename as identifier to track per-database initialization
-    const dbIdentifier = db.name || 'unknown';
+    const dbIdentifier = (db as any).name || db.memory ? 'memory' : 'unknown';
     if (this.initializedDatabases.has(dbIdentifier)) return;
     
     // Core symbol storage with multi-parser support
@@ -106,6 +106,39 @@ export class UnifiedSchemaManager {
         related_symbols TEXT DEFAULT '[]', -- JSON array of symbol IDs
         complexity INTEGER DEFAULT 0,
         
+        -- Enhanced Type Information (Grammar-Aware Parser)
+        base_type TEXT, -- Base type without qualifiers (e.g., 'string' from 'const std::string&')
+        is_pointer BOOLEAN DEFAULT 0,
+        is_reference BOOLEAN DEFAULT 0,
+        is_const BOOLEAN DEFAULT 0,
+        is_volatile BOOLEAN DEFAULT 0,
+        is_builtin BOOLEAN DEFAULT 0,
+        is_std_type BOOLEAN DEFAULT 0,
+        is_vulkan_type BOOLEAN DEFAULT 0,
+        is_planetgen_type BOOLEAN DEFAULT 0,
+        template_arguments TEXT DEFAULT '[]', -- JSON array of template arguments
+        type_modifiers TEXT DEFAULT '[]', -- JSON array of type modifiers
+        array_dimensions TEXT DEFAULT '[]', -- JSON array of array sizes
+        
+        -- Enhanced Enum Support
+        is_enum BOOLEAN DEFAULT 0,
+        is_enum_class BOOLEAN DEFAULT 0,
+        enum_values TEXT DEFAULT '[]', -- JSON array of enum values
+        
+        -- Enhanced Method Information
+        is_constructor BOOLEAN DEFAULT 0,
+        is_destructor BOOLEAN DEFAULT 0,
+        is_operator BOOLEAN DEFAULT 0,
+        operator_type TEXT,
+        is_override BOOLEAN DEFAULT 0,
+        is_final BOOLEAN DEFAULT 0,
+        is_noexcept BOOLEAN DEFAULT 0,
+        
+        -- C++20/23 Module Information
+        is_exported BOOLEAN DEFAULT 0,
+        module_name TEXT,
+        export_namespace TEXT,
+        
         -- Parser tracking for intelligent merging
         parser_used TEXT DEFAULT 'unknown',
         parser_confidence REAL DEFAULT 0.0,
@@ -131,6 +164,38 @@ export class UnifiedSchemaManager {
       CREATE INDEX IF NOT EXISTS idx_symbols_confidence ON enhanced_symbols(parser_confidence);
       CREATE INDEX IF NOT EXISTS idx_symbols_stage ON enhanced_symbols(pipeline_stage);
       CREATE INDEX IF NOT EXISTS idx_symbols_execution ON enhanced_symbols(execution_mode);
+      
+      -- Enhanced Type Information Indexes
+      CREATE INDEX IF NOT EXISTS idx_symbols_base_type ON enhanced_symbols(base_type);
+      CREATE INDEX IF NOT EXISTS idx_symbols_type_category ON enhanced_symbols(is_std_type, is_vulkan_type, is_planetgen_type);
+      CREATE INDEX IF NOT EXISTS idx_symbols_enum ON enhanced_symbols(is_enum, is_enum_class);
+      CREATE INDEX IF NOT EXISTS idx_symbols_module ON enhanced_symbols(module_name, is_exported);
+      CREATE INDEX IF NOT EXISTS idx_symbols_method_type ON enhanced_symbols(is_constructor, is_destructor, is_operator);
+      
+      -- Enhanced Parameter Details Table
+      CREATE TABLE IF NOT EXISTS enhanced_parameters (
+        id INTEGER PRIMARY KEY,
+        symbol_id INTEGER REFERENCES enhanced_symbols(id) ON DELETE CASCADE,
+        parameter_index INTEGER NOT NULL,
+        name TEXT,
+        type_name TEXT NOT NULL,
+        qualified_type TEXT,
+        base_type TEXT,
+        is_pointer BOOLEAN DEFAULT 0,
+        is_reference BOOLEAN DEFAULT 0,
+        is_const BOOLEAN DEFAULT 0,
+        is_volatile BOOLEAN DEFAULT 0,
+        is_template BOOLEAN DEFAULT 0,
+        template_arguments TEXT DEFAULT '[]', -- JSON array
+        default_value TEXT,
+        is_variadic BOOLEAN DEFAULT 0,
+        type_category TEXT, -- 'builtin', 'std', 'vulkan', 'planetgen', 'custom'
+        
+        UNIQUE(symbol_id, parameter_index)
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_parameters_symbol ON enhanced_parameters(symbol_id);
+      CREATE INDEX IF NOT EXISTS idx_parameters_type ON enhanced_parameters(base_type, type_category);
     `);
   }
   
@@ -459,17 +524,8 @@ export class UnifiedSchemaManager {
         active BOOLEAN DEFAULT 1
       );
       
-      CREATE TABLE IF NOT EXISTS validation_results (
-        session_id TEXT NOT NULL,
-        validation_type TEXT NOT NULL,
-        passed BOOLEAN NOT NULL,
-        message TEXT,
-        severity TEXT NOT NULL,
-        file_path TEXT,
-        line_number INTEGER,
-        timestamp INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES agent_sessions(session_id)
-      );
+      -- REMOVED: validation_results table - no usage found in codebase
+      -- CREATE TABLE IF NOT EXISTS validation_results (...)
       
       CREATE TABLE IF NOT EXISTS guidance_rules (
         rule_id TEXT PRIMARY KEY,
@@ -483,13 +539,29 @@ export class UnifiedSchemaManager {
         active BOOLEAN DEFAULT 1
       );
       
+      -- Enhanced quality metrics with rich type information
       CREATE TABLE IF NOT EXISTS quality_metrics (
-        session_id TEXT NOT NULL,
+        id INTEGER PRIMARY KEY,
+        session_id TEXT,
+        file_path TEXT NOT NULL,
         metric_name TEXT NOT NULL,
         value_before REAL,
         value_after REAL,
         delta REAL,
+        
+        -- Enhanced metrics leveraging our rich data
+        vulkan_type_usage_score REAL,
+        std_type_usage_score REAL,
+        planetgen_type_usage_score REAL,
+        namespace_cohesion_score REAL,
+        module_export_quality_score REAL,
+        semantic_connection_density REAL,
+        pipeline_stage_clarity REAL,
+        type_safety_score REAL,
+        
         timestamp INTEGER NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        
         FOREIGN KEY (session_id) REFERENCES agent_sessions(session_id)
       );
       
@@ -497,8 +569,13 @@ export class UnifiedSchemaManager {
       CREATE INDEX IF NOT EXISTS idx_session_status ON agent_sessions(status);
       CREATE INDEX IF NOT EXISTS idx_modifications_session ON session_modifications(session_id);
       CREATE INDEX IF NOT EXISTS idx_crossings_session ON boundary_crossings(session_id);
-      CREATE INDEX IF NOT EXISTS idx_validations_session ON validation_results(session_id);
-      CREATE INDEX IF NOT EXISTS idx_metrics_session ON quality_metrics(session_id);
+      -- Enhanced indexes for analytics performance
+      CREATE INDEX IF NOT EXISTS idx_quality_metrics_file ON quality_metrics(file_path);
+      CREATE INDEX IF NOT EXISTS idx_quality_metrics_session ON quality_metrics(session_id);
+      CREATE INDEX IF NOT EXISTS idx_quality_metrics_timestamp ON quality_metrics(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_symbol_quality_type_safety ON analytics_symbol_quality(type_safety_score);
+      CREATE INDEX IF NOT EXISTS idx_module_metrics_health ON analytics_module_metrics(health_score);
+      CREATE INDEX IF NOT EXISTS idx_module_metrics_integration ON analytics_module_metrics(type_ecosystem_integration);
       
       -- Architectural decisions with reasoning
       CREATE TABLE IF NOT EXISTS architectural_decisions (
@@ -554,6 +631,24 @@ export class UnifiedSchemaManager {
         avg_complexity REAL,
         has_antipatterns BOOLEAN,
         has_duplicates BOOLEAN,
+        
+        -- Enhanced type analytics from our rich data
+        vulkan_type_count INTEGER DEFAULT 0,
+        std_type_count INTEGER DEFAULT 0,
+        planetgen_type_count INTEGER DEFAULT 0,
+        enum_class_count INTEGER DEFAULT 0,
+        exported_symbol_count INTEGER DEFAULT 0,
+        constructor_destructor_pairs INTEGER DEFAULT 0,
+        operator_overload_count INTEGER DEFAULT 0,
+        template_specialization_count INTEGER DEFAULT 0,
+        semantic_connection_count INTEGER DEFAULT 0,
+        
+        -- Type safety and quality scores
+        type_safety_score REAL DEFAULT 0.0,
+        api_design_score REAL DEFAULT 0.0,
+        namespace_organization_score REAL DEFAULT 0.0,
+        module_cohesion_score REAL DEFAULT 0.0,
+        
         last_updated INTEGER DEFAULT (strftime('%s', 'now'))
       );
       
@@ -567,6 +662,21 @@ export class UnifiedSchemaManager {
         abstractness REAL,
         main_sequence_distance REAL,
         health_score REAL,
+        
+        -- Enhanced module analytics leveraging our rich semantic data
+        export_interface_quality REAL DEFAULT 0.0,  -- How well-designed are exported APIs
+        type_ecosystem_integration REAL DEFAULT 0.0, -- Integration with Vulkan/STL/PlanetGen
+        pipeline_stage_alignment REAL DEFAULT 0.0,  -- How well module aligns with its pipeline stage
+        semantic_coherence REAL DEFAULT 0.0,        -- How semantically related are module contents
+        module_export_completeness REAL DEFAULT 0.0, -- Are all important symbols exported
+        cross_stage_dependency_health REAL DEFAULT 0.0, -- Quality of dependencies between pipeline stages
+        
+        -- Detailed breakdowns
+        vulkan_wrapper_ratio REAL DEFAULT 0.0,      -- Ratio of Vulkan wrappers to raw Vulkan usage
+        factory_pattern_usage REAL DEFAULT 0.0,     -- How well factory patterns are used
+        raii_compliance_score REAL DEFAULT 0.0,     -- Constructor/destructor pair completeness
+        const_correctness_score REAL DEFAULT 0.0,   -- Const/non-const method pair completeness
+        
         last_updated INTEGER DEFAULT (strftime('%s', 'now'))
       );
       

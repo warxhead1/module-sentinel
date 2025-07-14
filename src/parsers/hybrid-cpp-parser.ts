@@ -1,5 +1,6 @@
 import { ClangAstParser } from './clang-ast-parser.js';
 import { EnhancedTreeSitterParser } from './enhanced-tree-sitter-parser.js';
+import { GrammarAwareParser } from './grammar-aware-parser.js';
 import { DatabaseAwareTreeSitterParser } from './database-aware-tree-sitter.js';
 import { StreamingCppParser } from './streaming-cpp-parser.js';
 import { EnhancedModuleInfo, MethodSignature, ClassInfo } from '../types/essential-features.js';
@@ -23,6 +24,7 @@ import * as crypto from 'crypto';
 export class HybridCppParser {
   private clangParser?: ClangAstParser;
   private treeSitterParser: EnhancedTreeSitterParser;
+  private grammarAwareParser: GrammarAwareParser;
   private dbAwareTreeSitterParser?: DatabaseAwareTreeSitterParser;
   private streamingParser: StreamingCppParser;
   private hasClang: boolean = false;
@@ -33,6 +35,7 @@ export class HybridCppParser {
   
   constructor() {
     this.treeSitterParser = new EnhancedTreeSitterParser();
+    this.grammarAwareParser = new GrammarAwareParser();
     this.streamingParser = new StreamingCppParser();
     this.schemaManager = UnifiedSchemaManager.getInstance();
     this.knowledgeBase = new KnowledgeBase(''); // Initialize with placeholder path
@@ -44,8 +47,9 @@ export class HybridCppParser {
     await this.knowledgeBase.initialize();
     this.projectPath = projectPath;
 
-    // Initialize tree-sitter (always available)
+    // Initialize tree-sitter parsers (always available)
     await this.treeSitterParser.initialize();
+    await this.grammarAwareParser.initialize();
     
     // Use shared database instead of creating a separate one
     const preservationDbPath = path.join(process.cwd(), 'module-sentinel.db'); // Use shared database
@@ -253,24 +257,33 @@ export class HybridCppParser {
       }
     }
     
-    // Fall back to tree-sitter (prefer database-aware if available)
+    // Fall back to tree-sitter (prefer grammar-aware > database-aware > regular)
     const treeSitterStartTime = Date.now();
     try {
       let result: EnhancedModuleInfo;
       let parserType = 'tree-sitter';
       
-      // Try database-aware parser first if available
-      if (this.dbAwareTreeSitterParser) {
-        try {
-          console.log(`Using database-aware tree-sitter for ${filePath}`);
-          result = await this.dbAwareTreeSitterParser.parseFile(filePath);
-          parserType = 'db-aware-tree-sitter';
-        } catch (dbError) {
-          console.log(`Database-aware parser failed, falling back to regular tree-sitter: ${dbError}`);
+      // Try grammar-aware parser first for enhanced type analysis
+      try {
+        console.log(`Using grammar-aware parser for ${filePath}`);
+        result = await this.grammarAwareParser.parseFile(filePath);
+        parserType = 'grammar-aware-tree-sitter';
+      } catch (grammarError) {
+        console.log(`Grammar-aware parser failed, trying database-aware: ${grammarError}`);
+        
+        // Try database-aware parser second if available
+        if (this.dbAwareTreeSitterParser) {
+          try {
+            console.log(`Using database-aware tree-sitter for ${filePath}`);
+            result = await this.dbAwareTreeSitterParser.parseFile(filePath);
+            parserType = 'db-aware-tree-sitter';
+          } catch (dbError) {
+            console.log(`Database-aware parser failed, falling back to regular tree-sitter: ${dbError}`);
+            result = await this.treeSitterParser.parseFile(filePath);
+          }
+        } else {
           result = await this.treeSitterParser.parseFile(filePath);
         }
-      } else {
-        result = await this.treeSitterParser.parseFile(filePath);
       }
       
       // Store tree-sitter result for preservation (lower confidence)
@@ -282,9 +295,11 @@ export class HybridCppParser {
       
       // Track parser metrics
       if (this.preservationDb) {
+        const confidence = parserType === 'grammar-aware-tree-sitter' ? 0.95 : 
+                          parserType === 'db-aware-tree-sitter' ? 0.85 : 0.8;
         this.schemaManager.storeParserMetrics(this.preservationDb, 'treesitter', filePath, {
           symbolsDetected: result.methods.length + result.classes.length,
-          confidence: parserType === 'db-aware-tree-sitter' ? 0.85 : 0.8,
+          confidence: confidence,
           semanticCoverage: this.calculateSemanticCoverage(result),
           parseTimeMs: Date.now() - treeSitterStartTime,
           success: true
@@ -618,7 +633,9 @@ export class HybridCppParser {
 
       // Update file tracking with proper success flags
       const symbolCount = result.methods.length + result.classes.length;
-      const confidence = parser.includes('clang') ? 1.0 : parser.includes('tree-sitter') ? 0.8 : 0.6;
+      const confidence = parser.includes('clang') ? 1.0 : 
+                        parser.includes('grammar-aware') ? 0.95 :
+                        parser.includes('tree-sitter') ? 0.8 : 0.6;
       
       this.preservationDb.prepare(`
         INSERT OR REPLACE INTO indexed_files (
@@ -648,27 +665,34 @@ export class HybridCppParser {
         this.schemaManager.mergeParserResult(this.preservationDb!, {
           name: cls.name,
           qualified_name: cls.namespace ? `${cls.namespace}::${cls.name}` : cls.name,
-          kind: 'class',
+          kind: cls.isEnum ? (cls.isEnumClass ? 'enum_class' : 'enum') : 'class',
           file_path: filePath,
           line: cls.location?.line || 0,
           column: cls.location?.column || 0,
           namespace: cls.namespace,
           is_template: cls.isTemplate,
-          template_params: cls.templateParams
+          template_params: cls.templateParams,
+          // Enhanced: Store enum information
+          is_enum: cls.isEnum || false,
+          is_enum_class: cls.isEnumClass || false,
+          enum_values: cls.enumValues
         }, parser, confidence);
       });
 
       result.methods.forEach(method => {
         this.schemaManager.mergeParserResult(this.preservationDb!, {
           name: method.name,
-          qualified_name: method.className ? `${method.className}::${method.name}` : method.name,
+          qualified_name: method.qualifiedName || (method.className ? `${method.className}::${method.name}` : method.name),
           kind: method.className ? 'method' : 'function',
           file_path: filePath,
           line: method.location?.line || 0,
           column: method.location?.column || 0,
           return_type: method.returnType,
           parent_class: method.className,
-          signature: this.buildMethodSignature(method)
+          signature: this.buildMethodSignature(method),
+          // Enhanced: Store namespace and export information
+          namespace: method.namespace,
+          is_exported: method.isExported || false
         }, parser, confidence);
       });
 

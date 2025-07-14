@@ -1470,53 +1470,401 @@ export class PatternAwareIndexer {
   private async buildSemanticConnections(symbols: any[]): Promise<void> {
     const insertConn = this.db.prepare(`
       INSERT OR IGNORE INTO semantic_connections 
-      (symbol_id, connected_id, connection_type, confidence)
-      VALUES (?, ?, ?, ?)
+      (symbol_id, connected_id, connection_type, confidence, evidence)
+      VALUES (?, ?, ?, ?, ?)
     `);
     
-    // Find GPU/CPU pairs
+    // Build symbol lookup maps for efficient searching
+    const symbolByName = new Map<string, any>();
+    const symbolsByNamespace = new Map<string, any[]>();
+    
     for (const symbol of symbols) {
-      if (symbol.executionMode === 'gpu') {
-        // Look for CPU counterpart
-        const cpuName = symbol.name.replace(/GPU/g, '').replace(/gpu/g, '');
+      // Get symbol ID if not present
+      if (!symbol.id) {
+        const dbSymbol = this.db.prepare(`
+          SELECT id FROM enhanced_symbols 
+          WHERE name = ? AND file_path = ?
+        `).get(symbol.name, symbol.filePath) as any;
+        if (dbSymbol) symbol.id = dbSymbol.id;
+      }
+      
+      if (symbol.id) {
+        symbolByName.set(symbol.name, symbol);
         
-        // Get symbol ID if not present
-        if (!symbol.id) {
-          const dbSymbol = this.db.prepare(`
-            SELECT id FROM enhanced_symbols 
-            WHERE name = ? AND file_path = ?
-          `).get(symbol.name, symbol.filePath) as any;
-          if (dbSymbol) symbol.id = dbSymbol.id;
+        // Group by namespace for namespace-based relationships
+        const ns = symbol.namespace || 'global';
+        if (!symbolsByNamespace.has(ns)) {
+          symbolsByNamespace.set(ns, []);
         }
+        symbolsByNamespace.get(ns)!.push(symbol);
+      }
+    }
+    
+    // 1. Find GPU/CPU pairs
+    for (const symbol of symbols) {
+      if (symbol.executionMode === 'gpu' && symbol.id) {
+        // Look for CPU counterpart with multiple naming patterns
+        const cpuPatterns = [
+          symbol.name.replace(/GPU/g, '').replace(/gpu/g, ''),
+          symbol.name.replace(/GPU/g, 'CPU').replace(/gpu/g, 'cpu'),
+          symbol.name.replace(/Vulkan/g, '').replace(/vulkan/g, ''),
+          symbol.name + 'CPU'
+        ];
         
-        if (symbol.id) {
+        for (const cpuName of cpuPatterns) {
           const cpuSymbol = this.db.prepare(`
             SELECT id FROM enhanced_symbols 
-            WHERE name = ? AND execution_mode = 'cpu'
+            WHERE name = ? AND (execution_mode = 'cpu' OR execution_mode IS NULL)
             AND pipeline_stage = ?
           `).get(cpuName, symbol.pipelineStage) as any;
           
           if (cpuSymbol) {
-            insertConn.run(symbol.id, cpuSymbol.id, 'gpu_cpu_pair', 0.9);
+            insertConn.run(symbol.id, cpuSymbol.id, 'gpu_cpu_pair', 0.9, 
+              JSON.stringify({ pattern: 'execution_mode_pair', cpu_name: cpuName }));
+            break;
           }
         }
       }
     }
     
-    // Find factory-product relationships
+    // 2. Enhanced factory-product relationships
     for (const symbol of symbols) {
-      if (symbol.isFactory && symbol.returnType) {
-        // Extract the type being created
-        const match = symbol.returnType.match(/(?:unique_ptr|shared_ptr)<(.+?)>/);
-        if (match) {
-          const productType = match[1].trim();
-          const product = this.db.prepare(`
-            SELECT id FROM enhanced_symbols 
-            WHERE name = ? AND kind = 'class'
-          `).get(productType) as any;
-          
-          if (product) {
-            insertConn.run(symbol.id, product.id, 'factory_product', 0.95);
+      if (symbol.isFactory && symbol.returnType && symbol.id) {
+        // Extract the type being created (handle more patterns)
+        const patterns = [
+          /(?:unique_ptr|shared_ptr|std::unique_ptr|std::shared_ptr)<(.+?)>/,
+          /(?:create|make|build)(.+?)$/i,
+          /(.+?)(?:Factory|Builder|Creator)$/
+        ];
+        
+        for (const pattern of patterns) {
+          const match = symbol.returnType.match(pattern) || symbol.name.match(pattern);
+          if (match) {
+            const productType = match[1].trim();
+            const product = this.db.prepare(`
+              SELECT id FROM enhanced_symbols 
+              WHERE name = ? AND kind = 'class'
+            `).get(productType) as any;
+            
+            if (product) {
+              insertConn.run(symbol.id, product.id, 'factory_product', 0.95,
+                JSON.stringify({ pattern: 'factory_creates', product_type: productType }));
+            }
+          }
+        }
+      }
+    }
+    
+    // 3. Interface implementation relationships
+    for (const symbol of symbols) {
+      if (symbol.kind === 'class' && symbol.id) {
+        // Look for interface patterns (I prefix, abstract base classes)
+        const interfacePatterns = [
+          `I${symbol.name}`,
+          symbol.name.replace(/Impl$/, ''),
+          symbol.name.replace(/Implementation$/, '')
+        ];
+        
+        for (const interfaceName of interfacePatterns) {
+          const iface = symbolByName.get(interfaceName);
+          if (iface && iface.id && iface.kind === 'class') {
+            insertConn.run(symbol.id, iface.id, 'implements_interface', 0.8,
+              JSON.stringify({ pattern: 'interface_implementation', interface_name: interfaceName }));
+          }
+        }
+      }
+    }
+    
+    // 4. Manager-managed relationships
+    for (const symbol of symbols) {
+      if (symbol.name.includes('Manager') && symbol.id) {
+        const managedType = symbol.name.replace(/Manager$/, '').replace(/Manager/g, '');
+        const managed = symbolByName.get(managedType);
+        if (managed && managed.id) {
+          insertConn.run(symbol.id, managed.id, 'manager_manages', 0.85,
+            JSON.stringify({ pattern: 'manager_managed', managed_type: managedType }));
+        }
+      }
+    }
+    
+    // 5. Template specialization relationships
+    for (const symbol of symbols) {
+      if (symbol.isTemplate && symbol.templateParams && symbol.id) {
+        // Look for specializations of this template
+        const templateName = symbol.name;
+        const specializations = symbols.filter(s => 
+          s.name.startsWith(templateName + '<') || 
+          s.qualifiedName?.includes(`${templateName}<`)
+        );
+        
+        for (const spec of specializations) {
+          if (spec.id && spec.id !== symbol.id) {
+            insertConn.run(symbol.id, spec.id, 'template_specialization', 0.9,
+              JSON.stringify({ pattern: 'template_spec', template_name: templateName }));
+          }
+        }
+      }
+    }
+    
+    // 6. Namespace cohesion relationships (symbols in same namespace/module)
+    for (const [namespace, nsSymbols] of symbolsByNamespace) {
+      if (nsSymbols.length > 1 && namespace !== 'global') {
+        for (let i = 0; i < nsSymbols.length; i++) {
+          for (let j = i + 1; j < nsSymbols.length; j++) {
+            const sym1 = nsSymbols[i];
+            const sym2 = nsSymbols[j];
+            if (sym1.id && sym2.id) {
+              insertConn.run(sym1.id, sym2.id, 'namespace_cohesion', 0.6,
+                JSON.stringify({ pattern: 'same_namespace', namespace: namespace }));
+            }
+          }
+        }
+      }
+    }
+    
+    // 7. Pipeline stage relationships (symbols in same stage often work together)
+    const stageGroups = new Map<string, any[]>();
+    for (const symbol of symbols) {
+      if (symbol.pipelineStage && symbol.id) {
+        if (!stageGroups.has(symbol.pipelineStage)) {
+          stageGroups.set(symbol.pipelineStage, []);
+        }
+        stageGroups.get(symbol.pipelineStage)!.push(symbol);
+      }
+    }
+    
+    for (const [stage, stageSymbols] of stageGroups) {
+      if (stageSymbols.length > 1 && stageSymbols.length < 50) { // Avoid too many connections
+        for (let i = 0; i < stageSymbols.length; i++) {
+          for (let j = i + 1; j < stageSymbols.length; j++) {
+            const sym1 = stageSymbols[i];
+            const sym2 = stageSymbols[j];
+            if (sym1.id && sym2.id) {
+              insertConn.run(sym1.id, sym2.id, 'pipeline_stage_cohesion', 0.4,
+                JSON.stringify({ pattern: 'same_pipeline_stage', stage: stage }));
+            }
+          }
+        }
+      }
+    }
+    
+    // 8. ENHANCED TYPE-BASED SEMANTIC CONNECTIONS
+    // Now leverage our rich enhanced type information!
+    
+    // Get enhanced type information from database
+    const enhancedSymbols = this.db.prepare(`
+      SELECT id, name, qualified_name, kind, namespace, return_type,
+             base_type, is_pointer, is_reference, is_const, is_vulkan_type, 
+             is_std_type, is_planetgen_type, is_enum, is_enum_class,
+             template_arguments, is_exported, module_name, export_namespace,
+             is_constructor, is_destructor, is_operator, operator_type,
+             file_path, pipeline_stage
+      FROM enhanced_symbols 
+      WHERE id IS NOT NULL
+    `).all() as any[];
+    
+    const enhancedByName = new Map<string, any>();
+    const enhancedByQualified = new Map<string, any>();
+    const vulkanTypes = new Set<any>();
+    const stdTypes = new Set<any>();
+    const planetGenTypes = new Set<any>();
+    const exportedSymbols = new Map<string, any[]>(); // by module
+    
+    for (const sym of enhancedSymbols) {
+      enhancedByName.set(sym.name, sym);
+      if (sym.qualified_name) enhancedByQualified.set(sym.qualified_name, sym);
+      if (sym.is_vulkan_type) vulkanTypes.add(sym);
+      if (sym.is_std_type) stdTypes.add(sym);
+      if (sym.is_planetgen_type) planetGenTypes.add(sym);
+      
+      if (sym.is_exported && sym.module_name) {
+        if (!exportedSymbols.has(sym.module_name)) {
+          exportedSymbols.set(sym.module_name, []);
+        }
+        exportedSymbols.get(sym.module_name)!.push(sym);
+      }
+    }
+    
+    // 8a. Type ecosystem relationships (Vulkan, STL, PlanetGen)
+    for (const vulkanSym of vulkanTypes) {
+      // Find PlanetGen wrappers/adapters for Vulkan types
+      for (const planetSym of planetGenTypes) {
+        if (planetSym.return_type?.includes(vulkanSym.name) || 
+            planetSym.name.toLowerCase().includes(vulkanSym.name.toLowerCase())) {
+          insertConn.run(planetSym.id, vulkanSym.id, 'vulkan_wrapper', 0.85,
+            JSON.stringify({ 
+              pattern: 'type_ecosystem', 
+              wrapper_type: 'planetgen_vulkan',
+              vulkan_type: vulkanSym.name 
+            }));
+        }
+      }
+    }
+    
+    // 8b. Constructor-destructor pairs
+    const constructors = enhancedSymbols.filter(s => s.is_constructor);
+    const destructors = enhancedSymbols.filter(s => s.is_destructor);
+    
+    for (const ctor of constructors) {
+      const className = ctor.name.replace(/^(.+)::\1$/, '$1'); // Extract class name
+      const dtor = destructors.find(d => d.name.includes(className));
+      if (dtor) {
+        insertConn.run(ctor.id, dtor.id, 'constructor_destructor_pair', 0.95,
+          JSON.stringify({ pattern: 'lifecycle_pair', class_name: className }));
+      }
+    }
+    
+    // 8c. Operator overload relationships
+    const operators = enhancedSymbols.filter(s => s.is_operator);
+    const operatorsByType = new Map<string, any[]>();
+    
+    for (const op of operators) {
+      const opType = op.operator_type || 'unknown';
+      if (!operatorsByType.has(opType)) {
+        operatorsByType.set(opType, []);
+      }
+      operatorsByType.get(opType)!.push(op);
+    }
+    
+    // Connect operators of same type (e.g., all == operators)
+    for (const [opType, ops] of operatorsByType) {
+      if (ops.length > 1) {
+        for (let i = 0; i < ops.length; i++) {
+          for (let j = i + 1; j < ops.length; j++) {
+            insertConn.run(ops[i].id, ops[j].id, 'operator_overload_family', 0.7,
+              JSON.stringify({ pattern: 'operator_family', operator_type: opType }));
+          }
+        }
+      }
+    }
+    
+    // 8d. Module export relationships (symbols exported together often work together)
+    for (const [moduleName, exportedSyms] of exportedSymbols) {
+      if (exportedSyms.length > 1 && exportedSyms.length < 100) {
+        for (let i = 0; i < exportedSyms.length; i++) {
+          for (let j = i + 1; j < exportedSyms.length; j++) {
+            insertConn.run(exportedSyms[i].id, exportedSyms[j].id, 'module_export_cohesion', 0.6,
+              JSON.stringify({ 
+                pattern: 'module_cohesion', 
+                module_name: moduleName,
+                export_namespace: exportedSyms[i].export_namespace 
+              }));
+          }
+        }
+      }
+    }
+    
+    // 8e. Type parameter relationships (functions that take/return same enhanced types)
+    const typeConnections = new Map<string, any[]>();
+    
+    for (const sym of enhancedSymbols) {
+      if (sym.kind === 'function' || sym.kind === 'method') {
+        // Group by base return type
+        if (sym.base_type) {
+          if (!typeConnections.has(sym.base_type)) {
+            typeConnections.set(sym.base_type, []);
+          }
+          typeConnections.get(sym.base_type)!.push({ ...sym, connection_type: 'returns' });
+        }
+      }
+    }
+    
+    // Get parameter information from enhanced_parameters table
+    const parameters = this.db.prepare(`
+      SELECT ep.*, es.name as symbol_name, es.id as symbol_id
+      FROM enhanced_parameters ep
+      JOIN enhanced_symbols es ON ep.symbol_id = es.id
+    `).all() as any[];
+    
+    for (const param of parameters) {
+      if (param.base_type) {
+        if (!typeConnections.has(param.base_type)) {
+          typeConnections.set(param.base_type, []);
+        }
+        typeConnections.get(param.base_type)!.push({ 
+          id: param.symbol_id, 
+          name: param.symbol_name,
+          connection_type: 'takes_param',
+          parameter_name: param.name
+        });
+      }
+    }
+    
+    // Connect functions that work with same types
+    for (const [baseType, relatedSyms] of typeConnections) {
+      if (relatedSyms.length > 1 && relatedSyms.length < 20) {
+        for (let i = 0; i < relatedSyms.length; i++) {
+          for (let j = i + 1; j < relatedSyms.length; j++) {
+            const sym1 = relatedSyms[i];
+            const sym2 = relatedSyms[j];
+            insertConn.run(sym1.id, sym2.id, 'type_affinity', 0.5,
+              JSON.stringify({ 
+                pattern: 'type_usage',
+                base_type: baseType,
+                sym1_usage: sym1.connection_type,
+                sym2_usage: sym2.connection_type
+              }));
+          }
+        }
+      }
+    }
+    
+    // 8f. Const/non-const method pairs
+    const methods = enhancedSymbols.filter(s => s.kind === 'method');
+    const methodsByName = new Map<string, any[]>();
+    
+    for (const method of methods) {
+      const baseName = method.name.replace(/^.*::/, ''); // Remove class prefix
+      if (!methodsByName.has(baseName)) {
+        methodsByName.set(baseName, []);
+      }
+      methodsByName.get(baseName)!.push(method);
+    }
+    
+    for (const [methodName, variants] of methodsByName) {
+      if (variants.length === 2) {
+        const constVariant = variants.find(v => v.is_const);
+        const nonConstVariant = variants.find(v => !v.is_const);
+        if (constVariant && nonConstVariant) {
+          insertConn.run(constVariant.id, nonConstVariant.id, 'const_nonconst_pair', 0.9,
+            JSON.stringify({ pattern: 'const_overload', method_name: methodName }));
+        }
+      }
+    }
+    
+    // 8g. Pipeline flow relationships (analyze stage dependencies)
+    const stageOrder = [
+      'noise_generation', 'terrain_formation', 'atmospheric_dynamics', 
+      'geological_processes', 'ecosystem_simulation', 'weather_systems', 
+      'final_rendering'
+    ];
+    
+    for (let i = 0; i < stageOrder.length - 1; i++) {
+      const currentStage = stageOrder[i];
+      const nextStage = stageOrder[i + 1];
+      
+      const currentSyms = enhancedSymbols.filter(s => s.pipeline_stage === currentStage);
+      const nextSyms = enhancedSymbols.filter(s => s.pipeline_stage === nextStage);
+      
+      // Connect output types of current stage to input types of next stage
+      for (const currentSym of currentSyms) {
+        if (currentSym.return_type) {
+          for (const nextSym of nextSyms) {
+            // Check if next stage function takes what current stage produces
+            const takesOutput = parameters.some(p => 
+              p.symbol_id === nextSym.id && 
+              p.type_name?.includes(currentSym.return_type)
+            );
+            
+            if (takesOutput) {
+              insertConn.run(currentSym.id, nextSym.id, 'pipeline_data_flow', 0.8,
+                JSON.stringify({ 
+                  pattern: 'stage_transition',
+                  from_stage: currentStage,
+                  to_stage: nextStage,
+                  data_type: currentSym.return_type
+                }));
+            }
           }
         }
       }

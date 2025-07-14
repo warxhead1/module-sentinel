@@ -16,9 +16,14 @@ import { UnifiedSearch } from './tools/unified-search.js';
 import { PatternAwareIndexer } from './indexing/pattern-aware-indexer.js';
 import { AnalyticsService } from './services/analytics-service.js';
 import { UnifiedSchemaManager } from './database/unified-schema-manager.js';
+import { FileWatcher } from './services/file-watcher.js';
+import { ThoughtSignaturePreserver } from './engines/thought-signature.js';
+import { ClaudeValidationTool } from './tools/claude-validation-tool.js';
+import { SecureConfigManager } from './utils/secure-config.js';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs/promises';
+import * as dotenv from 'dotenv';
 
 class ModuleSentinelMCPServer {
   private server: Server;
@@ -30,12 +35,27 @@ class ModuleSentinelMCPServer {
   private dbPath: string;
   private db: Database.Database;
   private schemaManager: UnifiedSchemaManager;
+  private fileWatcher: FileWatcher;
+  private thoughtSignaturePreserver: ThoughtSignaturePreserver;
+  private claudeValidationTool?: ClaudeValidationTool;
 
   constructor() {
-    // Use environment variables or fall back to defaults
-    const projectPath = process.env.MODULE_SENTINEL_PROJECT_PATH || '/home/warxh/planet_procgen';
-    const dbDir = process.env.MODULE_SENTINEL_DB_PATH || path.join(process.env.HOME || '/tmp', '.module-sentinel');
-    this.dbPath = path.resolve(dbDir, 'module-sentinel.db');
+    // Load environment variables (for backwards compatibility)
+    dotenv.config();
+    
+    // Get configuration from secure location
+    const secureConfig = SecureConfigManager.getConfig();
+    
+    // Use secure config, then environment variables, then defaults
+    const projectPath = secureConfig.projectPath || 
+                        process.env.MODULE_SENTINEL_PROJECT_PATH || 
+                        '/home/warxh/planet_procgen';
+    
+    const dbDir = secureConfig.dbPath ? path.dirname(secureConfig.dbPath) :
+                  process.env.MODULE_SENTINEL_DB_PATH || 
+                  path.join(process.env.HOME || '/tmp', '.module-sentinel');
+    
+    this.dbPath = secureConfig.dbPath || path.resolve(dbDir, 'module-sentinel.db');
     
     // Ensure database directory exists
     const dbDirPath = path.dirname(this.dbPath);
@@ -67,6 +87,42 @@ class ModuleSentinelMCPServer {
     this.patternAwareIndexer = new PatternAwareIndexer(projectPath, this.dbPath);
     this.analyticsService = new AnalyticsService(this.db);
     
+    // Initialize ThoughtSignaturePreserver with the shared database
+    this.thoughtSignaturePreserver = new ThoughtSignaturePreserver(this.db);
+    
+    // Initialize Claude validation tool from secure config
+    const geminiApiKey = SecureConfigManager.getGeminiApiKey();
+    if (geminiApiKey) {
+      this.claudeValidationTool = new ClaudeValidationTool(this.db, geminiApiKey);
+      console.error('[MCP Server] Claude validation tool initialized with Gemini integration');
+    } else {
+      console.error('[MCP Server] Gemini API key not configured - Claude validation features disabled');
+      console.error('[MCP Server] To set up securely: module-sentinel-config set-api-key <your-key>');
+      console.error(`[MCP Server] Config location: ${SecureConfigManager.getConfigPath()}`);
+    }
+    
+    // Initialize file watcher
+    this.fileWatcher = new FileWatcher({
+      paths: [projectPath],
+      filePatterns: ['*.cpp', '*.hpp', '*.h', '*.ixx', '*.cc', '*.cxx'],
+      indexer: this.patternAwareIndexer,
+      debounceMs: 1000,
+      batchUpdates: true
+    });
+    
+    // Set up file watcher event handlers
+    this.fileWatcher.on('indexed', (event) => {
+      console.error(`[FileWatcher] File ${event.action}: ${event.path}`);
+    });
+    
+    this.fileWatcher.on('batch:complete', (event) => {
+      console.error(`[FileWatcher] Batch indexed ${event.count} files`);
+    });
+    
+    this.fileWatcher.on('error', (event) => {
+      console.error(`[FileWatcher] Error watching ${event.path}:`, event.error);
+    });
+    
     this.server = new Server(
       {
         name: 'module-sentinel',
@@ -82,7 +138,7 @@ class ModuleSentinelMCPServer {
 
     this.setupTools();
     
-    // Auto-index on startup
+    // Auto-index on startup, then start file watcher
     this.autoIndex();
   }
 
@@ -98,6 +154,11 @@ class ModuleSentinelMCPServer {
       } else {
         console.error(`Index already exists with ${symbolCount.count} symbols`);
       }
+      
+      // Start file watcher after index is ready
+      console.error('Starting file watcher...');
+      await this.fileWatcher.start();
+      console.error('File watcher started - monitoring for changes');
     } catch (error) {
       console.error('Auto-indexing failed:', error);
     }
@@ -144,6 +205,14 @@ class ModuleSentinelMCPServer {
             
             case 'generate_visualization':
               return await this.handleGenerateVisualization(request.params.arguments);
+            
+            // Claude Validation Tools
+            case 'validate_claude_code':
+              return await this.handleValidateClaudeCode(request.params.arguments);
+            case 'validate_code_snippet':
+              return await this.handleValidateCodeSnippet(request.params.arguments);
+            case 'get_validation_stats':
+              return await this.handleGetValidationStats(request.params.arguments);
               
             default:
               return {
@@ -368,6 +437,77 @@ class ModuleSentinelMCPServer {
                   type: 'boolean',
                   description: 'Generate interactive HTML visualization',
                   default: true
+                }
+              }
+            }
+          },
+          
+          // Claude Validation Tools
+          {
+            name: 'validate_claude_code',
+            description: 'Validate Claude\'s code suggestions against the semantic database to detect hallucinations and architectural issues',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                userPrompt: {
+                  type: 'string',
+                  description: 'The original user prompt/request'
+                },
+                claudeResponse: {
+                  type: 'string',
+                  description: 'Claude\'s full response including code'
+                },
+                filePath: {
+                  type: 'string',
+                  description: 'Target file path for the code'
+                },
+                sessionId: {
+                  type: 'string',
+                  description: 'Session identifier for tracking'
+                },
+                extractedCode: {
+                  type: 'string',
+                  description: 'Any existing code context'
+                }
+              },
+              required: ['userPrompt', 'claudeResponse']
+            }
+          },
+          {
+            name: 'validate_code_snippet',
+            description: 'Validate a C++ code snippet against the codebase for hallucinations and semantic issues',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                code: {
+                  type: 'string',
+                  description: 'The C++ code snippet to validate'
+                },
+                userPrompt: {
+                  type: 'string',
+                  description: 'Context about what the code should do'
+                },
+                filePath: {
+                  type: 'string',
+                  description: 'Target file path'
+                },
+                sessionId: {
+                  type: 'string',
+                  description: 'Session identifier'
+                }
+              },
+              required: ['code']
+            }
+          },
+          {
+            name: 'get_validation_stats',
+            description: 'Get validation statistics and trends for Claude code suggestions',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Get stats for specific session'
                 }
               }
             }
@@ -834,6 +974,142 @@ class ModuleSentinelMCPServer {
     }
   }
 
+  // Claude Validation Handler Methods
+  private async handleValidateClaudeCode(args: any) {
+    if (!this.claudeValidationTool) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: 'Claude validation not available - GEMINI_API_KEY not configured' 
+        }],
+        isError: true
+      };
+    }
+
+    try {
+      const result = await this.claudeValidationTool.handleToolCall('validate_claude_code', args);
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: result.success ? 
+            `✅ Code validation complete!\n\n${'report' in result ? result.report : 'No detailed report available'}` :
+            `❌ Validation failed: ${result.error}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error validating Claude code: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleValidateCodeSnippet(args: any) {
+    if (!this.claudeValidationTool) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: 'Claude validation not available - GEMINI_API_KEY not configured' 
+        }],
+        isError: true
+      };
+    }
+
+    try {
+      const result = await this.claudeValidationTool.handleToolCall('validate_code_snippet', args);
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: result.success ? 
+            `✅ Code snippet validation complete!\n\n${'report' in result ? result.report : 'No detailed report available'}` :
+            `❌ Validation failed: ${result.error}`
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error validating code snippet: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleGetValidationStats(args: any) {
+    if (!this.claudeValidationTool) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: 'Claude validation not available - GEMINI_API_KEY not configured' 
+        }],
+        isError: true
+      };
+    }
+
+    try {
+      const result = await this.claudeValidationTool.handleToolCall('get_validation_stats', args);
+      
+      if (!result.success) {
+        return {
+          content: [{ 
+            type: 'text', 
+            text: `❌ Failed to get validation stats: ${result.error}` 
+          }],
+          isError: true
+        };
+      }
+
+      const stats = ('statistics' in result) ? result.statistics : {};
+      const summary = ('summary' in result) ? result.summary : null;
+      
+      let report = `📊 **Claude Validation Statistics**\n\n`;
+      report += `🔍 **Summary:**\n`;
+      report += `- Total Validations: ${summary?.totalValidations || 0}\n`;
+      report += `- Approval Rate: ${summary?.approvalRate || '0%'}\n`;
+      report += `- Average Confidence: ${summary?.averageConfidence || '0%'}\n\n`;
+      
+      if (summary?.topHallucinations && Array.isArray(summary.topHallucinations) && summary.topHallucinations.length > 0) {
+        report += `🚨 **Most Common Hallucinations:**\n`;
+        summary.topHallucinations.slice(0, 5).forEach((h: any, i: number) => {
+          report += `${i + 1}. ${h.type}: \`${h.item}\` (${h.count} times)\n`;
+        });
+        report += '\n';
+      }
+
+      if ('sessionValidation' in result && result.sessionValidation) {
+        const session = result.sessionValidation;
+        report += `🎯 **Current Session:**\n`;
+        report += `- Valid: ${session.isValid ? '✅' : '❌'}\n`;
+        report += `- Confidence: ${(session.confidence * 100).toFixed(1)}%\n`;
+        report += `- Recommendation: ${session.recommendation.toUpperCase()}\n`;
+        if (session.hallucinations && session.hallucinations.length > 0) {
+          report += `- Hallucinations: ${session.hallucinations.length}\n`;
+        }
+      }
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: report
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error getting validation stats: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
   async start(): Promise<void> {
     // Ensure database directory exists
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
@@ -845,6 +1121,12 @@ class ModuleSentinelMCPServer {
   }
 
   async shutdown(): Promise<void> {
+    // Stop file watcher before shutting down
+    this.fileWatcher.stop();
+    console.error('File watcher stopped');
+    
+    // Close database and server
+    this.db.close();
     await this.server.close();
   }
 }

@@ -95,6 +95,9 @@ export class StreamingCppParser extends EventEmitter {
     let currentNamespace: string[] = [];
     let inExportBlock = false;
     let exportNamespaceStack: string[] = [];
+    let exportBlockDepth = 0;
+    let exportBlockBraceDepth = 0;
+    let waitingForExportBrace = false;
 
     for await (const line of rl) {
       // Skip empty lines
@@ -111,6 +114,7 @@ export class StreamingCppParser extends EventEmitter {
       // Skip single-line comments
       const cleanLine = line.split('//')[0].trim();
       if (!cleanLine) continue;
+      
 
       // Track brace depth for namespace tracking
       const openBraces = (cleanLine.match(/{/g) || []).length;
@@ -234,10 +238,33 @@ export class StreamingCppParser extends EventEmitter {
         continue;
       }
       
-      // Parse general export statements within export blocks
-      if (cleanLine.includes('export') && cleanLine.includes('{')) {
-        // Handle export { ... } blocks - mark as in export block
-        // This is a simplified approach for export blocks
+      // Handle export block detection - exact match for "export {"
+      if (cleanLine === 'export {') {
+        inExportBlock = true;
+        exportBlockDepth = braceDepth;
+        exportBlockBraceDepth = 1;
+        console.log('Entering export block');
+        continue;
+      }
+      
+      // Handle export block content parsing
+      if (inExportBlock) {
+        // Track brace depth within export block
+        const exportOpenBraces = (cleanLine.match(/\{/g) || []).length;
+        const exportCloseBraces = (cleanLine.match(/\}/g) || []).length;
+        exportBlockBraceDepth += exportOpenBraces - exportCloseBraces;
+        
+        // Exit export block when braces are balanced
+        if (exportBlockBraceDepth <= 0) {
+          inExportBlock = false;
+          exportBlockDepth = 0;
+          exportBlockBraceDepth = 0;
+          console.log('Exiting export block');
+          continue;
+        }
+        
+        // Parse using declarations within export block
+        this.parseExportBlockContent(cleanLine, symbols);
         continue;
       }
       
@@ -363,10 +390,53 @@ export class StreamingCppParser extends EventEmitter {
         continue;
       }
 
-      // Parse using declarations
-      const usingMatch = cleanLine.match(/using\s+(?:namespace\s+)?(\w+(?:::\w+)*)/);
-      if (usingMatch) {
-        symbols.imports.add(usingMatch[1]);
+      // Parse using namespace declarations
+      const usingNamespaceMatch = cleanLine.match(/using\s+namespace\s+(\w+(?:::\w+)*)/);
+      if (usingNamespaceMatch) {
+        symbols.imports.add(usingNamespaceMatch[1]);
+        continue;
+      }
+      
+      // Parse using alias declarations: using Type = OtherType;
+      const usingAliasMatch = cleanLine.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);  
+      if (usingAliasMatch) {
+        const aliasName = usingAliasMatch[1];
+        const originalType = usingAliasMatch[2];
+        
+        // Add alias as a symbol if we're in export context
+        if (inExportBlock || currentNamespace.length > 0) {
+          const namespacePrefix = currentNamespace.length > 0 ? currentNamespace.join('::') + '::' : '';
+          const qualifiedAlias = namespacePrefix + aliasName;
+          
+          symbols.functions.add(qualifiedAlias); // Track as available symbol
+          symbols.dependencies.add(originalType); // Track dependency
+          
+          if (inExportBlock) {
+            symbols.exports.add(aliasName);
+            symbols.exports.add(`using ${aliasName} = ${originalType}`);
+            console.log(`Export alias: ${aliasName} = ${originalType}`);
+          }
+        }
+        continue;
+      }
+      
+      // Parse using function/operator declarations: using namespace::function;
+      const usingFunctionMatch = cleanLine.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);  
+      if (usingFunctionMatch) {
+        const namespacePart = usingFunctionMatch[1];
+        const functionName = usingFunctionMatch[2];
+        const fullName = `${namespacePart}::${functionName}`;
+        
+        // Add as available function
+        symbols.functions.add(functionName); // Unqualified name for easy access
+        symbols.functions.add(fullName); // Qualified name for precision
+        symbols.dependencies.add(namespacePart);
+        
+        if (inExportBlock) {
+          symbols.exports.add(functionName);
+          symbols.exports.add(`using ${fullName}`);
+          console.log(`Export function using: ${functionName} from ${fullName}`);
+        }
         continue;
       }
 
@@ -453,6 +523,60 @@ export class StreamingCppParser extends EventEmitter {
     return params;
   }
 
+  /**
+   * Parse content within export blocks: export { ... }
+   */
+  private parseExportBlockContent(line: string, symbols: ModuleSymbols): void {
+    // Parse using alias declarations within export block: using Type = OtherType;
+    const usingAliasMatch = line.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
+    if (usingAliasMatch) {
+      const aliasName = usingAliasMatch[1];
+      const originalType = usingAliasMatch[2];
+      
+      symbols.exports.add(aliasName);
+      symbols.exports.add(`using ${aliasName} = ${originalType}`);
+      symbols.dependencies.add(originalType);
+      console.log(`Export block alias: ${aliasName} = ${originalType}`);
+      return;
+    }
+    
+    // Parse using function/operator declarations within export block: using namespace::function;
+    const usingFunctionMatch = line.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
+    if (usingFunctionMatch) {
+      const namespacePart = usingFunctionMatch[1];
+      const functionName = usingFunctionMatch[2];
+      const fullName = `${namespacePart}::${functionName}`;
+      
+      symbols.exports.add(functionName);
+      symbols.exports.add(`using ${fullName}`);
+      symbols.functions.add(functionName);
+      symbols.dependencies.add(namespacePart);
+      console.log(`Export block function: ${functionName} from ${fullName}`);
+      return;
+    }
+    
+    // Parse direct function declarations within export blocks
+    const functionMatch = line.match(/(?:inline\s+)?(?:[\w:]+(?:<[^>]+>)?\s+)+(\w+)\s*\(/);
+    if (functionMatch) {
+      const functionName = functionMatch[1];
+      symbols.exports.add(functionName);
+      symbols.functions.add(functionName);
+      console.log(`Export block function declaration: ${functionName}`);
+      return;
+    }
+    
+    // Parse variable declarations within export blocks
+    const varMatch = line.match(/(?:constexpr|const|inline\s+constexpr)\s+(\w+(?:\s*<[^>]+>)?)\s+(\w+)/);
+    if (varMatch) {
+      const varType = varMatch[1];
+      const varName = varMatch[2];
+      symbols.exports.add(varName);
+      symbols.exports.add(`${varType} ${varName}`);
+      console.log(`Export block variable: ${varType} ${varName}`);
+      return;
+    }
+  }
+
   private walkTree(node: Parser.SyntaxNode, symbols: ModuleSymbols): void {
     switch (node.type) {
       case 'class_specifier':
@@ -514,6 +638,11 @@ export class StreamingCppParser extends EventEmitter {
           symbols.imports.add(identifier.text);
         }
         break;
+        
+      // Enhanced: Handle export declarations and export blocks
+      case 'export_declaration':
+        this.handleTreeSitterExportDeclaration(node, symbols);
+        break;
     }
 
     // Recursively walk children
@@ -559,6 +688,74 @@ export class StreamingCppParser extends EventEmitter {
             symbols.functions.add(methodName);
             symbols.exports.add(`${className}::${methodName}`);
           }
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle export declarations in tree-sitter mode
+   */
+  private handleTreeSitterExportDeclaration(node: Parser.SyntaxNode, symbols: ModuleSymbols): void {
+    console.log('Found export declaration node:', node.type);
+    
+    // Get the text content of the export declaration
+    const exportText = node.text;
+    console.log('Export text:', exportText.substring(0, 100) + '...');
+    
+    // Check if this is an export block: export { ... }
+    if (exportText.includes('export {')) {
+      console.log('Processing export block in tree-sitter mode');
+      
+      // Extract content between { and }
+      const blockMatch = exportText.match(/export\s*\{([\s\S]*?)\}/);
+      if (blockMatch) {
+        const blockContent = blockMatch[1];
+        const lines = blockContent.split('\n');
+        
+        for (const line of lines) {
+          const cleanLine = line.trim();
+          if (!cleanLine || cleanLine.startsWith('//')) continue;
+          
+          // Parse using alias: using Type = OtherType;
+          const usingAliasMatch = cleanLine.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
+          if (usingAliasMatch) {
+            const aliasName = usingAliasMatch[1];
+            const originalType = usingAliasMatch[2];
+            
+            symbols.exports.add(aliasName);
+            symbols.exports.add(`using ${aliasName} = ${originalType}`);
+            symbols.dependencies.add(originalType);
+            console.log(`Tree-sitter export alias: ${aliasName} = ${originalType}`);
+            continue;
+          }
+          
+          // Parse using function: using namespace::function;
+          const usingFunctionMatch = cleanLine.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
+          if (usingFunctionMatch) {
+            const namespacePart = usingFunctionMatch[1];
+            const functionName = usingFunctionMatch[2];
+            const fullName = `${namespacePart}::${functionName}`;
+            
+            symbols.exports.add(functionName);
+            symbols.exports.add(`using ${fullName}`);
+            symbols.functions.add(functionName);
+            symbols.dependencies.add(namespacePart);
+            console.log(`Tree-sitter export function: ${functionName} from ${fullName}`);
+            continue;
+          }
+        }
+      }
+    }
+    
+    // Handle other export types (classes, functions, etc.)
+    for (const child of node.children) {
+      if (child.type === 'class_specifier' || child.type === 'struct_specifier') {
+        const className = child.childForFieldName('name');
+        if (className) {
+          symbols.exports.add(className.text);
+          symbols.classes.add(className.text);
+          console.log(`Tree-sitter export class: ${className.text}`);
         }
       }
     }

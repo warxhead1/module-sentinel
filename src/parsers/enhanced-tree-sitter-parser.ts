@@ -78,6 +78,7 @@ export class EnhancedTreeSitterParser {
     const methods: MethodSignature[] = [];
     const classes: ClassInfo[] = [];
     const includes: any[] = [];
+    const exports: any[] = [];
     
     this.walkTree(tree.rootNode, {
       content,
@@ -85,7 +86,8 @@ export class EnhancedTreeSitterParser {
       context,
       methods,
       classes,
-      includes
+      includes,
+      exports
     });
     
     return {
@@ -97,7 +99,7 @@ export class EnhancedTreeSitterParser {
       relationships: this.extractRelationships(tree.rootNode, content),
       patterns: this.extractPatterns(tree.rootNode, content),
       imports: includes,
-      exports: this.identifyExports(methods, classes)
+      exports: [...this.identifyExports(methods, classes), ...exports]
     };
   }
 
@@ -118,6 +120,11 @@ export class EnhancedTreeSitterParser {
         
       case 'declaration':
         this.handleDeclaration(node, state);
+        break;
+        
+      // Enhanced: Handle enum declarations including enum class
+      case 'enum_specifier':
+        this.handleEnum(node, state);
         break;
         
       case 'template_declaration':
@@ -148,6 +155,16 @@ export class EnhancedTreeSitterParser {
       case 'type_definition':
         this.handleTypeAlias(node, state);
         break;
+        
+      // Enhanced: Export declarations for C++23 modules
+      case 'export_declaration':
+        this.handleExportDeclaration(node, state);
+        break;
+        
+      // Enhanced: Using declarations for better symbol tracking
+      case 'using_declaration':
+        this.handleUsingDeclaration(node, state);
+        break;
     }
     
     // Continue walking the tree
@@ -176,7 +193,7 @@ export class EnhancedTreeSitterParser {
     
     const classInfo: ClassInfo = {
       name: className,
-      namespace: state.context.namespaces.join('::'),
+      namespace: state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined,
       baseClasses,
       interfaces: [],
       methods: [],
@@ -221,10 +238,21 @@ export class EnhancedTreeSitterParser {
     // Set visibility based on context
     signature.visibility = this.getCurrentVisibility(node);
     
+    // Enhanced: Include namespace information
+    signature.namespace = state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined;
+    
     // Check if it's a method or free function
     if (state.context.currentClass) {
       signature.className = state.context.currentClass;
+      // For methods, include class in qualified name
+      signature.qualifiedName = this.getQualifiedName(`${state.context.currentClass}::${signature.name}`, state.context.namespaces);
+    } else {
+      // For free functions, just use namespace qualification
+      signature.qualifiedName = this.getQualifiedName(signature.name, state.context.namespaces);
     }
+    
+    // Mark as exported if in export namespace
+    signature.isExported = this.isInExportedNamespace(state);
     
     state.methods.push(signature);
   }
@@ -378,8 +406,29 @@ export class EnhancedTreeSitterParser {
 
   private handleNamespace(node: Parser.SyntaxNode, state: any): void {
     const nameNode = node.childForFieldName('name');
+    let namespaceParts: string[] = [];
+    
     if (nameNode) {
-      state.context.namespaces.push(nameNode.text);
+      // Handle qualified namespace identifiers like "PlanetGen::Rendering"
+      const namespaceName = nameNode.text;
+      console.log(`🔍 Detected namespace node: "${namespaceName}" (type: ${nameNode.type})`);
+      
+      if (nameNode.type === 'qualified_identifier') {
+        // For qualified identifiers, extract all parts
+        namespaceParts = this.extractQualifiedIdentifierParts(nameNode);
+      } else if (namespaceName.includes('::')) {
+        // Fallback: split by ::
+        namespaceParts = namespaceName.split('::').map(part => part.trim()).filter(part => part);
+      } else {
+        namespaceParts = [namespaceName];
+      }
+      
+      console.log(`   Namespace parts: [${namespaceParts.join(', ')}]`);
+      
+      // Push each namespace part
+      namespaceParts.forEach(part => {
+        state.context.namespaces.push(part);
+      });
     }
     
     // Process namespace body
@@ -393,10 +442,40 @@ export class EnhancedTreeSitterParser {
       }
     }
     
-    // Pop namespace when done
-    if (nameNode) {
-      state.context.namespaces.pop();
+    // Pop namespace levels when done
+    for (let i = 0; i < namespaceParts.length; i++) {
+      if (state.context.namespaces.length > 0) {
+        state.context.namespaces.pop();
+      }
     }
+  }
+  
+  /**
+   * Extract parts from a qualified identifier node
+   */
+  private extractQualifiedIdentifierParts(node: Parser.SyntaxNode): string[] {
+    const parts: string[] = [];
+    
+    // Traverse the qualified identifier structure
+    let current: Parser.SyntaxNode | null = node;
+    while (current) {
+      if (current.type === 'identifier') {
+        parts.unshift(current.text); // Add to beginning
+        break;
+      } else if (current.type === 'qualified_identifier') {
+        // Get the right-most identifier
+        const rightNode = current.lastChild;
+        if (rightNode && rightNode.type === 'identifier') {
+          parts.unshift(rightNode.text);
+        }
+        // Move to the left part
+        current = current.firstChild;
+      } else {
+        break;
+      }
+    }
+    
+    return parts;
   }
 
   private handleTemplate(node: Parser.SyntaxNode, state: any): void {
@@ -456,6 +535,14 @@ export class EnhancedTreeSitterParser {
       // Handle typedef
     } else if (node.text.includes('using')) {
       // Handle using declarations
+    }
+    
+    // Check for enum declarations within declarations
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (child && child.type === 'enum_specifier') {
+        this.handleEnum(child, state);
+      }
     }
   }
 
@@ -732,7 +819,296 @@ export class EnhancedTreeSitterParser {
     }
     
     state.context.typeAliases.set(aliasName, originalType);
-    console.log(`🏷️  Type alias: ${aliasName} -> ${originalType}`);
+    console.log(`Type alias: ${aliasName} -> ${originalType}`);
+  }
+
+  /**
+   * Handle export declarations: export { ... } or export class/function
+   * Enhanced to understand export namespace patterns
+   */
+  private handleExportDeclaration(node: Parser.SyntaxNode, state: any): void {
+    const content = state.content;
+    const exportText = content.substring(node.startIndex, node.endIndex);
+    
+    console.log(`📤 Processing export declaration: ${exportText.substring(0, 100)}...`);
+
+    // Handle export namespace - mark current context as exported
+    if (exportText.includes('namespace')) {
+      console.log(`   Contains namespace keyword`);
+      
+      // Look for namespace_definition child
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child && child.type === 'namespace_definition') {
+          console.log(`   Found namespace_definition child`);
+          
+          // Mark that we're in an exported namespace context
+          if (!state.context.exportedNamespaces) {
+            state.context.exportedNamespaces = new Set<string>();
+          }
+          
+          // Handle the namespace directly
+          this.handleNamespace(child, state);
+          
+          // Mark the namespace as exported AFTER processing it
+          const currentNamespace = state.context.namespaces.join('::');
+          if (currentNamespace) {
+            state.context.exportedNamespaces.add(currentNamespace);
+            console.log(`📤 Marked export namespace: ${currentNamespace}`);
+          }
+          return;
+        }
+      }
+    }
+
+    // Handle export blocks: export { ... }
+    if (exportText.includes('{') && exportText.includes('}')) {
+      this.parseExportBlock(node, state);
+      return;
+    }
+
+    // Handle direct exports: export class/function/variable
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child) continue;
+
+      switch (child.type) {
+        case 'class_specifier':
+        case 'struct_specifier':
+          const className = child.childForFieldName('name');
+          if (className) {
+            const qualifiedName = this.getQualifiedName(className.text, state.context.namespaces);
+            this.addExport(state, qualifiedName, 'class', child);
+          }
+          break;
+
+        case 'function_definition':
+          const funcDeclarator = child.childForFieldName('declarator');
+          if (funcDeclarator) {
+            const funcName = this.extractFunctionName(funcDeclarator);
+            if (funcName) {
+              const qualifiedName = this.getQualifiedName(funcName, state.context.namespaces);
+              this.addExport(state, qualifiedName, 'function', child);
+            }
+          }
+          break;
+
+        case 'declaration':
+          // Handle variable declarations, using declarations, etc.
+          this.handleExportedDeclaration(child, state);
+          break;
+      }
+    }
+  }
+
+  /**
+   * Parse export block content: export { using statements, declarations }
+   */
+  private parseExportBlock(node: Parser.SyntaxNode, state: any): void {
+    const content = state.content;
+    
+    // Find the block content between { and }
+    const blockStart = node.text.indexOf('{');
+    const blockEnd = node.text.lastIndexOf('}');
+    
+    if (blockStart === -1 || blockEnd === -1) return;
+    
+    const blockContent = node.text.substring(blockStart + 1, blockEnd);
+    const lines = blockContent.split('\n');
+    
+    for (const line of lines) {
+      const cleanLine = line.trim();
+      if (!cleanLine || cleanLine.startsWith('//')) continue;
+      
+      // Parse using alias: using Type = OtherType;
+      const usingAliasMatch = cleanLine.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
+      if (usingAliasMatch) {
+        const aliasName = usingAliasMatch[1];
+        const originalType = usingAliasMatch[2];
+        this.addExport(state, aliasName, 'alias', node);
+        this.addExport(state, `using ${aliasName} = ${originalType}`, 'using_alias', node);
+        continue;
+      }
+      
+      // Parse using function: using namespace::function;
+      const usingFunctionMatch = cleanLine.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
+      if (usingFunctionMatch) {
+        const functionName = usingFunctionMatch[2];
+        const fullName = `${usingFunctionMatch[1]}::${functionName}`;
+        this.addExport(state, functionName, 'function', node);
+        this.addExport(state, `using ${fullName}`, 'using_function', node);
+        continue;
+      }
+    }
+  }
+
+  /**
+   * Handle using declarations for symbol tracking
+   */
+  private handleUsingDeclaration(node: Parser.SyntaxNode, state: any): void {
+    const content = state.content;
+    const usingText = content.substring(node.startIndex, node.endIndex);
+
+    // Parse using namespace
+    const namespaceMatch = usingText.match(/using\s+namespace\s+([\w:]+)/);
+    if (namespaceMatch) {
+      const namespaceName = namespaceMatch[1];
+      state.includes.push({
+        module: namespaceName,
+        symbols: [],
+        isSystem: false,
+        isUsingNamespace: true,
+        location: {
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column + 1
+        }
+      });
+      return;
+    }
+
+    // Parse using alias: using Type = OtherType;
+    const aliasMatch = usingText.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
+    if (aliasMatch) {
+      const aliasName = aliasMatch[1];
+      const originalType = aliasMatch[2];
+      
+      // Track type alias
+      if (!state.context.typeAliases) {
+        state.context.typeAliases = new Map<string, string>();
+      }
+      state.context.typeAliases.set(aliasName, originalType);
+      
+      // Add to exports if this is a top-level using declaration
+      state.includes.push({
+        module: originalType,
+        symbols: [aliasName],
+        isSystem: false,
+        isUsingAlias: true,
+        aliasName,
+        originalType,
+        location: {
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column + 1
+        }
+      });
+      return;
+    }
+
+    // Parse using function: using namespace::function;
+    const functionMatch = usingText.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
+    if (functionMatch) {
+      const namespacePart = functionMatch[1];
+      const functionName = functionMatch[2];
+      
+      state.includes.push({
+        module: namespacePart,
+        symbols: [functionName],
+        isSystem: false,
+        isUsingFunction: true,
+        functionName,
+        qualifiedName: `${namespacePart}::${functionName}`,
+        location: {
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column + 1
+        }
+      });
+    }
+  }
+
+  /**
+   * Handle exported declarations within export statements
+   */
+  private handleExportedDeclaration(node: Parser.SyntaxNode, state: any): void {
+    // Handle variable declarations, function declarations, etc.
+    const declarationType = node.type;
+    console.log(`Handling exported declaration type: ${declarationType}`);
+    
+    // This can be expanded to handle specific declaration types
+    // For now, we'll extract basic information
+    const content = state.content;
+    const declText = content.substring(node.startIndex, node.endIndex);
+    
+    // Simple pattern matching for now - can be enhanced with tree-sitter parsing
+    const symbolMatch = declText.match(/(\w+)(?=\s*[;({])/);
+    if (symbolMatch) {
+      this.addExport(state, symbolMatch[1], 'declaration', node);
+    }
+  }
+
+  /**
+   * Get qualified name for a symbol
+   */
+  private getQualifiedName(symbolName: string, namespaces: string[]): string {
+    if (namespaces.length === 0) {
+      return symbolName;
+    }
+    return `${namespaces.join('::')}::${symbolName}`;
+  }
+
+  /**
+   * Check if current context is in an exported namespace
+   */
+  private isInExportedNamespace(state: any): boolean {
+    if (!state.context.exportedNamespaces) {
+      return false;
+    }
+    const currentNamespace = state.context.namespaces.join('::');
+    return state.context.exportedNamespaces.has(currentNamespace) || 
+           Array.from(state.context.exportedNamespaces).some(ns => currentNamespace.startsWith(ns));
+  }
+
+  /**
+   * Add export to the state with enhanced qualification
+   */
+  private addExport(state: any, symbolName: string, symbolType: string, node: Parser.SyntaxNode): void {
+    const exportInfo = {
+      symbol: symbolName,
+      type: symbolType,
+      signature: symbolName,
+      isNamespaceExport: this.isInExportedNamespace(state),
+      namespace: state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined,
+      location: {
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1
+      }
+    };
+
+    // Initialize exports array if it doesn't exist
+    if (!state.exports) {
+      state.exports = [];
+    }
+    
+    state.exports.push(exportInfo);
+    console.log(`Added export: ${symbolName} (${symbolType}) [namespace: ${exportInfo.namespace || 'global'}]`);
+  }
+
+  /**
+   * Extract function name from declarator node (copied from streaming parser)
+   */
+  private extractFunctionName(declarator: Parser.SyntaxNode): string | null {
+    if (declarator.type === 'function_declarator') {
+      const inner = declarator.childForFieldName('declarator');
+      if (inner?.type === 'identifier') {
+        return inner.text;
+      }
+      if (inner?.type === 'qualified_identifier') {
+        return inner.text.split('::').pop() || null;
+      }
+      if (inner?.type === 'field_identifier') {
+        return inner.text;
+      }
+      // Try direct identifier child
+      const id = declarator.descendantsOfType('identifier')[0];
+      if (id) {
+        return id.text;
+      }
+    }
+    // Handle other declarator types
+    const id = declarator.descendantsOfType('identifier')[0];
+    if (id) {
+      return id.text;
+    }
+    return null;
   }
 
   /**
@@ -816,6 +1192,77 @@ export class EnhancedTreeSitterParser {
           state.context.currentClass = oldCurrentClass;
           break;
       }
+    }
+  }
+
+  /**
+   * Handle enum declarations including enum class
+   */
+  private handleEnum(node: Parser.SyntaxNode, state: any): void {
+    const nameNode = node.childForFieldName('name');
+    if (!nameNode) return;
+    
+    const enumName = nameNode.text;
+    const isEnumClass = node.text.trim().startsWith('enum class') || node.text.trim().startsWith('enum struct');
+    const currentNamespace = state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined;
+    
+    // Extract enum values
+    const enumValues: string[] = [];
+    const bodyNode = node.childForFieldName('body');
+    if (bodyNode) {
+      for (let i = 0; i < bodyNode.childCount; i++) {
+        const child = bodyNode.child(i);
+        if (child && child.type === 'enumerator') {
+          const valueNameNode = child.childForFieldName('name');
+          if (valueNameNode) {
+            enumValues.push(valueNameNode.text);
+          }
+        }
+      }
+    }
+    
+    // Create enum info (treating as a special kind of class for now)
+    const enumInfo: ClassInfo = {
+      name: enumName,
+      namespace: currentNamespace,
+      baseClasses: [],
+      interfaces: [],
+      methods: [],
+      members: enumValues.map(value => ({
+        name: value,
+        type: enumName,
+        visibility: 'public' as const,
+        isStatic: true,
+        isConst: true,
+        location: {
+          line: nameNode.startPosition.row + 1,
+          column: nameNode.startPosition.column + 1
+        }
+      })),
+      isTemplate: false,
+      isEnum: true,
+      isEnumClass: isEnumClass,
+      location: {
+        line: nameNode.startPosition.row + 1,
+        column: nameNode.startPosition.column + 1
+      }
+    };
+    
+    state.classes.push(enumInfo);
+    
+    // Also add enum values as individual exports if it's in an export namespace
+    if (isEnumClass && enumValues.length > 0) {
+      enumValues.forEach(value => {
+        state.exports.push({
+          symbol: `${enumName}::${value}`,
+          type: 'enum_value',
+          signature: `${enumName}::${value}`,
+          location: {
+            line: nameNode.startPosition.row + 1,
+            column: nameNode.startPosition.column + 1
+          }
+        });
+      });
     }
   }
 

@@ -11,8 +11,8 @@ export class GeminiTool {
     
     if (apiKey) {
       this.genAI = new GoogleGenerativeAI(apiKey);
-      // For text-only input, use the gemini-pro model
-      this.model = this.genAI.getGenerativeModel({ model: "gemini-pro" });
+      // For text-only input, use the gemini-2.0-flash-exp model
+      this.model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
     } else {
       console.warn('⚠️  GeminiTool initialized without API key. AI features will be disabled.');
     }

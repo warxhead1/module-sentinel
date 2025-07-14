@@ -26,7 +26,7 @@ import { KnowledgeBase } from './services/knowledge-base';
 export class ModuleSentinel {
   private moduleCache: Map<string, ModuleInfo> = new Map();
   private parallelEngine: ParallelProcessingEngine;
-  private consciousness: ThoughtSignaturePreserver;
+  private consciousness?: ThoughtSignaturePreserver;
   private mcpServer?: Server;
   private cppAnalyzer: CppAstAnalyzer;
   private streamingParser: StreamingCppParser;
@@ -38,7 +38,7 @@ export class ModuleSentinel {
 
   constructor() {
     this.parallelEngine = new ParallelProcessingEngine();
-    this.consciousness = new ThoughtSignaturePreserver(); // Will be re-initialized with shared DB
+    // ThoughtSignaturePreserver will be initialized later when we have a database
     this.cppAnalyzer = new CppAstAnalyzer();
     this.streamingParser = new StreamingCppParser();
     // Initialize geminiTool with env var if available, otherwise empty string
@@ -50,7 +50,7 @@ export class ModuleSentinel {
 
   async initialize(options?: { skipAutoIndex?: boolean }): Promise<void> {
     await this.parallelEngine.initialize();
-    await this.consciousness.initialize();
+    // await this.consciousness.initialize();
     await this.cppAnalyzer.initialize();
     
     // Load configuration if available
@@ -165,7 +165,7 @@ export class ModuleSentinel {
 
       this.moduleCache.set(moduleFile, moduleInfo);
       
-      this.consciousness.recordDecision({
+      this.consciousness?.recordDecision({
         type: 'import',
         module: moduleFile,
         decision: `Analyzed module with ${moduleInfo.exports.length} exports and ${moduleInfo.imports.length} imports`,
@@ -264,7 +264,7 @@ export class ModuleSentinel {
   }
 
   preserveArchitecturalInsight(decision: ArchitecturalDecision): void {
-    this.consciousness.recordDecision(decision);
+    this.consciousness?.recordDecision(decision);
   }
 
   async watchForChanges(watchPath: string): Promise<void> {
@@ -293,7 +293,7 @@ export class ModuleSentinel {
       }
     }
     
-    this.consciousness.recordDecision({
+    this.consciousness?.recordDecision({
       type: 'refactor',
       module: event.path,
       decision: `Module ${event.type}`,
@@ -475,7 +475,7 @@ export class ModuleSentinel {
 
   async shutdown(): Promise<void> {
     await this.parallelEngine.shutdown();
-    await this.consciousness.shutdown();
+    await this.consciousness?.shutdown();
     
     if (this.indexer) {
       this.indexer.close();
