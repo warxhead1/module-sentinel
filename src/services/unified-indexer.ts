@@ -17,7 +17,8 @@ export class UnifiedIndexer extends EventEmitter {
   constructor(private projectPath: string, private dbPath: string) {
     super();
     this.db = new Database(dbPath);
-    this.patternIndexer = new PatternAwareIndexer(projectPath, dbPath);
+    const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
+    this.patternIndexer = new PatternAwareIndexer(projectPath, dbPath, debugMode);
     this.parser = new StreamingCppParser({ fastMode: false });
     this.initUnifiedSchema();
   }

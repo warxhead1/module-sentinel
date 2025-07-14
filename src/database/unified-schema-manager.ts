@@ -569,13 +569,10 @@ export class UnifiedSchemaManager {
       CREATE INDEX IF NOT EXISTS idx_session_status ON agent_sessions(status);
       CREATE INDEX IF NOT EXISTS idx_modifications_session ON session_modifications(session_id);
       CREATE INDEX IF NOT EXISTS idx_crossings_session ON boundary_crossings(session_id);
-      -- Enhanced indexes for analytics performance
+      -- Basic indexes for session tracking
       CREATE INDEX IF NOT EXISTS idx_quality_metrics_file ON quality_metrics(file_path);
       CREATE INDEX IF NOT EXISTS idx_quality_metrics_session ON quality_metrics(session_id);
       CREATE INDEX IF NOT EXISTS idx_quality_metrics_timestamp ON quality_metrics(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_symbol_quality_type_safety ON analytics_symbol_quality(type_safety_score);
-      CREATE INDEX IF NOT EXISTS idx_module_metrics_health ON analytics_module_metrics(health_score);
-      CREATE INDEX IF NOT EXISTS idx_module_metrics_integration ON analytics_module_metrics(type_ecosystem_integration);
       
       -- Architectural decisions with reasoning
       CREATE TABLE IF NOT EXISTS architectural_decisions (
@@ -697,6 +694,13 @@ export class UnifiedSchemaManager {
         context TEXT,
         effectiveness_rating REAL DEFAULT 0.5
       );
+      
+      -- Analytics indexes (must be after table creation)
+      CREATE INDEX IF NOT EXISTS idx_symbol_quality_type_safety ON analytics_symbol_quality(type_safety_score);
+      CREATE INDEX IF NOT EXISTS idx_module_metrics_health ON analytics_module_metrics(health_score);
+      CREATE INDEX IF NOT EXISTS idx_module_metrics_integration ON analytics_module_metrics(type_ecosystem_integration);
+      CREATE INDEX IF NOT EXISTS idx_symbol_quality_file ON analytics_symbol_quality(file_path);
+      CREATE INDEX IF NOT EXISTS idx_module_metrics_path ON analytics_module_metrics(module_path);
     `);
   }
   

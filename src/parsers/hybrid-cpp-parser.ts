@@ -11,6 +11,8 @@ import * as fs from 'fs/promises';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { Worker } from 'worker_threads';
+import * as os from 'os';
 
 /**
  * Hybrid C++ Parser that combines multiple parsing strategies
@@ -32,8 +34,14 @@ export class HybridCppParser {
   private schemaManager: UnifiedSchemaManager;
   private knowledgeBase: KnowledgeBase; // New member
   private projectPath?: string;
+  private workerPool: Worker[] = [];
+  private workerQueue: Array<{ resolve: Function; reject: Function; filePath: string }> = [];
+  private workerStatus = new Map<Worker, boolean>(); // true = busy, false = idle
+  private maxWorkers = Math.min(os.cpus().length - 1, 8); // Leave one CPU for main thread
+  private debugMode: boolean = false;
   
-  constructor() {
+  constructor(debugMode: boolean = false) {
+    this.debugMode = debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
     this.treeSitterParser = new EnhancedTreeSitterParser();
     this.grammarAwareParser = new GrammarAwareParser();
     this.streamingParser = new StreamingCppParser();
@@ -90,9 +98,9 @@ export class HybridCppParser {
       this.clangParser = new ClangAstParser(clangPath);
       await this.clangParser.detectIncludePaths(projectPath);
       this.hasClang = true;
-      console.log(`Clang AST parser available (${clangPath} with lightweight mode)`);
+      if (this.debugMode) console.log(`Clang AST parser available (${clangPath} with lightweight mode)`);
     } catch {
-      console.log('⚠️  Clang not available, using tree-sitter only');
+      if (this.debugMode) console.log('⚠️  Clang not available, using tree-sitter only');
     }
 
     // Start progressive background re-indexing
@@ -100,6 +108,9 @@ export class HybridCppParser {
     
     // Set up file save hooks for immediate re-indexing
     this.setupFileSaveHooks(projectPath);
+    
+    // Initialize worker pool for parallel parsing
+    await this.initializeWorkerPool();
   }
 
   /**
@@ -112,19 +123,19 @@ export class HybridCppParser {
       this.preservationDb,
       projectPath,
       async (filePath: string) => {
-        console.log(`🔄 Background re-parsing ${filePath}`);
+        if (this.debugMode) console.log(`🔄 Background re-parsing ${filePath}`);
         
         // Check if file actually changed
         const changed = await this.schemaManager.hasFileChanged(this.preservationDb!, filePath);
         if (!changed) {
-          console.log(`⏭️  Skipping ${filePath} - no changes detected`);
+          if (this.debugMode) console.log(`⏭️  Skipping ${filePath} - no changes detected`);
           return;
         }
         
         // Re-parse the file with current strategy
         try {
           const result = await this.parseFile(filePath);
-          console.log(`Re-parsed ${filePath}: ${result.methods.length} methods, ${result.classes.length} classes`);
+          if (this.debugMode) console.log(`Re-parsed ${filePath}: ${result.methods.length} methods, ${result.classes.length} classes`);
           // Store patterns and relationships in KnowledgeBase
           await this.knowledgeBase.storePatterns(filePath, result.patterns);
           await this.knowledgeBase.storeRelationships(filePath, result.relationships);
@@ -135,7 +146,7 @@ export class HybridCppParser {
       }
     );
 
-    console.log('📋 Progressive re-indexing system started');
+    if (this.debugMode) console.log('📋 Progressive re-indexing system started');
   }
 
   /**
@@ -151,6 +162,9 @@ export class HybridCppParser {
     if (this.dbAwareTreeSitterParser) {
       this.dbAwareTreeSitterParser.close();
     }
+    
+    // Terminate worker pool
+    this.terminateWorkerPool();
   }
 
   /**
@@ -166,12 +180,12 @@ export class HybridCppParser {
    */
   private setupFileSaveHooks(projectPath: string): void {
     setupFileWatchingWithReindexing(projectPath, async (filePath: string) => {
-      console.log(`💾 File save detected: ${filePath}`);
+      if (this.debugMode) console.log(`💾 File save detected: ${filePath}`);
       
       // Immediate re-parse on file save
       try {
         const result = await this.parseFile(filePath);
-        console.log(`⚡ Hot re-parsed ${filePath}: ${result.methods.length} methods, ${result.classes.length} classes`);
+        if (this.debugMode) console.log(`⚡ Hot re-parsed ${filePath}: ${result.methods.length} methods, ${result.classes.length} classes`);
         // Store patterns and relationships in KnowledgeBase
         await this.knowledgeBase.storePatterns(filePath, result.patterns);
         await this.knowledgeBase.storeRelationships(filePath, result.relationships);
@@ -180,7 +194,7 @@ export class HybridCppParser {
       }
     });
 
-    console.log('💾 File save hooks enabled for immediate re-indexing');
+    if (this.debugMode) console.log('💾 File save hooks enabled for immediate re-indexing');
   }
   
   async parseFile(filePath: string): Promise<EnhancedModuleInfo> {
@@ -188,7 +202,7 @@ export class HybridCppParser {
     
     // For very large files, use two-pass approach: streaming + background deep analysis
     if (stats.size > 500 * 1024) { // 500KB
-      console.log(`Using two-pass approach for large file: ${filePath} (${Math.round(stats.size / 1024)}KB)`);
+      if (this.debugMode) console.log(`Using two-pass approach for large file: ${filePath} (${Math.round(stats.size / 1024)}KB)`);
       return this.parseWithTwoPass(filePath);
     }
     
@@ -223,7 +237,7 @@ export class HybridCppParser {
 
         return result;
       } catch (error: unknown) {
-        console.log(`Clang parsing failed for ${filePath}: ${error instanceof Error ? error.message : error}`);
+        if (this.debugMode) console.log(`Clang parsing failed for ${filePath}: ${error instanceof Error ? error.message : error}`);
         
         // Track failed parsing attempt
         if (this.preservationDb) {
@@ -240,7 +254,7 @@ export class HybridCppParser {
         // Check if we have previous successful parse data to preserve
         const preservedData = await this.getPreservedParseData(filePath);
         if (preservedData) {
-          console.log(`Using preserved data for ${filePath} from previous successful parse`);
+          if (this.debugMode) console.log(`Using preserved data for ${filePath} from previous successful parse`);
           
           // Enhance preserved data with fresh tree-sitter patterns
           try {
@@ -248,12 +262,12 @@ export class HybridCppParser {
             preservedData.patterns = treeSitterResult.patterns;
             return preservedData;
           } catch (tsError) {
-            console.log(`Tree-sitter also failed, returning preserved data as-is`);
+            if (this.debugMode) console.log(`Tree-sitter also failed, returning preserved data as-is`);
             return preservedData;
           }
         }
         
-        console.log(`No preserved data available, falling back to tree-sitter`);
+        if (this.debugMode) console.log(`No preserved data available, falling back to tree-sitter`);
       }
     }
     
@@ -263,27 +277,25 @@ export class HybridCppParser {
       let result: EnhancedModuleInfo;
       let parserType = 'tree-sitter';
       
-      // Try grammar-aware parser first for enhanced type analysis
-      try {
-        console.log(`Using grammar-aware parser for ${filePath}`);
-        result = await this.grammarAwareParser.parseFile(filePath);
-        parserType = 'grammar-aware-tree-sitter';
-      } catch (grammarError) {
-        console.log(`Grammar-aware parser failed, trying database-aware: ${grammarError}`);
-        
-        // Try database-aware parser second if available
-        if (this.dbAwareTreeSitterParser) {
-          try {
-            console.log(`Using database-aware tree-sitter for ${filePath}`);
-            result = await this.dbAwareTreeSitterParser.parseFile(filePath);
-            parserType = 'db-aware-tree-sitter';
-          } catch (dbError) {
-            console.log(`Database-aware parser failed, falling back to regular tree-sitter: ${dbError}`);
-            result = await this.treeSitterParser.parseFile(filePath);
-          }
-        } else {
-          result = await this.treeSitterParser.parseFile(filePath);
+      // Intelligent parser selection based on file characteristics
+      const shouldUseGrammarAware = this.shouldUseGrammarAwareParser(filePath, stats);
+      
+      if (shouldUseGrammarAware) {
+        try {
+          if (this.debugMode) console.log(`Using grammar-aware parser for ${filePath}`);
+          const grammarStartTime = Date.now();
+          result = await this.grammarAwareParser.parseFile(filePath);
+          parserType = 'grammar-aware-tree-sitter';
+          if (this.debugMode) console.log(`Grammar-aware parsing took ${Date.now() - grammarStartTime}ms`);
+        } catch (grammarError) {
+          if (this.debugMode) console.log(`Grammar-aware parser failed, trying database-aware: ${grammarError}`);
+          result = await this.fallbackToFasterParser(filePath);
+          parserType = 'fallback-tree-sitter';
         }
+      } else {
+        if (this.debugMode) console.log(`Using fast parser for ${filePath} (${this.getFileSkipReason(filePath, stats)})`);
+        result = await this.fallbackToFasterParser(filePath);
+        parserType = 'fast-tree-sitter';
       }
       
       // Store tree-sitter result for preservation (lower confidence)
@@ -308,7 +320,7 @@ export class HybridCppParser {
 
       return result;
     } catch (error: unknown) {
-      console.log(`Tree-sitter parsing failed for ${filePath}: ${error instanceof Error ? error.message : error}`);
+      if (this.debugMode) console.log(`Tree-sitter parsing failed for ${filePath}: ${error instanceof Error ? error.message : error}`);
       
       // Track failed tree-sitter attempt
       if (this.preservationDb) {
@@ -324,7 +336,7 @@ export class HybridCppParser {
       
       // If tree-sitter fails due to file size, fall back to streaming parser
       if (error instanceof Error && error.message.includes('File too large for tree-sitter')) {
-        console.log(`Falling back to streaming parser for large file: ${filePath}`);
+        if (this.debugMode) console.log(`Falling back to streaming parser for large file: ${filePath}`);
         return this.parseWithStreaming(filePath);
       }
       
@@ -414,7 +426,7 @@ export class HybridCppParser {
     // Run deep analysis in background without blocking
     setTimeout(async () => {
       try {
-        console.log(`🔍 Starting background deep analysis for ${filePath}`);
+        if (this.debugMode) console.log(`🔍 Starting background deep analysis for ${filePath}`);
         
         let deepResult: EnhancedModuleInfo | null = null;
         
@@ -425,9 +437,9 @@ export class HybridCppParser {
           // Store patterns and relationships in KnowledgeBase
           await this.knowledgeBase.storePatterns(filePath, deepResult.patterns);
           await this.knowledgeBase.storeRelationships(filePath, deepResult.relationships);
-          console.log(`Tree-sitter deep analysis completed for ${filePath}`);
+          if (this.debugMode) console.log(`Tree-sitter deep analysis completed for ${filePath}`);
         } catch (tsError: unknown) {
-          console.log(`Tree-sitter deep analysis failed for ${filePath}: ${tsError instanceof Error ? tsError.message : tsError}`);
+          if (this.debugMode) console.log(`Tree-sitter deep analysis failed for ${filePath}: ${tsError instanceof Error ? tsError.message : tsError}`);
         }
         
         // Try Clang if available and Tree-sitter provided good results
@@ -438,9 +450,9 @@ export class HybridCppParser {
             // Store patterns and relationships in KnowledgeBase
             await this.knowledgeBase.storePatterns(filePath, clangResult.patterns);
             await this.knowledgeBase.storeRelationships(filePath, clangResult.relationships);
-            console.log(`Clang deep analysis completed for ${filePath}`);
+            if (this.debugMode) console.log(`Clang deep analysis completed for ${filePath}`);
           } catch (clangError: unknown) {
-            console.log(`Clang deep analysis failed for ${filePath}: ${clangError instanceof Error ? clangError.message : clangError}`);
+            if (this.debugMode) console.log(`Clang deep analysis failed for ${filePath}: ${clangError instanceof Error ? clangError.message : clangError}`);
           }
         }
         
@@ -745,6 +757,305 @@ export class HybridCppParser {
     }
 
     return Math.min(coveredSymbols / totalSymbols, 1.0);
+  }
+
+  /**
+   * Intelligent parser selection based on file characteristics
+   */
+  private shouldUseGrammarAwareParser(filePath: string, stats: any): boolean {
+    // Always use grammar-aware for critical C++20/23 module files
+    if (filePath.endsWith('.ixx') || filePath.endsWith('.cppm')) {
+      return true;
+    }
+    
+    // Skip grammar-aware for very large files (> 100KB) unless they're critical
+    if (stats.size > 100 * 1024) {
+      const isCritical = this.isCriticalFile(filePath);
+      if (!isCritical) {
+        return false;
+      }
+    }
+    
+    // Skip grammar-aware for known problematic files
+    const fileName = path.basename(filePath);
+    const skipPatterns = [
+      /stb_.*\.h$/,           // stb libraries are usually large and simple
+      /.*Test\.cpp$/,         // Test files often don't need deep analysis
+      /.*test.*\.cpp$/i,      // Test files
+      /.*example.*\.cpp$/i,   // Example files
+      /.*demo.*\.cpp$/i,      // Demo files
+      /third[_-]party/i,      // Third party code
+      /vendor/i,              // Vendor code
+      /external/i             // External dependencies
+    ];
+    
+    if (skipPatterns.some(pattern => pattern.test(fileName) || pattern.test(filePath))) {
+      return false;
+    }
+    
+    // Use grammar-aware for files likely to have rich type information
+    const richTypePatterns = [
+      /Vulkan/i,
+      /Rendering/i,
+      /Pipeline/i,
+      /Factory/i,
+      /Manager/i,
+      /Core/i,
+      /Types\.ixx$/,
+      /Types\.h$/
+    ];
+    
+    if (richTypePatterns.some(pattern => pattern.test(filePath))) {
+      return true;
+    }
+    
+    // Default to fast parser for most files
+    return false;
+  }
+  
+  private getFileSkipReason(filePath: string, stats: any): string {
+    if (stats.size > 100 * 1024) return 'large file';
+    const fileName = path.basename(filePath);
+    if (/stb_.*\.h$/.test(fileName)) return 'stb library';
+    if (/test/i.test(fileName)) return 'test file';
+    if (/third[_-]party|vendor|external/i.test(filePath)) return 'third party';
+    return 'low priority';
+  }
+  
+  private async fallbackToFasterParser(filePath: string): Promise<EnhancedModuleInfo> {
+    // Try database-aware parser first if available
+    if (this.dbAwareTreeSitterParser) {
+      try {
+        return await this.dbAwareTreeSitterParser.parseFile(filePath);
+      } catch (dbError) {
+        if (this.debugMode) console.log(`Database-aware parser failed, using regular tree-sitter: ${dbError}`);
+      }
+    }
+    
+    // Fall back to regular tree-sitter
+    return await this.treeSitterParser.parseFile(filePath);
+  }
+  
+  /**
+   * Initialize worker pool for parallel parsing
+   */
+  private async initializeWorkerPool(): Promise<void> {
+    if (this.debugMode) console.log(`🚀 Initializing worker pool with ${this.maxWorkers} workers`);
+    
+    for (let i = 0; i < this.maxWorkers; i++) {
+      await this.createWorker();
+    }
+  }
+  
+  /**
+   * Create a new worker and add it to the pool
+   */
+  private async createWorker(): Promise<void> {
+    const workerPath = path.join(__dirname, 'parse-worker.js');
+    if (this.debugMode) console.log(`Creating worker with path: ${workerPath}`);
+    
+    // Check if worker file exists
+    try {
+      await fs.access(workerPath);
+    } catch (error) {
+      console.error(`Worker file not found at ${workerPath}`);
+      throw new Error(`Worker file not found: ${workerPath}`);
+    }
+    
+    const worker = new Worker(workerPath);
+    
+    worker.on('message', (result) => {
+      this.handleWorkerResult(worker, result);
+    });
+    
+    worker.on('error', (error) => {
+      console.error('Worker error:', error);
+      this.handleWorkerError(worker, error);
+    });
+    
+    worker.on('exit', (code) => {
+      if (code !== 0) {
+        console.error(`Worker exited with code ${code}`);
+      }
+      this.removeWorkerFromPool(worker);
+    });
+    
+    this.workerPool.push(worker);
+    this.workerStatus.set(worker, false); // Initially idle
+  }
+  
+  /**
+   * Handle result from worker
+   */
+  private handleWorkerResult(worker: Worker, result: any): void {
+    if (this.debugMode) console.log(`Worker result received:`, result.success ? 'success' : 'failure', result.filePath);
+    
+    // Mark worker as idle
+    this.workerStatus.set(worker, false);
+    
+    // Find the pending request for this worker
+    const request = (worker as any).currentRequest;
+    if (request) {
+      delete (worker as any).currentRequest;
+      
+      if (result.success) {
+        request.resolve(result.result);
+      } else {
+        request.reject(new Error(result.error));
+      }
+    }
+    
+    // Process next item in queue if available
+    this.processWorkerQueue();
+  }
+  
+  /**
+   * Handle worker error
+   */
+  private handleWorkerError(worker: Worker, error: Error): void {
+    console.error(`Worker error:`, error);
+    
+    // Mark worker as idle
+    this.workerStatus.set(worker, false);
+    
+    // Find and reject the pending request
+    const request = (worker as any).currentRequest;
+    if (request) {
+      delete (worker as any).currentRequest;
+      request.reject(error);
+    }
+    
+    // Replace the failed worker
+    this.removeWorkerFromPool(worker);
+    this.createWorker();
+    
+    // Process next item in queue
+    this.processWorkerQueue();
+  }
+  
+  /**
+   * Remove worker from pool
+   */
+  private removeWorkerFromPool(worker: Worker): void {
+    const index = this.workerPool.indexOf(worker);
+    if (index !== -1) {
+      this.workerPool.splice(index, 1);
+    }
+    this.workerStatus.delete(worker);
+  }
+  
+  /**
+   * Process worker queue
+   */
+  private processWorkerQueue(): void {
+    const activeCount = Array.from(this.workerStatus.values()).filter(busy => busy).length;
+    if (this.debugMode) console.log(`Processing worker queue: ${this.workerQueue.length} items, ${activeCount}/${this.maxWorkers} active workers`);
+    
+    while (this.workerQueue.length > 0) {
+      // Find an idle worker
+      const availableWorker = this.workerPool.find(w => !this.workerStatus.get(w));
+      
+      if (!availableWorker) {
+        if (this.debugMode) console.log('No available workers, waiting...');
+        break;
+      }
+      
+      const request = this.workerQueue.shift();
+      if (!request) break;
+      
+      // Mark worker as busy and attach request to it
+      this.workerStatus.set(availableWorker, true);
+      (availableWorker as any).currentRequest = request;
+      
+      if (this.debugMode) console.log(`Sending file to worker: ${request.filePath}`);
+      
+      // Get file stats for intelligent parser selection
+      fs.stat(request.filePath).then(stats => {
+        // Send work to the worker
+        availableWorker.postMessage({
+          filePath: request.filePath,
+          useGrammarAware: this.shouldUseGrammarAwareParser(request.filePath, stats),
+          projectPath: this.projectPath
+        });
+      }).catch(err => {
+        console.error(`Failed to stat file ${request.filePath}:`, err);
+        // Still try to parse even if stat fails
+        availableWorker.postMessage({
+          filePath: request.filePath,
+          useGrammarAware: false, // Default to faster parser if stat fails
+          projectPath: this.projectPath
+        });
+      });
+    }
+  }
+  
+  /**
+   * Parse file using worker pool
+   */
+  private async parseFileWithWorker(filePath: string): Promise<EnhancedModuleInfo> {
+    return new Promise((resolve, reject) => {
+      this.workerQueue.push({ resolve, reject, filePath });
+      this.processWorkerQueue();
+    });
+  }
+  
+  /**
+   * Parse multiple files in parallel using worker pool
+   */
+  async parseFilesInParallel(filePaths: string[]): Promise<Map<string, EnhancedModuleInfo>> {
+    if (this.debugMode) console.log(`📦 Parsing ${filePaths.length} files in parallel using worker pool`);
+    const startTime = Date.now();
+    
+    const results = new Map<string, EnhancedModuleInfo>();
+    const parsePromises: Promise<void>[] = [];
+    
+    for (const filePath of filePaths) {
+      const promise = this.parseFileWithWorker(filePath)
+        .then(result => {
+          results.set(filePath, result);
+          
+          // Store in database and knowledge base
+          return this.storeParseData(filePath, result, 'worker-pool').then(() => {
+            return this.knowledgeBase.storePatterns(filePath, result.patterns);
+          }).then(() => {
+            return this.knowledgeBase.storeRelationships(filePath, result.relationships);
+          });
+        })
+        .catch(error => {
+          console.error(`Failed to parse ${filePath}:`, error);
+          // Don't throw, just log the error so other files can continue
+        });
+      
+      parsePromises.push(promise);
+    }
+    
+    await Promise.all(parsePromises);
+    
+    const duration = Date.now() - startTime;
+    const avgTime = Math.round(duration / filePaths.length);
+    if (this.debugMode) console.log(`✅ Parsed ${results.size}/${filePaths.length} files in ${duration}ms (avg ${avgTime}ms/file)`);
+    
+    return results;
+  }
+  
+  /**
+   * Terminate worker pool
+   */
+  private terminateWorkerPool(): void {
+    if (this.debugMode) console.log('🛑 Terminating worker pool');
+    
+    for (const worker of this.workerPool) {
+      worker.terminate();
+    }
+    
+    this.workerPool = [];
+    this.workerStatus.clear();
+    
+    // Reject any pending requests
+    for (const request of this.workerQueue) {
+      request.reject(new Error('Worker pool terminated'));
+    }
+    this.workerQueue = [];
   }
 }
 

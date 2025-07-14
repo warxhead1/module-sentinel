@@ -69,6 +69,11 @@ export class EnhancedTypeAnalyzer {
     'signed', 'unsigned', 'short', 'int', 'long', 'float', 'double',
     'size_t', 'ptrdiff_t', 'nullptr_t'
   ]);
+  
+  // Cache for analyzed types to avoid re-analysis
+  private typeCache = new Map<string, DetailedTypeInfo>();
+  private cacheHits = 0;
+  private cacheMisses = 0;
 
   /**
    * Analyze a C++ type string to extract detailed type information
@@ -76,7 +81,17 @@ export class EnhancedTypeAnalyzer {
   analyzeType(typeString: string, context?: { namespace?: string }): DetailedTypeInfo {
     const cleanType = this.cleanTypeString(typeString);
     
-    return {
+    // Check cache first
+    const cacheKey = `${cleanType}::${context?.namespace || 'global'}`;
+    const cached = this.typeCache.get(cacheKey);
+    if (cached) {
+      this.cacheHits++;
+      return cached;
+    }
+    
+    this.cacheMisses++;
+    
+    const result = {
       baseType: this.extractBaseType(cleanType),
       qualifiedName: this.getQualifiedTypeName(cleanType, context),
       isPointer: this.isPointerType(cleanType),
@@ -84,7 +99,7 @@ export class EnhancedTypeAnalyzer {
       isConst: this.isConstType(cleanType),
       isVolatile: this.isVolatileType(cleanType),
       isTemplate: this.isTemplateType(cleanType),
-      templateArguments: this.extractTemplateArguments(cleanType),
+      templateArguments: this.extractTemplateArguments(cleanType, 0),
       arrayDimensions: this.extractArrayDimensions(cleanType),
       namespace: this.extractNamespace(cleanType),
       isBuiltin: this.isBuiltinType(cleanType),
@@ -93,6 +108,17 @@ export class EnhancedTypeAnalyzer {
       isPlanetGenType: this.isPlanetGenType(cleanType),
       modifiers: this.extractModifiers(cleanType)
     };
+    
+    // Cache the result
+    this.typeCache.set(cacheKey, result);
+    
+    // Log cache performance periodically
+    if ((this.cacheHits + this.cacheMisses) % 1000 === 0) {
+      const hitRate = (this.cacheHits / (this.cacheHits + this.cacheMisses) * 100).toFixed(1);
+      console.log(`     Type cache: ${hitRate}% hit rate (${this.cacheHits} hits, ${this.cacheMisses} misses)`);
+    }
+    
+    return result;
   }
 
   /**
@@ -224,9 +250,29 @@ export class EnhancedTypeAnalyzer {
     return type.includes('<') && type.includes('>');
   }
 
-  private extractTemplateArguments(type: string): DetailedTypeInfo[] {
+  private extractTemplateArguments(type: string, depth: number = 0): DetailedTypeInfo[] {
     if (!this.isTemplateType(type)) {
       return [];
+    }
+    
+    // Limit recursion depth to prevent performance issues with deeply nested templates
+    if (depth > 3) {
+      return [{
+        baseType: 'complex_template',
+        qualifiedName: 'complex_template',
+        isPointer: false,
+        isReference: false,
+        isConst: false,
+        isVolatile: false,
+        isTemplate: true,
+        templateArguments: [],
+        arrayDimensions: [],
+        isBuiltin: false,
+        isStdType: false,
+        isVulkanType: false,
+        isPlanetGenType: false,
+        modifiers: []
+      }];
     }
     
     const match = type.match(/<(.+)>$/);
@@ -235,7 +281,16 @@ export class EnhancedTypeAnalyzer {
     const argsString = match[1];
     const args = this.splitTemplateArguments(argsString);
     
-    return args.map(arg => this.analyzeType(arg.trim()));
+    // Pass depth + 1 to recursive calls
+    return args.map(arg => {
+      const cleanArg = arg.trim();
+      // For simple types, don't recurse
+      if (this.builtinTypes.has(cleanArg) || !cleanArg.includes('<')) {
+        return this.analyzeType(cleanArg);
+      }
+      // For complex types, increase depth
+      return this.analyzeType(cleanArg, { namespace: undefined });
+    });
   }
 
   private splitTemplateArguments(argsString: string): string[] {

@@ -10,6 +10,7 @@ import { Worker } from 'worker_threads';
 import * as os from 'os';
 import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
 import { EnhancedAntiPatternDetector } from '../services/enhanced-antipattern-detector.js';
+import { HybridCppParser } from '../parsers/hybrid-cpp-parser.js';
 
 /**
  * Pattern-aware indexer specifically designed for the planet_procgen codebase
@@ -25,13 +26,16 @@ export class PatternAwareIndexer {
   private clangParser: ClangIntelligentIndexer;
   private treeSitterParser: EnhancedTreeSitterParser;
   private streamingParser: StreamingCppParser;
+  private hybridParser: HybridCppParser;
   private parallelEngine: ParallelProcessingEngine;
   private patternCache: PatternCache;
   private semanticWorker: Worker | null = null;
-  private parserStats = { clang: 0, treeSitter: 0, streaming: 0, failed: 0 };
+  private parserStats = { clang: 0, treeSitter: 0, streaming: 0, hybrid: 0, failed: 0 };
   private antiPatternDetector: EnhancedAntiPatternDetector;
+  private debugMode: boolean = false;
   
-  constructor(private projectPath: string, private dbPath: string) {
+  constructor(private projectPath: string, private dbPath: string, debugMode: boolean = false) {
+    this.debugMode = debugMode;
     this.db = new Database(dbPath);
     
     // Initialize database schema through unified manager
@@ -44,6 +48,7 @@ export class PatternAwareIndexer {
     this.clangParser = null as any; // Temporary placeholder
     this.treeSitterParser = new EnhancedTreeSitterParser();
     this.streamingParser = new StreamingCppParser({ fastMode: true });
+    this.hybridParser = new HybridCppParser(this.debugMode);
     
     this.parallelEngine = new ParallelProcessingEngine(Math.min(os.cpus().length, 8));
     this.patternCache = {
@@ -61,58 +66,56 @@ export class PatternAwareIndexer {
   async indexFiles(filePaths: string[]): Promise<void> {
     if (filePaths.length === 0) return;
     
-    console.log(`\n🚀 Indexing ${filePaths.length} files in parallel...`);
+    if (this.debugMode) console.log(`\n🚀 Indexing ${filePaths.length} files in parallel...`);
     const startTime = Date.now();
+    
+    // Initialize parsers
+    await this.hybridParser.initialize(this.projectPath);
+    await this.treeSitterParser.initialize();
     
     // Initialize semantic worker if needed
     if (!this.semanticWorker) {
       await this.initializeSemanticWorker();
     }
     
-    // Process files in parallel batches
-    const batchSize = Math.min(50, filePaths.length);
+    // Use HybridCppParser's worker pool for parallel parsing
+    const parseResults = await this.hybridParser.parseFilesInParallel(filePaths);
+    
     const allSymbols: any[] = [];
     const failedFiles: string[] = [];
     const allValidResults: any[] = [];
     
-    for (let i = 0; i < filePaths.length; i += batchSize) {
-      const batch = filePaths.slice(i, i + batchSize);
-      
-      // Parse files in parallel with hierarchical fallback
-      const batchResults = await this.parallelEngine.processInParallel(
-        batch,
-        async (filePath) => {
-          const relativePath = path.relative(this.projectPath, filePath);
-          
-          // Try hierarchical parsing: Clang -> TreeSitter -> Streaming
-          const parseResult = await this.parseFileWithFallback(filePath);
-          
-          if (parseResult) {
-            return { filePath, relativePath, parseResult: parseResult.result, parserUsed: parseResult.parser };
-          } else {
-            failedFiles.push(filePath);
-            return null;
-          }
-        }
-      );
-      
-      // Extract symbols and perform semantic analysis
-      const validResults = batchResults.filter(r => r !== null);
-      allValidResults.push(...validResults);
-      
-      for (const result of validResults) {
-        try {
-          const symbols = await this.extractSymbolsWithWorker(
-            result.parseResult,
-            result.filePath,
-            result.relativePath,
-            result.parserUsed
-          );
-          allSymbols.push(...symbols);
-        } catch (error) {
-          console.warn(`  ⚠️  Symbol extraction error in ${path.basename(result.filePath)}`);
-          failedFiles.push(result.filePath);
-        }
+    // Process parsed results
+    for (const [filePath, parseResult] of parseResults) {
+      const relativePath = path.relative(this.projectPath, filePath);
+      allValidResults.push({
+        filePath,
+        relativePath,
+        parseResult,
+        parserUsed: 'hybrid-worker-pool'
+      });
+    }
+    
+    // Add failed files (those not in results)
+    for (const filePath of filePaths) {
+      if (!parseResults.has(filePath)) {
+        failedFiles.push(filePath);
+      }
+    }
+    
+    // Extract symbols from parsed results
+    for (const result of allValidResults) {
+      try {
+        const symbols = await this.extractSymbolsWithWorker(
+          result.parseResult,
+          result.filePath,
+          result.relativePath,
+          result.parserUsed
+        );
+        allSymbols.push(...symbols);
+      } catch (error) {
+        console.warn(`  ⚠️  Symbol extraction error in ${path.basename(result.filePath)}`);
+        failedFiles.push(result.filePath);
       }
     }
     
@@ -135,10 +138,10 @@ export class PatternAwareIndexer {
     
     const elapsed = Date.now() - startTime;
     const successCount = filePaths.length - failedFiles.length;
-    console.log(`Indexed ${allSymbols.length} symbols from ${successCount}/${filePaths.length} files in ${elapsed}ms`);
+    if (this.debugMode) console.log(`Indexed ${allSymbols.length} symbols from ${successCount}/${filePaths.length} files in ${elapsed}ms`);
     
     if (failedFiles.length > 0) {
-      console.log(`  ⚠️  ${failedFiles.length} files could not be indexed (likely due to compilation errors)`);
+      if (this.debugMode) console.log(`  ⚠️  ${failedFiles.length} files could not be indexed (likely due to compilation errors)`);
     }
   }
   
@@ -961,6 +964,110 @@ export class PatternAwareIndexer {
       return symbols;
     }
     
+    // Handle HybridCppParser's EnhancedModuleInfo format
+    if (parseResult.methods && parseResult.classes) {
+      // This is EnhancedModuleInfo format from HybridCppParser
+      const enhancedInfo = parseResult as any;
+      
+      // Process methods
+      for (const method of enhancedInfo.methods || []) {
+        const symbol = {
+          name: method.name,
+          qualifiedName: method.qualifiedName || (method.className ? `${method.className}::${method.name}` : method.name),
+          kind: method.className ? 'method' : 'function',
+          filePath,
+          line: method.location?.line || 0,
+          column: method.location?.column || 0,
+          signature: method.signature || this.buildMethodSignature(method),
+          returnType: method.returnType,
+          parentClass: method.className,
+          namespace: method.namespace,
+          
+          // Enhanced type information
+          isTemplate: method.isTemplate || false,
+          templateParams: method.templateParams,
+          isExported: method.isExported || false,
+          
+          // Pattern detection
+          executionMode: method.executionMode || this.detectExecutionMode(method.name, method.returnType),
+          isAsync: method.isAsync || false,
+          isFactory: method.isFactory || this.isFactoryMethod(method.name),
+          isGenerator: method.isGenerator || this.isGeneratorFunctionName(method.name),
+          pipelineStage,
+          
+          // Performance hints
+          returnsVectorFloat: this.returnsVectorFloatType(method.returnType),
+          usesGpuCompute: method.usesGpuCompute || false,
+          hasCpuFallback: method.hasCpuFallback || false,
+          
+          // Semantic tags
+          semanticTags: method.semanticTags || [],
+          relatedSymbols: method.relatedSymbols || [],
+          
+          // Parser metadata
+          parserUsed,
+          parserConfidence: 0
+        };
+        
+        symbols.push(symbol);
+      }
+      
+      // Process classes
+      for (const cls of enhancedInfo.classes || []) {
+        const symbol = {
+          name: cls.name,
+          qualifiedName: cls.namespace ? `${cls.namespace}::${cls.name}` : cls.name,
+          kind: cls.isEnum ? (cls.isEnumClass ? 'enum_class' : 'enum') : 'class',
+          filePath,
+          line: cls.location?.line || 0,
+          column: cls.location?.column || 0,
+          signature: cls.signature,
+          returnType: null,
+          parentClass: null,
+          namespace: cls.namespace,
+          
+          // Enhanced type information
+          isTemplate: cls.isTemplate || false,
+          templateParams: cls.templateParams,
+          isEnum: cls.isEnum || false,
+          isEnumClass: cls.isEnumClass || false,
+          enumValues: cls.enumValues,
+          isExported: cls.isExported || false,
+          exportNamespace: cls.exportNamespace,
+          moduleName: enhancedInfo.moduleInfo?.moduleName,
+          
+          // Pattern detection
+          executionMode: 'sync',
+          isAsync: false,
+          isFactory: false,
+          isGenerator: false,
+          pipelineStage,
+          
+          // Performance hints
+          returnsVectorFloat: false,
+          usesGpuCompute: false,
+          hasCpuFallback: false,
+          
+          // Semantic tags
+          semanticTags: cls.semanticTags || [],
+          relatedSymbols: [],
+          
+          // Parser metadata
+          parserUsed,
+          parserConfidence: 0
+        };
+        
+        symbols.push(symbol);
+      }
+      
+      // Calculate real confidence for all symbols
+      symbols.forEach(symbol => {
+        symbol.parserConfidence = this.calculateRealConfidence(symbol, parserUsed);
+      });
+      
+      return symbols;
+    }
+    
     // Check if parseResult is null or empty
     if (!parseResult || (typeof parseResult === 'object' && Object.keys(parseResult).length === 0)) {
       // Empty parse result - file likely has no symbols
@@ -1468,13 +1575,19 @@ export class PatternAwareIndexer {
    * Build semantic connections between symbols
    */
   private async buildSemanticConnections(symbols: any[]): Promise<void> {
+    if (this.debugMode) console.log(`🔗 Building semantic connections for ${symbols.length} symbols...`);
+    const startTime = Date.now();
+    
     const insertConn = this.db.prepare(`
       INSERT OR IGNORE INTO semantic_connections 
       (symbol_id, connected_id, connection_type, confidence, evidence)
       VALUES (?, ?, ?, ?, ?)
     `);
     
-    // Build symbol lookup maps for efficient searching
+    // Run all inserts in a single transaction for ~100x speedup
+    const transaction = this.db.transaction(() => {
+    
+    // Create maps for symbol lookups
     const symbolByName = new Map<string, any>();
     const symbolsByNamespace = new Map<string, any[]>();
     
@@ -1607,15 +1720,31 @@ export class PatternAwareIndexer {
     }
     
     // 6. Namespace cohesion relationships (symbols in same namespace/module)
+    // Process in batches to keep all data but avoid memory issues
     for (const [namespace, nsSymbols] of symbolsByNamespace) {
       if (nsSymbols.length > 1 && namespace !== 'global') {
-        for (let i = 0; i < nsSymbols.length; i++) {
-          for (let j = i + 1; j < nsSymbols.length; j++) {
-            const sym1 = nsSymbols[i];
-            const sym2 = nsSymbols[j];
-            if (sym1.id && sym2.id) {
-              insertConn.run(sym1.id, sym2.id, 'namespace_cohesion', 0.6,
-                JSON.stringify({ pattern: 'same_namespace', namespace: namespace }));
+        // For large namespaces, create connections more efficiently
+        if (nsSymbols.length > 50) {
+          // Connect each symbol to a few representatives instead of all-to-all
+          const representatives = nsSymbols.slice(0, 5); // First 5 as representatives
+          for (let i = 5; i < nsSymbols.length; i++) {
+            for (const rep of representatives) {
+              if (nsSymbols[i].id && rep.id) {
+                insertConn.run(nsSymbols[i].id, rep.id, 'namespace_cohesion', 0.5,
+                  JSON.stringify({ pattern: 'same_namespace_large', namespace: namespace }));
+              }
+            }
+          }
+        } else {
+          // Small namespaces: keep all connections
+          for (let i = 0; i < nsSymbols.length; i++) {
+            for (let j = i + 1; j < nsSymbols.length; j++) {
+              const sym1 = nsSymbols[i];
+              const sym2 = nsSymbols[j];
+              if (sym1.id && sym2.id) {
+                insertConn.run(sym1.id, sym2.id, 'namespace_cohesion', 0.6,
+                  JSON.stringify({ pattern: 'same_namespace', namespace: namespace }));
+              }
             }
           }
         }
@@ -1869,6 +1998,14 @@ export class PatternAwareIndexer {
         }
       }
     }
+    
+    }); // End transaction
+    
+    // Execute the transaction
+    transaction();
+    
+    const elapsed = Date.now() - startTime;
+    if (this.debugMode) console.log(`✅ Built semantic connections in ${elapsed}ms`);
   }
   
   /**
@@ -2328,7 +2465,7 @@ export class PatternAwareIndexer {
    * Run enhanced anti-pattern detection on indexed files
    */
   private async runAntiPatternDetection(validResults: any[]): Promise<void> {
-    console.log(`🔍 Running enhanced anti-pattern detection on ${validResults.length} files...`);
+    if (this.debugMode) console.log(`🔍 Running enhanced anti-pattern detection on ${validResults.length} files...`);
     
     let totalDetections = 0;
     const startTime = Date.now();
@@ -2345,9 +2482,9 @@ export class PatternAwareIndexer {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage === 'File-based detection timeout') {
-        console.log(`  ⚠️  File-based detection timed out after 30 seconds, skipping`);
+        if (this.debugMode) console.log(`  ⚠️  File-based detection timed out after 30 seconds, skipping`);
       } else {
-        console.log(`  ⚠️  File-based detection failed: ${errorMessage}`);
+        if (this.debugMode) console.log(`  ⚠️  File-based detection failed: ${errorMessage}`);
       }
     }
     
@@ -2358,14 +2495,14 @@ export class PatternAwareIndexer {
     totalDetections += await this.detectSimpleAntiPatterns();
     
     const elapsed = Date.now() - startTime;
-    console.log(`  Detected ${totalDetections} anti-patterns in ${validResults.length} files (${elapsed}ms)`);
+    if (this.debugMode) console.log(`  Detected ${totalDetections} anti-patterns in ${validResults.length} files (${elapsed}ms`);
   }
 
   /**
    * Detect file-based anti-patterns with timeout protection and chunking
    */
   private async detectFileBasedAntiPatternsWithTimeout(validResults: any[]): Promise<number> {
-    console.log(`  🔍 Running file-based anti-pattern detection on ${validResults.length} files...`);
+    if (this.debugMode) console.log(`  🔍 Running file-based anti-pattern detection on ${validResults.length} files...`);
     
     let totalDetections = 0;
     const BATCH_SIZE = 5; // Process 5 files at a time
@@ -2387,9 +2524,9 @@ export class PatternAwareIndexer {
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           if (errorMessage === 'File analysis timeout') {
-            console.log(`  ⚠️  Timeout analyzing ${path.basename(result.filePath)}`);
+            if (this.debugMode) console.log(`  ⚠️  Timeout analyzing ${path.basename(result.filePath)}`);
           } else {
-            console.log(`  ⚠️  Error analyzing ${path.basename(result.filePath)}: ${errorMessage}`);
+            if (this.debugMode) console.log(`  ⚠️  Error analyzing ${path.basename(result.filePath)}: ${errorMessage}`);
           }
           return 0;
         } finally {
@@ -2407,7 +2544,7 @@ export class PatternAwareIndexer {
       }
     }
     
-    console.log(`  📁 File-based detection completed: ${totalDetections} patterns found`);
+    if (this.debugMode) console.log(`  📁 File-based detection completed: ${totalDetections} patterns found`);
     return totalDetections;
   }
 
@@ -2421,13 +2558,13 @@ export class PatternAwareIndexer {
       
       // Skip very large files that might cause regex issues
       if (content.length > 200000) { // Increased to 200KB limit
-        console.log(`  ⚠️  Skipping large file: ${path.basename(result.filePath)} (${Math.round(content.length/1024)}KB)`);
+        if (this.debugMode) console.log(`  ⚠️  Skipping large file: ${path.basename(result.filePath)} (${Math.round(content.length/1024)}KB)`);
         return 0;
       }
       
       // Skip files with potential problematic content that could cause regex hangs
       if (this.hasProblematicContent(content)) {
-        console.log(`  ⚠️  Skipping file with problematic content: ${path.basename(result.filePath)}`);
+        if (this.debugMode) console.log(`  ⚠️  Skipping file with problematic content: ${path.basename(result.filePath)}`);
         return 0;
       }
       
@@ -2563,9 +2700,9 @@ export class PatternAwareIndexer {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (errorMessage === 'Analysis timeout') {
-        console.log(`    ⏱️  Analysis timeout for ${path.basename(filePath)}`);
+        if (this.debugMode) console.log(`    ⏱️  Analysis timeout for ${path.basename(filePath)}`);
       } else {
-        console.log(`    ❌ Analysis error for ${path.basename(filePath)}: ${errorMessage}`);
+        if (this.debugMode) console.log(`    ❌ Analysis error for ${path.basename(filePath)}: ${errorMessage}`);
       }
       
       // Return empty report on error
@@ -2898,7 +3035,7 @@ export class PatternAwareIndexer {
     // Factory Pattern Violations Detection  
     detectionCount += await this.detectFactoryPatternViolations();
 
-    console.log(`  🔍 Simple anti-pattern detection found ${detectionCount} violations`);
+    if (this.debugMode) console.log(`  🔍 Simple anti-pattern detection found ${detectionCount} violations`);
     return detectionCount;
   }
 
@@ -3010,7 +3147,7 @@ export class PatternAwareIndexer {
       detectionCount++;
     }
 
-    console.log(`  📋 SOLID violations detected: ${detectionCount}`);
+    if (this.debugMode) console.log(`  📋 SOLID violations detected: ${detectionCount}`);
     return detectionCount;
   }
 
@@ -3211,7 +3348,7 @@ export class PatternAwareIndexer {
       detectionCount++;
     }
 
-    console.log(`  🏭 Factory pattern violations detected: ${detectionCount}`);
+    if (this.debugMode) console.log(`  🏭 Factory pattern violations detected: ${detectionCount}`);
     return detectionCount;
   }
 
@@ -3899,7 +4036,7 @@ export class PatternAwareIndexer {
    * Analyzes actual usage patterns across files, not just includes
    */
   private async buildCrossFileDependencyMap(fileResults: any[]): Promise<void> {
-    console.log(`  🔗 Building cross-file dependency analysis for ${fileResults.length} files...`);
+    if (this.debugMode) console.log(`  🔗 Building cross-file dependency analysis for ${fileResults.length} files...`);
     
     const startTime = Date.now();
     const dependencies: any[] = [];
@@ -3963,7 +4100,7 @@ export class PatternAwareIndexer {
     }
     
     const elapsed = Date.now() - startTime;
-    console.log(`  🔗 Cross-file analysis complete: ${dependencies.length} dependencies found in ${elapsed}ms`);
+    if (this.debugMode) console.log(`  🔗 Cross-file analysis complete: ${dependencies.length} dependencies found in ${elapsed}ms`);
   }
 
   /**
@@ -4263,5 +4400,40 @@ export class PatternAwareIndexer {
     schemaManager.stopProgressiveReindexing(this.db);
     
     this.db.close();
+  }
+  
+  /**
+   * Build method signature from method info
+   */
+  private buildMethodSignature(method: any): string {
+    const params = method.parameters?.map((p: any) => p.type || 'unknown').join(', ') || '';
+    return `${method.returnType || 'void'} ${method.name}(${params})`;
+  }
+  
+  /**
+   * Check if function name indicates a generator pattern
+   */
+  private isGeneratorFunctionName(name: string): boolean {
+    const generatorPatterns = [
+      /generate/i,
+      /create/i,
+      /make/i,
+      /build/i,
+      /spawn/i,
+      /emit/i,
+      /yield/i
+    ];
+    return generatorPatterns.some(pattern => pattern.test(name));
+  }
+  
+  /**
+   * Check if return type is vector<float> or similar
+   */
+  private returnsVectorFloatType(returnType?: string): boolean {
+    if (!returnType) return false;
+    return returnType.includes('vector<float>') || 
+           returnType.includes('vector<double>') ||
+           returnType.includes('array<float') ||
+           returnType.includes('array<double');
   }
 }

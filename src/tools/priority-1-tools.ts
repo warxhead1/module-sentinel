@@ -193,12 +193,16 @@ export class Priority1Tools {
   private async buildDependencyGraph(): Promise<Map<string, Set<string>>> {
     const graph = new Map<string, Set<string>>();
 
-    // Query all module dependencies
+    // Query all module dependencies by joining with enhanced_symbols
     const dependencies = this.db.prepare(`
-      SELECT from_module, to_module 
-      FROM symbol_relationships 
-      WHERE relationship_type IN ('uses', 'calls', 'inherits', 'implements')
-      GROUP BY from_module, to_module
+      SELECT from_symbols.file_path as from_module, to_symbols.file_path as to_module 
+      FROM symbol_relationships sr
+      LEFT JOIN enhanced_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
+      LEFT JOIN enhanced_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
+      WHERE sr.relationship_type IN ('uses', 'calls', 'inherits', 'implements')
+        AND from_symbols.file_path IS NOT NULL
+        AND to_symbols.file_path IS NOT NULL
+      GROUP BY from_symbols.file_path, to_symbols.file_path
     `).all() as Array<{ from_module: string; to_module: string }>;
 
     for (const dep of dependencies) {
@@ -248,9 +252,11 @@ export class Priority1Tools {
       const to = path[i + 1];
 
       const relationships = this.db.prepare(`
-        SELECT DISTINCT to_symbol 
-        FROM symbol_relationships 
-        WHERE from_module = ? AND to_module = ? AND relationship_type = 'implements'
+        SELECT DISTINCT to_symbols.name as to_symbol 
+        FROM symbol_relationships sr
+        LEFT JOIN enhanced_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
+        LEFT JOIN enhanced_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
+        WHERE from_symbols.file_path = ? AND to_symbols.file_path = ? AND sr.relationship_type = 'implements'
       `).all(from, to) as Array<{ to_symbol: string }>;
 
       relationships.forEach(rel => interfaces.add(rel.to_symbol));

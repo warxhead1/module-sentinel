@@ -349,13 +349,19 @@ export class Priority2Tools {
     }
     
     if (checkType === 'all' || checkType === 'module') {
-      // Check module boundary violations
+      // Check module boundary violations by joining with enhanced_symbols to get module info
       const moduleViolations = this.db.prepare(`
-        SELECT COUNT(*) as cross_module_calls, from_module, to_module
-        FROM symbol_relationships
-        WHERE relationship_type IN ('uses', 'calls')
-          AND from_module != to_module
-        GROUP BY from_module, to_module
+        SELECT COUNT(*) as cross_module_calls, 
+               from_symbols.file_path as from_module, 
+               to_symbols.file_path as to_module
+        FROM symbol_relationships sr
+        LEFT JOIN enhanced_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
+        LEFT JOIN enhanced_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
+        WHERE sr.relationship_type IN ('uses', 'calls')
+          AND from_symbols.file_path != to_symbols.file_path
+          AND from_symbols.file_path IS NOT NULL
+          AND to_symbols.file_path IS NOT NULL
+        GROUP BY from_symbols.file_path, to_symbols.file_path
         HAVING cross_module_calls > 10
       `).all() as any[];
       

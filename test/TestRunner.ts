@@ -9,6 +9,8 @@ import { EnhancedIntelligenceTest } from './unit/EnhancedIntelligenceTest';
 import { ParserFallbackTest } from './unit/ParserFallbackTest';
 import { RelationshipExtractionTest } from './unit/RelationshipExtractionTest';
 import { CrossFileRelationshipTest } from './unit/CrossFileRelationshipTest';
+import { ToolsIntegrationTest } from './unit/ToolsIntegrationTest';
+import { SimpleToolTest } from './unit/SimpleToolTest';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -57,7 +59,8 @@ export class TestRunner extends EventEmitter {
         // new EnhancedIntelligenceTest(this.dbPath), // Disabled to focus on relationship testing  
         new ParserFallbackTest(),
         new RelationshipExtractionTest(this.dbPath),
-        new CrossFileRelationshipTest(this.dbPath)
+        new CrossFileRelationshipTest(this.dbPath),
+        new SimpleToolTest()
       ];
       
       console.log('\n🔧 Running test suites...\n');

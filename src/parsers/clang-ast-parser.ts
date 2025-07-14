@@ -1416,6 +1416,120 @@ using namespace PlanetGen::Generation;`;
     
     return null;
   }
+
+  /**
+   * Extract semantic tags for methods/functions based on name and signature
+   */
+  private extractMethodSemanticTags(node: any): string[] {
+    const tags: string[] = [];
+    const name = (node.name || '').toLowerCase();
+    const returnType = node.type?.qualType || '';
+    
+    // Action tags
+    if (name.includes('generate')) tags.push('generator');
+    if (name.includes('create')) tags.push('factory');
+    if (name.includes('compute')) tags.push('compute');
+    if (name.includes('render')) tags.push('render');
+    if (name.includes('update')) tags.push('updater');
+    if (name.includes('process')) tags.push('processor');
+    if (name.includes('initialize') || name.includes('init')) tags.push('initializer');
+    if (name.includes('cleanup') || name.includes('shutdown')) tags.push('destructor');
+    if (name.includes('allocate') || name.includes('alloc')) tags.push('memory-manager');
+    if (name.includes('deallocate') || name.includes('free')) tags.push('memory-manager');
+    
+    // GPU/Vulkan patterns
+    if (name.includes('vulkan') || name.includes('vk')) tags.push('vulkan');
+    if (name.includes('gpu') || name.includes('compute')) tags.push('gpu-compute');
+    if (name.includes('cpu')) tags.push('cpu-compute');
+    if (name.includes('buffer')) tags.push('buffer-management');
+    if (name.includes('texture')) tags.push('texture-management');
+    if (name.includes('shader')) tags.push('shader-management');
+    if (name.includes('pipeline')) tags.push('pipeline-management');
+    
+    // Async patterns
+    if (name.includes('async') || name.includes('await')) tags.push('async');
+    if (returnType.includes('future') || returnType.includes('promise')) tags.push('async');
+    
+    // Memory patterns
+    if (returnType.includes('vector') && returnType.includes('float')) tags.push('vector-math');
+    if (returnType.includes('shared_ptr') || returnType.includes('unique_ptr')) tags.push('smart-pointer');
+    
+    // File path patterns (if available)
+    const location = node.location;
+    if (location && location.file) {
+      const filePath = location.file.toLowerCase();
+      if (filePath.includes('noise')) tags.push('noise-generation');
+      if (filePath.includes('terrain')) tags.push('terrain-formation');
+      if (filePath.includes('vulkan')) tags.push('vulkan');
+      if (filePath.includes('render')) tags.push('rendering');
+      if (filePath.includes('compute')) tags.push('gpu-compute');
+    }
+    
+    return [...new Set(tags)];
+  }
+
+  /**
+   * Extract semantic tags for classes based on name and inheritance
+   */
+  private extractClassSemanticTags(node: any): string[] {
+    const tags: string[] = [];
+    const name = (node.name || '').toLowerCase();
+    const bases = node.bases || [];
+    
+    // Class type patterns
+    if (name.includes('generator')) tags.push('generator');
+    if (name.includes('factory')) tags.push('factory');
+    if (name.includes('manager')) tags.push('manager');
+    if (name.includes('processor')) tags.push('processor');
+    if (name.includes('orchestrator')) tags.push('orchestrator');
+    if (name.includes('controller')) tags.push('controller');
+    if (name.includes('service')) tags.push('service');
+    if (name.includes('handler')) tags.push('handler');
+    if (name.includes('builder')) tags.push('builder');
+    if (name.includes('provider')) tags.push('provider');
+    
+    // Technology-specific patterns
+    if (name.includes('vulkan') || name.includes('vk')) tags.push('vulkan');
+    if (name.includes('gpu')) tags.push('gpu-compute');
+    if (name.includes('cpu')) tags.push('cpu-compute');
+    if (name.includes('buffer')) tags.push('buffer-management');
+    if (name.includes('texture')) tags.push('texture-management');
+    if (name.includes('shader')) tags.push('shader-management');
+    if (name.includes('pipeline')) tags.push('pipeline-management');
+    
+    // Inheritance patterns
+    if (bases.length > 0) {
+      tags.push('derived');
+      
+      // Check for common base class patterns
+      bases.forEach((base: any) => {
+        const baseName = (base.type?.qualType || '').toLowerCase();
+        if (baseName.includes('singleton')) tags.push('singleton');
+        if (baseName.includes('observable')) tags.push('observer-pattern');
+        if (baseName.includes('factory')) tags.push('factory-pattern');
+        if (baseName.includes('strategy')) tags.push('strategy-pattern');
+      });
+    }
+    
+    // Template patterns
+    if (node.templateParams && node.templateParams.length > 0) {
+      tags.push('template');
+      if (node.templateParams.length > 2) tags.push('complex-template');
+    }
+    
+    // File path patterns (if available)
+    const location = node.location;
+    if (location && location.file) {
+      const filePath = location.file.toLowerCase();
+      if (filePath.includes('noise')) tags.push('noise-generation');
+      if (filePath.includes('terrain')) tags.push('terrain-formation');
+      if (filePath.includes('vulkan')) tags.push('vulkan');
+      if (filePath.includes('render')) tags.push('rendering');
+      if (filePath.includes('compute')) tags.push('gpu-compute');
+    }
+    
+    return [...new Set(tags)];
+  }
 }
 
 // Example usage:

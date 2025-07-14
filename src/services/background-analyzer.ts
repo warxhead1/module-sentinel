@@ -12,7 +12,8 @@ export class BackgroundAnalyzer {
 
   constructor(projectPath: string) {
     this.projectPath = projectPath;
-    this.parser = new HybridCppParser(); // Will be initialized with projectPath later
+    const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
+    this.parser = new HybridCppParser(debugMode); // Will be initialized with projectPath later
     this.knowledgeBase = new KnowledgeBase(projectPath); // Pass projectPath
   }
 

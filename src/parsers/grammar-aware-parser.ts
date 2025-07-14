@@ -196,8 +196,12 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
    */
   private enhanceWithDetailedTypes(result: EnhancedModuleInfo): void {
     console.log(`   🔬 Enhancing with detailed type analysis...`);
+    const startTime = Date.now();
+    let classTime = 0;
+    let methodTime = 0;
     
     // Enhance class members with detailed type information
+    const classStart = Date.now();
     result.classes.forEach(cls => {
       if (cls.members) {
         cls.enhancedMembers = cls.members.map(member => 
@@ -212,8 +216,10 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
         );
       }
     });
+    classTime = Date.now() - classStart;
     
     // Enhance method signatures with detailed type information
+    const methodStart = Date.now();
     result.methods.forEach(method => {
       const context = {
         className: method.className,
@@ -250,8 +256,13 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
         }));
       }
     });
+    methodTime = Date.now() - methodStart;
     
+    const totalTime = Date.now() - startTime;
     console.log(`     ✓ Enhanced ${result.classes.length} classes and ${result.methods.length} methods with type info`);
+    if (totalTime > 100) {
+      console.log(`     ⚠️ Type analysis took ${totalTime}ms (classes: ${classTime}ms, methods: ${methodTime}ms)`);
+    }
   }
   
   private extractMemberModifiers(member: any): string[] {

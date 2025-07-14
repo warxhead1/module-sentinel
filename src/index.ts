@@ -84,7 +84,8 @@ class ModuleSentinelMCPServer {
     this.priority1Tools = new Priority1Tools(this.db);
     this.priority2Tools = new Priority2Tools(this.db);
     this.unifiedSearch = new UnifiedSearch(this.db);
-    this.patternAwareIndexer = new PatternAwareIndexer(projectPath, this.dbPath);
+    const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
+    this.patternAwareIndexer = new PatternAwareIndexer(projectPath, this.dbPath, debugMode);
     this.analyticsService = new AnalyticsService(this.db);
     
     // Initialize ThoughtSignaturePreserver with the shared database

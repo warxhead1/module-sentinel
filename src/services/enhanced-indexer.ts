@@ -88,16 +88,7 @@ export class EnhancedIndexer extends EventEmitter {
         locations TEXT NOT NULL -- JSON array of file:line
       );
 
-      -- Symbol relationships for dependency tracking
-      CREATE TABLE IF NOT EXISTS symbol_relationships (
-        from_symbol TEXT NOT NULL,
-        from_module TEXT NOT NULL,
-        to_symbol TEXT NOT NULL,
-        to_module TEXT NOT NULL,
-        relationship_type TEXT NOT NULL,
-        confidence REAL NOT NULL,
-        PRIMARY KEY (from_symbol, from_module, to_symbol, to_module)
-      );
+      -- Symbol relationships are managed by UnifiedSchemaManager
 
       -- Usage examples
       CREATE TABLE IF NOT EXISTS usage_examples (

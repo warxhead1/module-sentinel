@@ -20,7 +20,8 @@ export class HybridModuleService {
   
   constructor(projectPath: string, enhancedDbPath: string, fallbackDbPath?: string) {
     this.projectPath = projectPath;
-    this.patternIndexer = new PatternAwareIndexer(projectPath, enhancedDbPath);
+    const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
+    this.patternIndexer = new PatternAwareIndexer(projectPath, enhancedDbPath, debugMode);
     this.enhancedDb = new Database(enhancedDbPath);
     
     // Initialize fallback indexer if needed

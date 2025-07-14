@@ -1299,11 +1299,13 @@ export class AnalyticsService {
       
       // If no symbols found, fall back to indexed_files
       if (!symbolStats.symbols) {
+        // Map parser names to column names
+        const columnPrefix = parserName === 'tree-sitter' ? 'treesitter' : parserName;
         const fileStats = this.db.prepare(`
           SELECT 
-            COUNT(CASE WHEN ${parserName}_attempted = 1 THEN 1 END) as files,
-            SUM(${parserName}_symbols) as symbols,
-            AVG(CASE WHEN ${parserName}_attempted = 1 THEN ${parserName}_success ELSE NULL END) as successRate
+            COUNT(CASE WHEN ${columnPrefix}_attempted = 1 THEN 1 END) as files,
+            SUM(${columnPrefix}_symbols) as symbols,
+            AVG(CASE WHEN ${columnPrefix}_attempted = 1 THEN ${columnPrefix}_success ELSE NULL END) as successRate
           FROM indexed_files
         `).get() as any;
         return fileStats;

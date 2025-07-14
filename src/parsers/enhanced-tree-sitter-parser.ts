@@ -103,15 +103,24 @@ export class EnhancedTreeSitterParser {
     };
   }
 
-  private walkTree(node: Parser.SyntaxNode, state: any): void {
+  private walkTree(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
+    // Prevent infinite recursion
+    if (depth > 100) {
+      console.warn(`⚠️ Tree walk depth exceeded 100 at node type: ${node.type}`);
+      return;
+    }
+    
+    // Track performance for slow operations
+    const startTime = depth < 3 ? Date.now() : 0;
+    
     switch (node.type) {
       case 'namespace_definition':
-        this.handleNamespace(node, state);
+        this.handleNamespace(node, state, depth);
         break;
         
       case 'class_specifier':
       case 'struct_specifier':
-        this.handleClass(node, state);
+        this.handleClass(node, state, depth);
         break;
         
       case 'function_definition':
@@ -158,7 +167,7 @@ export class EnhancedTreeSitterParser {
         
       // Enhanced: Export declarations for C++23 modules
       case 'export_declaration':
-        this.handleExportDeclaration(node, state);
+        this.handleExportDeclaration(node, state, depth);
         break;
         
       // Enhanced: Using declarations for better symbol tracking
@@ -171,12 +180,12 @@ export class EnhancedTreeSitterParser {
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (child) {
-        this.walkTree(child, state);
+        this.walkTree(child, state, depth + 1);
       }
     }
   }
 
-  private handleClass(node: Parser.SyntaxNode, state: any): void {
+  private handleClass(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
     const nameNode = node.childForFieldName('name');
     if (!nameNode) return;
     
@@ -209,7 +218,7 @@ export class EnhancedTreeSitterParser {
     // Extract members
     const bodyNode = node.childForFieldName('body');
     if (bodyNode) {
-      this.extractClassMembersEnhanced(bodyNode, classInfo, state);
+      this.extractClassMembersEnhanced(bodyNode, classInfo, state, depth);
     }
     
     state.classes.push(classInfo);
@@ -404,14 +413,14 @@ export class EnhancedTreeSitterParser {
     return lastAccessSpecifier as any;
   }
 
-  private handleNamespace(node: Parser.SyntaxNode, state: any): void {
+  private handleNamespace(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
     const nameNode = node.childForFieldName('name');
     let namespaceParts: string[] = [];
     
     if (nameNode) {
       // Handle qualified namespace identifiers like "PlanetGen::Rendering"
       const namespaceName = nameNode.text;
-      console.log(`🔍 Detected namespace node: "${namespaceName}" (type: ${nameNode.type})`);
+      // console.log(`🔍 Detected namespace node: "${namespaceName}" (type: ${nameNode.type})`);
       
       if (nameNode.type === 'qualified_identifier') {
         // For qualified identifiers, extract all parts
@@ -423,7 +432,7 @@ export class EnhancedTreeSitterParser {
         namespaceParts = [namespaceName];
       }
       
-      console.log(`   Namespace parts: [${namespaceParts.join(', ')}]`);
+      // console.log(`   Namespace parts: [${namespaceParts.join(', ')}]`);
       
       // Push each namespace part
       namespaceParts.forEach(part => {
@@ -437,7 +446,7 @@ export class EnhancedTreeSitterParser {
       for (let i = 0; i < bodyNode.childCount; i++) {
         const child = bodyNode.child(i);
         if (child) {
-          this.walkTree(child, state);
+          this.walkTree(child, state, depth + 1);
         }
       }
     }
@@ -735,7 +744,7 @@ export class EnhancedTreeSitterParser {
     const moduleNameNode = node.childForFieldName('name');
     if (moduleNameNode) {
       const moduleName = moduleNameNode.text;
-      console.log(`📦 Found module declaration: ${moduleName}`);
+      // console.log(`📦 Found module declaration: ${moduleName}`);
       
       // Add to exports if it's an export module
       const isExport = node.text.startsWith('export');
@@ -761,7 +770,7 @@ export class EnhancedTreeSitterParser {
     const moduleNameNode = node.childForFieldName('module_name');
     if (moduleNameNode) {
       const moduleName = moduleNameNode.text;
-      console.log(`📥 Found import declaration: ${moduleName}`);
+      // console.log(`📥 Found import declaration: ${moduleName}`);
       
       state.includes.push({
         module: moduleName,
@@ -795,9 +804,9 @@ export class EnhancedTreeSitterParser {
 
     // Detect common patterns
     if (macroBody.includes('class') || macroBody.includes('struct')) {
-      console.log(`🔍 Macro ${macroName} might define types`);
+      // console.log(`🔍 Macro ${macroName} might define types`);
     } else if (macroBody.includes('(') && macroBody.includes(')')) {
-      console.log(`🔍 Macro ${macroName} might define functions`);
+      // console.log(`🔍 Macro ${macroName} might define functions`);
     }
   }
 
@@ -819,28 +828,28 @@ export class EnhancedTreeSitterParser {
     }
     
     state.context.typeAliases.set(aliasName, originalType);
-    console.log(`Type alias: ${aliasName} -> ${originalType}`);
+    // console.log(`Type alias: ${aliasName} -> ${originalType}`);
   }
 
   /**
    * Handle export declarations: export { ... } or export class/function
    * Enhanced to understand export namespace patterns
    */
-  private handleExportDeclaration(node: Parser.SyntaxNode, state: any): void {
+  private handleExportDeclaration(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
     const content = state.content;
     const exportText = content.substring(node.startIndex, node.endIndex);
     
-    console.log(`📤 Processing export declaration: ${exportText.substring(0, 100)}...`);
+    // console.log(`📤 Processing export declaration: ${exportText.substring(0, 100)}...`);
 
     // Handle export namespace - mark current context as exported
     if (exportText.includes('namespace')) {
-      console.log(`   Contains namespace keyword`);
+      // console.log(`   Contains namespace keyword`);
       
       // Look for namespace_definition child
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (child && child.type === 'namespace_definition') {
-          console.log(`   Found namespace_definition child`);
+          // console.log(`   Found namespace_definition child`);
           
           // Mark that we're in an exported namespace context
           if (!state.context.exportedNamespaces) {
@@ -848,13 +857,13 @@ export class EnhancedTreeSitterParser {
           }
           
           // Handle the namespace directly
-          this.handleNamespace(child, state);
+          this.handleNamespace(child, state, depth);
           
           // Mark the namespace as exported AFTER processing it
           const currentNamespace = state.context.namespaces.join('::');
           if (currentNamespace) {
             state.context.exportedNamespaces.add(currentNamespace);
-            console.log(`📤 Marked export namespace: ${currentNamespace}`);
+            // console.log(`📤 Marked export namespace: ${currentNamespace}`);
           }
           return;
         }
@@ -1021,7 +1030,7 @@ export class EnhancedTreeSitterParser {
   private handleExportedDeclaration(node: Parser.SyntaxNode, state: any): void {
     // Handle variable declarations, function declarations, etc.
     const declarationType = node.type;
-    console.log(`Handling exported declaration type: ${declarationType}`);
+    // console.log(`Handling exported declaration type: ${declarationType}`);
     
     // This can be expanded to handle specific declaration types
     // For now, we'll extract basic information
@@ -1079,7 +1088,7 @@ export class EnhancedTreeSitterParser {
     }
     
     state.exports.push(exportInfo);
-    console.log(`Added export: ${symbolName} (${symbolType}) [namespace: ${exportInfo.namespace || 'global'}]`);
+    // console.log(`Added export: ${symbolName} (${symbolType}) [namespace: ${exportInfo.namespace || 'global'}]`);
   }
 
   /**
@@ -1126,7 +1135,7 @@ export class EnhancedTreeSitterParser {
     if (baseType.includes('<') && baseType.includes('>')) {
       const templateParts = this.parseTemplateInstantiation(baseType);
       if (templateParts) {
-        console.log(`🧬 Template instantiation: ${templateParts.base}<${templateParts.args.join(', ')}>`);
+        // console.log(`🧬 Template instantiation: ${templateParts.base}<${templateParts.args.join(', ')}>`);
       }
     }
 
@@ -1152,7 +1161,7 @@ export class EnhancedTreeSitterParser {
   /**
    * Enhanced class member extraction with better visibility tracking
    */
-  private extractClassMembersEnhanced(bodyNode: Parser.SyntaxNode, classInfo: ClassInfo, state: any): void {
+  private extractClassMembersEnhanced(bodyNode: Parser.SyntaxNode, classInfo: ClassInfo, state: any, depth: number = 0): void {
     let currentVisibility: 'public' | 'private' | 'protected' = 'private'; // Default for class
     
     if (classInfo.name) {
@@ -1187,7 +1196,7 @@ export class EnhancedTreeSitterParser {
           state.context.currentClass = classInfo.name;
           state.context.currentVisibility = currentVisibility;
           
-          this.walkTree(child, state);
+          this.walkTree(child, state, depth + 1);
           
           state.context.currentClass = oldCurrentClass;
           break;
@@ -1297,5 +1306,5 @@ export class EnhancedTreeSitterParser {
 const parser = new EnhancedTreeSitterParser();
 await parser.initialize();
 const moduleInfo = await parser.parseFile('/path/to/file.cpp');
-console.log(`Found ${moduleInfo.methods.length} methods and ${moduleInfo.classes.length} classes`);
+// console.log(`Found ${moduleInfo.methods.length} methods and ${moduleInfo.classes.length} classes`);
 */
