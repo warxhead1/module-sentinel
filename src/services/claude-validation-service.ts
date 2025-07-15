@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { GeminiTool } from '../tools/gemini-tool.js';
 import { CodeContext } from '../types/essential-features.js';
 import { EventEmitter } from 'events';
+import { ThoughtSignaturePreserver } from '../engines/thought-signature.js';
 
 export interface ClaudeCodeSuggestion {
   userPrompt: string;
@@ -43,11 +44,13 @@ export interface SemanticIssue {
 export class ClaudeValidationService extends EventEmitter {
   private db: Database.Database;
   private geminiTool: GeminiTool;
+  private thoughtPreserver: ThoughtSignaturePreserver;
 
   constructor(db: Database.Database, geminiApiKey: string) {
     super();
     this.db = db;
     this.geminiTool = new GeminiTool(geminiApiKey);
+    this.thoughtPreserver = new ThoughtSignaturePreserver(db);
     this.initializeTables();
   }
 
@@ -120,7 +123,10 @@ export class ClaudeValidationService extends EventEmitter {
     // 6. Store validation result
     await this.storeValidationResult(suggestion, result);
     
-    // 7. Emit validation event for hooks
+    // 7. Record feedback for learning
+    await this.recordValidationFeedback(suggestion, result);
+    
+    // 8. Emit validation event for hooks
     this.emit('validation_complete', { suggestion, result });
     
     return result;
@@ -774,6 +780,101 @@ EXPLANATION:
       averageConfidence: avgConfidence,
       topHallucinations
     };
+  }
+
+  /**
+   * Record validation feedback for learning and improvement
+   */
+  private async recordValidationFeedback(suggestion: ClaudeCodeSuggestion, result: ValidationResult): Promise<void> {
+    try {
+      // Record feedback based on validation result
+      const feedbackType = result.isValid ? 'success' : 
+                          result.hallucinations.length > 0 ? 'tool_failure' : 'missing_context';
+      
+      await this.thoughtPreserver.recordAgentFeedback({
+        sessionId: suggestion.sessionId,
+        agentName: 'ClaudeValidationService',
+        feedbackType,
+        toolName: 'claude_code_validation',
+        toolParams: {
+          userPrompt: suggestion.userPrompt,
+          filePath: suggestion.filePath
+        },
+        expectedOutcome: 'Valid code without hallucinations',
+        actualOutcome: result.isValid ? 'Valid code' : `Invalid: ${result.explanation}`,
+        errorMessage: result.hallucinations.length > 0 ? 
+          `Found ${result.hallucinations.length} hallucinations` : undefined,
+        confidence: result.confidence
+      });
+
+      // Record context gaps for hallucinations
+      for (const hallucination of result.hallucinations) {
+        await this.thoughtPreserver.recordContextGap({
+          sessionId: suggestion.sessionId,
+          missingContextType: this.mapHallucinationToContextType(hallucination.type),
+          description: `Hallucinated ${hallucination.type}: ${hallucination.item}`,
+          requestedByAgent: 'ClaudeValidationService',
+          contextQuery: hallucination.item,
+          resolutionStatus: hallucination.suggestedAlternative ? 'resolved' : 'pending',
+          resolvedContext: hallucination.suggestedAlternative ? {
+            alternative: hallucination.suggestedAlternative,
+            actualLocation: hallucination.actualLocation
+          } : undefined
+        });
+      }
+
+      // Record architectural decision about this validation
+      await this.thoughtPreserver.recordDecision({
+        type: 'dependency',
+        module: suggestion.filePath || 'unknown',
+        decision: `Validation ${result.recommendation} for Claude suggestion`,
+        reasoning: result.explanation,
+        timestamp: Date.now(),
+        impact: [
+          `Confidence: ${result.confidence}`,
+          `Hallucinations: ${result.hallucinations.length}`,
+          `Semantic Issues: ${result.semanticIssues.length}`
+        ]
+      });
+
+      // If there are patterns to learn from this validation
+      if (result.hallucinations.length > 0 && result.corrections.length > 0) {
+        await this.thoughtPreserver.recordLearningPattern({
+          patternType: 'error_recovery',
+          description: 'Claude hallucination correction pattern',
+          triggerConditions: {
+            hallucinations: result.hallucinations.map(h => ({ type: h.type, item: h.item }))
+          },
+          successfulApproach: {
+            corrections: result.corrections,
+            correctedCode: result.correctedCode
+          },
+          confidenceScore: result.confidence
+        });
+      }
+    } catch (error) {
+      console.error('Error recording validation feedback:', error);
+      // Don't throw - we don't want feedback recording to break validation
+    }
+  }
+
+  /**
+   * Map hallucination types to context gap types
+   */
+  private mapHallucinationToContextType(hallucinationType: string): 
+    'symbol_info' | 'file_relationship' | 'architectural_pattern' | 'dependency' | 'usage_example' {
+    switch (hallucinationType) {
+      case 'method':
+      case 'class':
+      case 'namespace':
+        return 'symbol_info';
+      case 'include':
+        return 'dependency';
+      case 'template':
+        return 'architectural_pattern';
+      default:
+        return 'usage_example';
+    }
   }
 }
 

@@ -24,23 +24,25 @@ import * as path from 'path';
 export class GrammarAwareParser extends EnhancedTreeSitterParser {
   private moduleInfo: ModuleAnalysis | null = null;
   private typeAnalyzer: EnhancedTypeAnalyzer;
+  private debug: boolean = false;
 
-  constructor() {
+  constructor(debug: boolean = false) {
     super();
     this.typeAnalyzer = new EnhancedTypeAnalyzer();
+    this.debug = debug;
   }
 
   /**
    * Parse file with grammar-aware C++20/23 module understanding
    */
   async parseFile(filePath: string): Promise<EnhancedModuleInfo> {
-    console.log(`🧬 Grammar-aware parsing: ${path.basename(filePath)}`);
+    if (this.debug) console.log(`🧬 Grammar-aware parsing: ${path.basename(filePath)}`);
     
     const content = await fs.readFile(filePath, 'utf-8');
     
     // First, analyze the module structure
     this.moduleInfo = this.analyzeModuleStructure(content);
-    console.log(`   Module analysis:`, this.moduleInfo);
+    if (this.debug) console.log(`   Module analysis:`, this.moduleInfo);
     
     // Use enhanced parsing with module context
     const result = await super.parseFile(filePath);
@@ -74,7 +76,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
       // Module preamble: "module;"
       if (line === 'module;') {
         analysis.hasModulePreamble = true;
-        console.log(`   ✓ Found module preamble at line ${i + 1}`);
+        if (this.debug) console.log(`   ✓ Found module preamble at line ${i + 1}`);
       }
       
       // Export module: "export module ModuleName;"
@@ -82,14 +84,14 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
       if (exportModuleMatch) {
         analysis.exportModuleName = exportModuleMatch[1];
         analysis.moduleType = 'primary_interface';
-        console.log(`   ✓ Found export module: ${analysis.exportModuleName}`);
+        if (this.debug) console.log(`   ✓ Found export module: ${analysis.exportModuleName}`);
       }
       
       // Import declarations: "import ModuleName;"
       const importMatch = line.match(/^import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;/);
       if (importMatch) {
         analysis.importedModules.push(importMatch[1]);
-        console.log(`   ✓ Found import: ${importMatch[1]}`);
+        if (this.debug) console.log(`   ✓ Found import: ${importMatch[1]}`);
       }
       
       // Export namespace: "export namespace A::B::C"
@@ -101,7 +103,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
           parts: namespaceName.split('::'),
           startLine: i + 1
         });
-        console.log(`   ✓ Found export namespace: ${namespaceName} (parts: [${namespaceName.split('::').join(', ')}])`);
+        if (this.debug) console.log(`   ✓ Found export namespace: ${namespaceName} (parts: [${namespaceName.split('::').join(', ')}])`);
       }
       
       // Export using: "export using Type = ::Type;"
@@ -112,7 +114,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
           type: exportUsingMatch[2],
           line: i + 1
         });
-        console.log(`   ✓ Found export using: ${exportUsingMatch[1]} = ${exportUsingMatch[2]}`);
+        if (this.debug) console.log(`   ✓ Found export using: ${exportUsingMatch[1]} = ${exportUsingMatch[2]}`);
       }
     }
 
@@ -144,13 +146,13 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
   private applyNamespaceContext(result: EnhancedModuleInfo, moduleInfo: ModuleAnalysis): void {
     // For each export namespace, find the content within it
     for (const exportNs of moduleInfo.exportNamespaces) {
-      console.log(`   🔍 Applying namespace context: ${exportNs.name}`);
+      if (this.debug) console.log(`   🔍 Applying namespace context: ${exportNs.name}`);
       
       // Update classes that should be in this namespace
       result.classes.forEach(cls => {
         if (!cls.namespace || cls.namespace === 'undefined') {
           cls.namespace = exportNs.name;
-          console.log(`     ✓ Updated ${cls.name} namespace to ${exportNs.name}`);
+          if (this.debug) console.log(`     ✓ Updated ${cls.name} namespace to ${exportNs.name}`);
         }
       });
       
@@ -160,7 +162,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
           method.namespace = exportNs.name;
           method.qualifiedName = `${exportNs.name}::${method.className ? method.className + '::' : ''}${method.name}`;
           method.isExported = true;
-          console.log(`     ✓ Updated ${method.name} namespace to ${exportNs.name}`);
+          if (this.debug) console.log(`     ✓ Updated ${method.name} namespace to ${exportNs.name}`);
         }
       });
     }
@@ -185,8 +187,22 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
     // Mark existing exports as module exports if in export namespace
     result.exports.forEach(exp => {
       if (moduleInfo.exportNamespaces.length > 0) {
-        exp.isModuleExport = true;
-        exp.moduleContext = moduleInfo.exportModuleName || undefined;
+        // Handle both string exports and DetailedExport objects
+        if (typeof exp === 'string') {
+          // Convert string export to DetailedExport object
+          const index = result.exports.indexOf(exp);
+          result.exports[index] = {
+            symbol: exp,
+            type: 'unknown',
+            isModuleExport: true,
+            moduleContext: moduleInfo.exportModuleName || undefined,
+            location: { line: 0, column: 0 }
+          } as any;
+        } else {
+          // Already a DetailedExport object
+          exp.isModuleExport = true;
+          exp.moduleContext = moduleInfo.exportModuleName || undefined;
+        }
       }
     });
   }
@@ -195,7 +211,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
    * Enhance result with detailed type analysis
    */
   private enhanceWithDetailedTypes(result: EnhancedModuleInfo): void {
-    console.log(`   🔬 Enhancing with detailed type analysis...`);
+    if (this.debug) console.log(`   🔬 Enhancing with detailed type analysis...`);
     const startTime = Date.now();
     let classTime = 0;
     let methodTime = 0;
@@ -259,9 +275,9 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
     methodTime = Date.now() - methodStart;
     
     const totalTime = Date.now() - startTime;
-    console.log(`     ✓ Enhanced ${result.classes.length} classes and ${result.methods.length} methods with type info`);
+    if (this.debug) console.log(`     ✓ Enhanced ${result.classes.length} classes and ${result.methods.length} methods with type info`);
     if (totalTime > 100) {
-      console.log(`     ⚠️ Type analysis took ${totalTime}ms (classes: ${classTime}ms, methods: ${methodTime}ms)`);
+      if (this.debug) console.log(`     ⚠️ Type analysis took ${totalTime}ms (classes: ${classTime}ms, methods: ${methodTime}ms)`);
     }
   }
   
@@ -324,7 +340,7 @@ export class GrammarAwareParser extends EnhancedTreeSitterParser {
       }
     }
     
-    console.log(`   🔢 Parsed ${isEnumClass ? 'enum class' : 'enum'}: ${name} with values [${values.join(', ')}]`);
+    if (this.debug) console.log(`   🔢 Parsed ${isEnumClass ? 'enum class' : 'enum'}: ${name} with values [${values.join(', ')}]`);
     
     return {
       name,

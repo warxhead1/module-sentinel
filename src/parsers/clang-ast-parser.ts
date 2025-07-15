@@ -7,6 +7,8 @@ import {
   EnhancedModuleInfo,
   ParameterInfo 
 } from '../types/essential-features.js';
+import Database from 'better-sqlite3';
+import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
 
 /**
  * C++ AST Parser using Clang's AST dump functionality
@@ -19,15 +21,47 @@ export class ClangAstParser {
   private includePathsCache: string[] = [];
   private modulePathsCache: string[] = [];
   private compilationDatabase?: any;
+  private db?: Database.Database;
+  private projectPath?: string;
 
-  constructor(clangPath: string = 'clang++-19') {
+  constructor(clangPath: string = 'clang++-19', projectPath?: string, dbPath?: string) {
     // Try to use clang++-19 by default since it has better C++23 module support
     this.clangPath = clangPath;
+    this.projectPath = projectPath;
+    
+    // Initialize database if provided
+    if (dbPath) {
+      this.db = new Database(dbPath);
+      const schemaManager = UnifiedSchemaManager.getInstance();
+      schemaManager.initializeDatabase(this.db);
+    }
+    
+    // Initialize with project path if provided
+    if (projectPath) {
+      this.initializeAsync(projectPath);
+    }
+  }
+
+  async initialize(projectPath: string): Promise<void> {
+    await this.initializeAsync(projectPath);
+  }
+
+  private async initializeAsync(projectPath: string): Promise<void> {
+    // Detect include paths (this updates includePathsCache internally)
+    await this.detectIncludePaths(projectPath);
+    
+    // Also detect module paths and compilation database
+    await this.detectModulePaths(projectPath);
+    await this.loadCompilationDatabase(projectPath);
   }
 
   async parseFile(filePath: string): Promise<EnhancedModuleInfo> {
-    // Step 1: Get AST output from clang
-    const astOutput = await this.getClangAst(filePath);
+    // Step 1: Preprocess file if it contains problematic imports/includes
+    const { sanitizedPath, originalImports, originalIncludes } = await this.preprocessFile(filePath);
+    
+    // Step 2: Get AST output from clang
+    // Use fallback method for preprocessed files to avoid compilation DB mismatches
+    const astOutput = await this.getClangAst(sanitizedPath);
     
     // Step 2: Extract information
     const methods: MethodSignature[] = [];
@@ -36,20 +70,32 @@ export class ClangAstParser {
     
     // Check if output is JSON or plain text
     if (astOutput.trim().startsWith('{')) {
-      // JSON mode - full AST
+      // JSON mode - parse with intelligent filtering
       const ast = JSON.parse(astOutput);
       
-      this.traverseAst(ast, {
-        onClass: (node) => classes.push(this.parseClassNode(node)),
-        onMethod: (node, className) => methods.push(this.parseMethodNode(node, className)),
-        onFunction: (node) => functions.push(this.parseFunctionNode(node))
+      this.traverseAstWithFiltering(ast, sanitizedPath, {
+        onClass: (node) => {
+          const classInfo = this.parseClassNode(node);
+          classes.push(classInfo);
+          if (this.db) this.storeClassInDatabase(node, classInfo, filePath);
+        },
+        onMethod: (node, className) => {
+          const methodInfo = this.parseMethodNode(node, className);
+          methods.push(methodInfo);
+          if (this.db) this.storeMethodInDatabase(node, methodInfo, filePath, className);
+        },
+        onFunction: (node) => {
+          const functionInfo = this.parseFunctionNode(node);
+          functions.push(functionInfo);
+          if (this.db) this.storeFunctionInDatabase(node, functionInfo, filePath);
+        }
       });
     } else {
       // Text mode - parse printed AST
       this.parseAstPrint(astOutput, classes, methods, functions);
     }
     
-    return {
+    const result = {
       path: filePath,
       relativePath: path.relative(process.cwd(), filePath),
       methods: [...methods, ...functions],
@@ -57,9 +103,510 @@ export class ClangAstParser {
       interfaces: [], // Would need to identify pure virtual classes
       relationships: [], // Would need to track usage
       patterns: [], // Would need pattern detection
-      imports: await this.extractIncludes(filePath),
+      imports: [...originalImports, ...originalIncludes, ...await this.extractIncludes(sanitizedPath)],
       exports: this.identifyExports(classes, methods, functions)
     };
+    
+    // Cleanup temporary sanitized file
+    if (sanitizedPath !== filePath) {
+      try {
+        await fs.unlink(sanitizedPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+    
+    return result;
+  }
+
+  /**
+   * Preprocess file to strip problematic imports/includes for Clang parsing
+   * while preserving the import information for our semantic analysis
+   */
+  private async preprocessFile(filePath: string): Promise<{
+    sanitizedPath: string;
+    originalImports: string[];
+    originalIncludes: string[];
+  }> {
+    const content = await fs.readFile(filePath, 'utf-8');
+    const originalImports: string[] = [];
+    const originalIncludes: string[] = [];
+    
+    let sanitizedContent = content;
+    
+    // Simple regex to find and remove all includes (lines starting with # and ending with >)
+    const includeRegex = /^#include\s+[<"][^>"]+[>"].*$/gm;
+    let match;
+    while ((match = includeRegex.exec(content)) !== null) {
+      const includeLine = match[0];
+      const includeMatch = includeLine.match(/#include\s+[<"]([^>"]+)[>"]/);
+      if (includeMatch) {
+        originalIncludes.push(includeMatch[1]);
+      }
+      // Replace with commented version
+      sanitizedContent = sanitizedContent.replace(includeLine, `// CLANG_SANITIZED: ${includeLine}`);
+    }
+    
+    // Simple regex to find and remove all imports (lines starting with import)
+    const importRegex = /^import\s+.*$/gm;
+    const importMatches = content.match(importRegex) || [];
+    for (const importLine of importMatches) {
+      const moduleMatch = importLine.match(/import\s+([\w.:]+)/);
+      if (moduleMatch) {
+        originalImports.push(moduleMatch[1]);
+      }
+      // Replace with commented version
+      sanitizedContent = sanitizedContent.replace(importLine, `// CLANG_SANITIZED: ${importLine}`);
+    }
+    
+    // Remove problematic module declarations that require module context
+    sanitizedContent = sanitizedContent.replace(/^module\s*;.*$/gm, '// CLANG_SANITIZED: $&');
+    sanitizedContent = sanitizedContent.replace(/^export\s+module\s+[^;]+;.*$/gm, '// CLANG_SANITIZED: $&');
+    // Also remove standalone module declarations like "module ModuleName;"
+    sanitizedContent = sanitizedContent.replace(/^module\s+[^;]+;.*$/gm, '// CLANG_SANITIZED: $&');
+    
+    // Remove export keywords from namespace/class declarations to make them regular C++
+    sanitizedContent = sanitizedContent.replace(/^(\s*)export\s+(namespace|class|struct|enum)\s+/gm, '$1$2 ');
+    
+    // Create temporary sanitized file
+    const tempPath = `/tmp/clang_sanitized_${Date.now()}_${path.basename(filePath)}`;
+    await fs.writeFile(tempPath, sanitizedContent);
+    
+    return {
+      sanitizedPath: tempPath,
+      originalImports,
+      originalIncludes
+    };
+  }
+
+  /**
+   * Traverse AST with intelligent filtering to remove noise while preserving project symbols
+   */
+  private traverseAstWithFiltering(node: any, originalFilePath: string, callbacks: {
+    onClass: (node: any) => void;
+    onMethod: (node: any, className?: string) => void;
+    onFunction: (node: any) => void;
+  }): void {
+    if (!node || typeof node !== 'object') return;
+
+    // Skip nodes that are clearly system/standard library noise
+    if (this.isSystemLibraryNode(node)) {
+      return;
+    }
+
+    // Skip implicit compiler-generated symbols unless they're from our project
+    if (node.isImplicit && !this.isProjectSymbol(node, originalFilePath)) {
+      return;
+    }
+
+    // Process nodes we care about
+    if (node.kind === 'CXXRecordDecl' && this.isProjectSymbol(node, originalFilePath)) {
+      callbacks.onClass(node);
+      
+      // Process methods within this class
+      if (node.inner) {
+        for (const child of node.inner) {
+          if (child.kind === 'CXXMethodDecl' || child.kind === 'CXXConstructorDecl' || child.kind === 'CXXDestructorDecl') {
+            if (this.isProjectSymbol(child, originalFilePath)) {
+              callbacks.onMethod(child, node.name);
+            }
+          }
+        }
+      }
+    } else if (node.kind === 'FunctionDecl' && this.isProjectSymbol(node, originalFilePath)) {
+      callbacks.onFunction(node);
+    }
+
+    // Recursively process children, but only if this isn't a noise node
+    if (node.inner && Array.isArray(node.inner)) {
+      for (const child of node.inner) {
+        this.traverseAstWithFiltering(child, originalFilePath, callbacks);
+      }
+    }
+  }
+
+  /**
+   * Check if a node is from system/standard libraries (noise)
+   */
+  private isSystemLibraryNode(node: any): boolean {
+    if (!node.loc || !node.loc.file) return false;
+    
+    const file = node.loc.file;
+    const noisePaths = [
+      '/usr/include/',
+      '/usr/lib/gcc/',
+      '/usr/lib/llvm-',
+      '/opt/vulkan-sdk/',
+      'bits/c++config.h',
+      'bits/memoryfwd.h',
+      'type_traits',
+      '__stddef_',
+      '__builtin_'
+    ];
+    
+    return noisePaths.some(noisePath => file.includes(noisePath));
+  }
+
+  /**
+   * Check if a symbol is from our project (signal)
+   */
+  private isProjectSymbol(node: any, originalFilePath: string): boolean {
+    // If no location info, assume it's project-related if it has a meaningful name
+    if (!node.loc || !node.loc.file) {
+      return node.name && !this.isBuiltinName(node.name);
+    }
+    
+    const file = node.loc.file;
+    const projectPaths = [
+      '/home/warxh/planet_procgen/',
+      originalFilePath.replace(/\/tmp\/.*/, ''), // Handle our temp files
+    ];
+    
+    // Check if it's from our project paths
+    const isFromProject = projectPaths.some(projectPath => file.includes(projectPath));
+    
+    // Additional checks for namespace and naming patterns
+    const isProjectNamespace = node.name && (
+      node.name.includes('Vulkan') ||
+      node.name.includes('PlanetGen') ||
+      node.name.includes('Terrain') ||
+      node.name.includes('Coherence')
+    );
+    
+    return isFromProject || isProjectNamespace;
+  }
+
+  /**
+   * Check if a name is a builtin/system name
+   */
+  private isBuiltinName(name: string): boolean {
+    const builtinPrefixes = ['__', 'std::', '_Z', 'operator'];
+    const builtinNames = ['size_t', 'ptrdiff_t', 'nullptr_t'];
+    
+    return builtinPrefixes.some(prefix => name.startsWith(prefix)) ||
+           builtinNames.includes(name);
+  }
+
+  /**
+   * Store class information in unified database with full semantic context
+   */
+  private storeClassInDatabase(astNode: any, classInfo: ClassInfo, originalFilePath: string): void {
+    if (!this.db) return;
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO enhanced_symbols (
+        name, qualified_name, kind, file_path, line, column,
+        signature, namespace, mangled_name, usr, is_definition,
+        is_template, template_params, is_vulkan_type, is_planetgen_type,
+        is_exported, module_name, parser_used, parser_confidence,
+        semantic_tags, completeness_score
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Extract semantic information from AST node
+    const line = astNode.loc?.line || 0;
+    const column = astNode.loc?.col || 0;
+    const mangledName = astNode.mangledName || null;
+    const usr = astNode.usr || null;
+    const isDefinition = !astNode.isImplicit;
+    const isTemplate = this.hasTemplateParams(astNode);
+    const templateParams = this.extractTemplateParams(astNode);
+    const namespace = this.extractNamespace(astNode);
+    const qualifiedName = namespace ? `${namespace}::${classInfo.name}` : classInfo.name;
+    
+    // Semantic analysis
+    const isVulkanType = classInfo.name.includes('Vulkan');
+    const isPlanetGenType = classInfo.name.includes('PlanetGen') || namespace?.includes('PlanetGen');
+    const isExported = this.isExportedSymbol(astNode, originalFilePath);
+    const moduleName = this.extractModuleName(originalFilePath);
+    
+    // Build semantic tags
+    const semanticTags = this.buildSemanticTags(astNode, classInfo);
+    const completenessScore = this.calculateCompletenessScore(astNode, classInfo);
+
+    stmt.run(
+      classInfo.name,
+      qualifiedName,
+      'class',
+      originalFilePath,
+      line,
+      column,
+      '', // ClassInfo doesn't have signature field
+      namespace,
+      mangledName,
+      usr,
+      isDefinition ? 1 : 0,
+      isTemplate ? 1 : 0,
+      JSON.stringify(templateParams),
+      isVulkanType ? 1 : 0,
+      isPlanetGenType ? 1 : 0,
+      isExported ? 1 : 0,
+      moduleName,
+      'clang',
+      0.9, // High confidence for Clang
+      JSON.stringify(semanticTags),
+      completenessScore
+    );
+  }
+
+  /**
+   * Store method information with cross-reference support
+   */
+  private storeMethodInDatabase(astNode: any, methodInfo: MethodSignature, originalFilePath: string, className?: string): void {
+    if (!this.db) return;
+
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO enhanced_symbols (
+        name, qualified_name, kind, file_path, line, column,
+        signature, return_type, parent_class, namespace, mangled_name, usr,
+        is_definition, is_constructor, is_destructor, is_operator, is_override,
+        is_noexcept, is_template, template_params, is_vulkan_type, is_planetgen_type,
+        parser_used, parser_confidence, semantic_tags, completeness_score
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Extract detailed method information
+    const line = astNode.loc?.line || 0;
+    const column = astNode.loc?.col || 0;
+    const mangledName = astNode.mangledName || null;
+    const usr = astNode.usr || null;
+    const isDefinition = !astNode.isImplicit;
+    const namespace = this.extractNamespace(astNode);
+    const qualifiedName = className ? `${className}::${methodInfo.name}` : methodInfo.name;
+    
+    // Method-specific flags
+    const isConstructor = astNode.kind === 'CXXConstructorDecl';
+    const isDestructor = astNode.kind === 'CXXDestructorDecl';
+    const isOperator = methodInfo.name.startsWith('operator');
+    const isOverride = astNode.isOverride || false;
+    const isNoexcept = astNode.isNoexcept || false;
+    const isTemplate = this.hasTemplateParams(astNode);
+    const templateParams = this.extractTemplateParams(astNode);
+    
+    // Semantic analysis
+    const isVulkanType = methodInfo.name.includes('Vulkan') || className?.includes('Vulkan');
+    const isPlanetGenType = namespace?.includes('PlanetGen') || className?.includes('PlanetGen');
+    
+    // Build semantic tags for methods
+    const semanticTags = this.buildMethodSemanticTags(astNode, methodInfo, className);
+    const completenessScore = this.calculateMethodCompletenessScore(astNode, methodInfo);
+
+    stmt.run(
+      methodInfo.name,
+      qualifiedName,
+      'method',
+      originalFilePath,
+      line,
+      column,
+      this.buildMethodSignature(methodInfo),
+      methodInfo.returnType || '',
+      className || null,
+      namespace,
+      mangledName,
+      usr,
+      isDefinition ? 1 : 0,
+      isConstructor ? 1 : 0,
+      isDestructor ? 1 : 0,
+      isOperator ? 1 : 0,
+      isOverride ? 1 : 0,
+      isNoexcept ? 1 : 0,
+      isTemplate ? 1 : 0,
+      JSON.stringify(templateParams),
+      isVulkanType ? 1 : 0,
+      isPlanetGenType ? 1 : 0,
+      'clang',
+      0.9,
+      JSON.stringify(semanticTags),
+      completenessScore
+    );
+
+    // Store parameter relationships
+    this.storeParameterRelationships(astNode, methodInfo, originalFilePath);
+  }
+
+  /**
+   * Store function information
+   */
+  private storeFunctionInDatabase(astNode: any, functionInfo: MethodSignature, originalFilePath: string): void {
+    // Similar to storeMethodInDatabase but for standalone functions
+    this.storeMethodInDatabase(astNode, functionInfo, originalFilePath);
+  }
+
+  /**
+   * Store parameter type relationships for cross-parser resolution
+   */
+  private storeParameterRelationships(astNode: any, methodInfo: MethodSignature, originalFilePath: string): void {
+    if (!this.db || !methodInfo.parameters) return;
+
+    const relationshipStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO symbol_relationships (
+        from_symbol_usr, to_symbol_usr, relationship_type, 
+        confidence, detected_by, file_path, evidence
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const methodUsr = astNode.usr;
+    if (!methodUsr) return;
+
+    // Create relationships for each parameter type
+    methodInfo.parameters.forEach((param, index) => {
+      if (param.type) {
+        // Extract base type name (remove qualifiers, pointers, references)
+        const baseType = this.extractBaseTypeName(param.type);
+        
+        // Create relationship indicating this method uses this type
+        const evidence = {
+          parameter_index: index,
+          parameter_name: param.name,
+          full_type: param.type,
+          base_type: baseType,
+          is_unresolved: this.isUnresolvedType(param.type) // Key for cross-parser resolution!
+        };
+
+        relationshipStmt.run(
+          methodUsr,
+          `type:${baseType}`, // Placeholder USR for type resolution
+          'uses_type',
+          0.8,
+          'clang',
+          originalFilePath,
+          JSON.stringify(evidence)
+        );
+      }
+    });
+  }
+
+  /**
+   * Build semantic tags from AST analysis
+   */
+  private buildSemanticTags(astNode: any, classInfo: ClassInfo): string[] {
+    const tags: string[] = [];
+    
+    // Architectural patterns
+    if (classInfo.name.includes('Processor')) tags.push('processor_pattern');
+    if (classInfo.name.includes('Manager')) tags.push('manager_pattern');
+    if (classInfo.name.includes('Factory')) tags.push('factory_pattern');
+    if (classInfo.name.includes('Builder')) tags.push('builder_pattern');
+    
+    // Technology domains
+    if (classInfo.name.includes('Vulkan')) tags.push('vulkan_api', 'gpu_compute');
+    if (classInfo.name.includes('Terrain')) tags.push('terrain_generation', 'procedural_content');
+    if (classInfo.name.includes('Coherence')) tags.push('coherence_processing', 'pipeline_stage');
+    
+    // Performance characteristics
+    if (classInfo.name.includes('GPU') || classInfo.name.includes('Compute')) {
+      tags.push('gpu_execution', 'high_performance');
+    }
+    
+    return tags;
+  }
+
+  private buildMethodSemanticTags(astNode: any, methodInfo: MethodSignature, className?: string): string[] {
+    const tags: string[] = [];
+    
+    // Method patterns
+    if (methodInfo.name.startsWith('Execute')) tags.push('executor_method', 'pipeline_stage');
+    if (methodInfo.name.startsWith('Create')) tags.push('factory_method', 'object_creation');
+    if (methodInfo.name.startsWith('Process')) tags.push('processor_method', 'data_transformation');
+    if (methodInfo.name.startsWith('Validate')) tags.push('validation_method', 'error_checking');
+    
+    // Performance implications
+    if (methodInfo.name.includes('GPU') || className?.includes('Vulkan')) {
+      tags.push('gpu_method', 'compute_intensive');
+    }
+    
+    // Pipeline analysis
+    if (methodInfo.name.includes('Pipeline') || methodInfo.name.includes('Orchestrat')) {
+      tags.push('pipeline_orchestration', 'workflow_control');
+    }
+    
+    return tags;
+  }
+
+  /**
+   * Check if a type is unresolved (critical for cross-parser linking!)
+   */
+  private isUnresolvedType(typeStr: string): boolean {
+    // These are the types that Clang couldn't resolve but other parsers might know about
+    const unresolvedPatterns = [
+      'CoherenceParameters',
+      'VulkanComputeBase', 
+      'PerformanceMetrics',
+      'BufferManagement',
+      'DescriptorManager'
+    ];
+    
+    return unresolvedPatterns.some(pattern => typeStr.includes(pattern));
+  }
+
+  private extractBaseTypeName(typeStr: string): string {
+    // Remove const, &, *, etc. to get base type name
+    return typeStr
+      .replace(/^const\s+/, '')
+      .replace(/\s*[&*]+$/, '')
+      .replace(/\s*\[\]$/, '')
+      .trim();
+  }
+
+  private hasTemplateParams(astNode: any): boolean {
+    return !!(astNode.templateParams || astNode.inner?.some((child: any) => 
+      child.kind === 'TemplateTypeParmDecl' || child.kind === 'NonTypeTemplateParmDecl'
+    ));
+  }
+
+  private extractTemplateParams(astNode: any): any[] {
+    // Extract template parameter information
+    return astNode.templateParams || [];
+  }
+
+  private extractNamespace(astNode: any): string | null {
+    // Extract namespace from qualified name or parent context
+    if (astNode.qualType && astNode.qualType.includes('::')) {
+      const parts = astNode.qualType.split('::');
+      return parts.slice(0, -1).join('::');
+    }
+    return null;
+  }
+
+  private isExportedSymbol(astNode: any, filePath: string): boolean {
+    // Check if symbol is exported from a module
+    return filePath.endsWith('.ixx') && !astNode.isImplicit;
+  }
+
+  private extractModuleName(filePath: string): string | null {
+    if (filePath.endsWith('.ixx')) {
+      const basename = path.basename(filePath, '.ixx');
+      return basename;
+    }
+    return null;
+  }
+
+  private calculateCompletenessScore(astNode: any, info: any): number {
+    let score = 0.5; // Base score for Clang parsing
+    
+    if (astNode.usr) score += 0.2; // Has USR for cross-referencing
+    if (astNode.mangledName) score += 0.1; // Has mangled name
+    if (!astNode.isImplicit) score += 0.2; // Is explicit definition
+    
+    return Math.min(score, 1.0);
+  }
+
+  private calculateMethodCompletenessScore(astNode: any, methodInfo: MethodSignature): number {
+    let score = 0.5;
+    
+    if (methodInfo.parameters?.length) score += 0.2;
+    if (methodInfo.returnType) score += 0.1;
+    if (astNode.usr) score += 0.1;
+    
+    return Math.min(score, 1.0);
+  }
+
+  private buildMethodSignature(methodInfo: MethodSignature): string {
+    const params = methodInfo.parameters?.map(p => 
+      `${p.type || 'unknown'} ${p.name || ''}`
+    ).join(', ') || '';
+    
+    return `${methodInfo.returnType || 'void'} ${methodInfo.name}(${params})`;
   }
 
   private async getClangAst(filePath: string): Promise<string> {
@@ -73,10 +620,17 @@ export class ClangAstParser {
                              content.includes('import GLM') ||
                              content.includes('VulkanResourceManager') ||
                              content.includes('module VulkanTerrainCoherenceProcessor') ||
-                             (content.includes('template<') && content.length > 5000) ||
-                             content.length > 10000; // Any file > 10KB likely has complex templates
+                             (content.includes('template<') && content.length > 50000) ||
+                             content.length > 200000; // Any file > 20KB likely has complex templates
     
     const useLightweightMode = hasHeavyTemplates;
+    
+    // For preprocessed files (temp files), skip compilation database and use fallback
+    // Force JSON mode for preprocessed files since we've resolved problematic dependencies
+    if (filePath.includes('/tmp/clang_sanitized_')) {
+      console.log(`Using fallback parsing for preprocessed file: ${filePath}`);
+      return this.getClangAstFallback(filePath, false); // Force JSON mode for better parsing
+    }
     
     // Try to use compilation database command first for proper module resolution
     const compileEntry = this.getCompileEntry(filePath);
@@ -106,11 +660,26 @@ export class ClangAstParser {
   }
 
   private getCompileEntry(filePath: string): any {
-    if (!this.compilationDatabase) return null;
+    if (!this.compilationDatabase) {
+      console.log(`No compilation database loaded`);
+      return null;
+    }
     
-    return this.compilationDatabase.find((cmd: any) => 
+    console.log(`Looking for ${filePath} in ${this.compilationDatabase.length} entries`);
+    const entry = this.compilationDatabase.find((cmd: any) => 
       cmd.file === filePath || path.resolve(cmd.file) === path.resolve(filePath)
     );
+    
+    if (!entry) {
+      console.log(`File not found in compilation database. First few entries:`);
+      this.compilationDatabase.slice(0, 3).forEach((cmd: any, i: number) => {
+        console.log(`  ${i}: ${cmd.file}`);
+      });
+    } else {
+      console.log(`Found compilation database entry for ${filePath}`);
+    }
+    
+    return entry;
   }
 
   private async getClangAstFromCompileCommand(filePath: string, compileEntry: any, useLightweightMode: boolean): Promise<string> {
@@ -118,7 +687,7 @@ export class ClangAstParser {
     const originalCommand = compileEntry.command;
     const commandParts = originalCommand.split(/\s+/);
     const clangExecutable = commandParts[0];
-    const newArgs: string[] = [];
+    let newArgs: string[] = [];
     let skipNext = false;
 
     for (let i = 1; i < commandParts.length; i++) {
@@ -137,7 +706,17 @@ export class ClangAstParser {
       newArgs.push(arg);
     }
 
-    newArgs.unshift('-fsyntax-only', '-Xclang', '-ast-dump=json', '-fno-diagnostics-color');
+    // For .ixx files, force treat as C++ source to bypass module dependency issues
+    if (filePath.endsWith('.ixx') || filePath.endsWith('.cppm')) {
+      // Remove modmap arguments that cause module dependency issues
+      newArgs = newArgs.filter(arg => !arg.startsWith('@CMakeFiles') && !arg.includes('.modmap'));
+      newArgs.unshift('-x', 'c++', '-fsyntax-only', '-Xclang', '-ast-dump=json', '-fno-diagnostics-color');
+    } else {
+      newArgs.unshift('-fsyntax-only', '-Xclang', '-ast-dump=json', '-fno-diagnostics-color');
+    }
+    
+    // Add filtering flags to reduce AST noise
+    newArgs.push('-fno-detailed-preprocessing-record', '-fno-ms-extensions');
     
     console.log(`Clang AST command: cd ${workingDir} && ${clangExecutable} ${newArgs.join(' ')}`);
 
@@ -284,7 +863,9 @@ export class ClangAstParser {
       const content = require('fs').readFileSync(filePath, 'utf-8');
       if (filePath.endsWith('.ixx') || filePath.endsWith('.cppm') || content.includes('module ')) {
         if (!useLightweightMode) {
-          args.splice(2, 0, '-x', 'c++-module');
+          // For preprocessed files (which have module syntax removed), use regular C++
+          const isPreprocessed = filePath.includes('/tmp/clang_sanitized_');
+          args.splice(2, 0, '-x', isPreprocessed ? 'c++' : 'c++-module');
         }
         if (this.clangPath.includes('19')) {
           args.push('-fexperimental-modules-reduced-bmi');
@@ -846,68 +1427,13 @@ using namespace PlanetGen::Generation;`;
     });
   }
 
-  private traverseAst(
-    node: any, 
-    callbacks: {
-      onClass?: (node: any) => void;
-      onMethod?: (node: any, className?: string) => void;
-      onFunction?: (node: any) => void;
-    },
-    currentClass?: string
-  ): void {
-    if (!node) return;
-
-    // Handle different node types
-    switch (node.kind) {
-      case 'CXXRecordDecl':
-        if (node.name && !node.isImplicit) {
-          callbacks.onClass?.(node);
-          // Traverse class members
-          if (node.inner) {
-            node.inner.forEach((child: any) => 
-              this.traverseAst(child, callbacks, node.name)
-            );
-          }
-        }
-        break;
-
-      case 'CXXMethodDecl':
-        if (!node.isImplicit) {
-          callbacks.onMethod?.(node, currentClass);
-        }
-        break;
-
-      case 'FunctionDecl':
-        if (!currentClass && !node.isImplicit) {
-          callbacks.onFunction?.(node);
-        }
-        break;
-
-      case 'NamespaceDecl':
-      case 'TranslationUnitDecl':
-        // Continue traversing
-        if (node.inner) {
-          node.inner.forEach((child: any) => 
-            this.traverseAst(child, callbacks, currentClass)
-          );
-        }
-        break;
-    }
-
-    // Traverse children if not already done
-    if (node.inner && !['CXXRecordDecl', 'NamespaceDecl', 'TranslationUnitDecl'].includes(node.kind)) {
-      node.inner.forEach((child: any) => 
-        this.traverseAst(child, callbacks, currentClass)
-      );
-    }
-  }
 
   private parseClassNode(node: any): ClassInfo {
     const bases = node.bases || [];
     
     return {
       name: node.name,
-      namespace: this.extractNamespace(node),
+      namespace: this.extractNamespace(node) || undefined,
       baseClasses: bases
         .filter((b: any) => b.access === 'public')
         .map((b: any) => b.type.qualType),
@@ -968,10 +1494,6 @@ using namespace PlanetGen::Generation;`;
     return node.access || 'public';
   }
 
-  private extractNamespace(node: any): string | undefined {
-    // Would need to track namespace context during traversal
-    return undefined;
-  }
 
   private extractMembers(classNode: any): any[] {
     // Extract field declarations
@@ -1116,13 +1638,28 @@ using namespace PlanetGen::Generation;`;
   }
 
   private async loadCompilationDatabase(projectPath: string): Promise<void> {
-    const compileCommandsPath = path.join(projectPath, 'compile_commands.json');
-    try {
-      const content = await fs.readFile(compileCommandsPath, 'utf-8');
-      this.compilationDatabase = JSON.parse(content);
-    } catch (e) {
-      // No compilation database available
+    // Try multiple locations for compile_commands.json
+    const possiblePaths = [
+      path.join(projectPath, 'compile_commands.json'),
+      path.join(projectPath, 'build_clang_linux', 'compile_commands.json'),
+      path.join(projectPath, 'build', 'compile_commands.json'),
+      path.join(projectPath, 'cmake-build-debug', 'compile_commands.json'),
+      path.join(projectPath, 'cmake-build-release', 'compile_commands.json')
+    ];
+    
+    for (const compileCommandsPath of possiblePaths) {
+      try {
+        const content = await fs.readFile(compileCommandsPath, 'utf-8');
+        this.compilationDatabase = JSON.parse(content);
+        console.log(`Loaded compilation database from: ${compileCommandsPath}`);
+        console.log(`  Contains ${this.compilationDatabase.length} entries`);
+        return;
+      } catch (e) {
+        // Try next path
+      }
     }
+    
+    console.warn('No compilation database found in any standard location');
   }
 
   private getCompileFlags(filePath: string): string[] {

@@ -19,6 +19,7 @@ import { UnifiedSchemaManager } from './database/unified-schema-manager.js';
 import { FileWatcher } from './services/file-watcher.js';
 import { ThoughtSignaturePreserver } from './engines/thought-signature.js';
 import { ClaudeValidationTool } from './tools/claude-validation-tool.js';
+import { VisualizationAPI } from './api/visualization-api.js';
 import { SecureConfigManager } from './utils/secure-config.js';
 import Database from 'better-sqlite3';
 import * as path from 'path';
@@ -38,6 +39,7 @@ class ModuleSentinelMCPServer {
   private fileWatcher: FileWatcher;
   private thoughtSignaturePreserver: ThoughtSignaturePreserver;
   private claudeValidationTool?: ClaudeValidationTool;
+  private visualizationAPI?: VisualizationAPI;
 
   constructor() {
     // Load environment variables (for backwards compatibility)
@@ -141,6 +143,9 @@ class ModuleSentinelMCPServer {
     
     // Auto-index on startup, then start file watcher
     this.autoIndex();
+
+    // Start the visualization server
+    this.visualizationAPI = new VisualizationAPI(this.dbPath, 8081);
   }
 
   private async autoIndex(): Promise<void> {
@@ -214,6 +219,18 @@ class ModuleSentinelMCPServer {
               return await this.handleValidateCodeSnippet(request.params.arguments);
             case 'get_validation_stats':
               return await this.handleGetValidationStats(request.params.arguments);
+            
+            // Agent Feedback Tools
+            case 'record_agent_feedback':
+              return await this.handleRecordAgentFeedback(request.params.arguments);
+            case 'record_context_gap':
+              return await this.handleRecordContextGap(request.params.arguments);
+            case 'get_enhanced_context':
+              return await this.handleGetEnhancedContext(request.params.arguments);
+            case 'analyze_feedback_patterns':
+              return await this.handleAnalyzeFeedbackPatterns(request.params.arguments);
+            case 'get_feedback_stats':
+              return await this.handleGetFeedbackStats(request.params.arguments);
               
             default:
               return {
@@ -509,6 +526,130 @@ class ModuleSentinelMCPServer {
                 sessionId: {
                   type: 'string',
                   description: 'Get stats for specific session'
+                }
+              }
+            }
+          },
+          
+          // Agent Feedback Tools
+          {
+            name: 'record_agent_feedback',
+            description: 'Record feedback from agents about tool failures, missing context, or successes',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Current agent session ID'
+                },
+                agentName: {
+                  type: 'string',
+                  description: 'Name of the agent providing feedback'
+                },
+                feedbackType: {
+                  type: 'string',
+                  enum: ['tool_failure', 'missing_context', 'success', 'clarification_needed'],
+                  description: 'Type of feedback'
+                },
+                toolName: {
+                  type: 'string',
+                  description: 'Name of tool (if feedback is about a tool)'
+                },
+                toolParams: {
+                  type: 'object',
+                  description: 'Parameters used with the tool'
+                },
+                expectedOutcome: {
+                  type: 'string',
+                  description: 'What the agent expected to happen'
+                },
+                actualOutcome: {
+                  type: 'string',
+                  description: 'What actually happened'
+                },
+                errorMessage: {
+                  type: 'string',
+                  description: 'Error message if any'
+                },
+                resolution: {
+                  type: 'string',
+                  description: 'How the issue was resolved'
+                }
+              },
+              required: ['sessionId', 'agentName', 'feedbackType']
+            }
+          },
+          {
+            name: 'record_context_gap',
+            description: 'Record when an agent identifies missing context that would have been helpful',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Current agent session ID'
+                },
+                missingContextType: {
+                  type: 'string',
+                  enum: ['symbol_info', 'file_relationship', 'architectural_pattern', 'dependency', 'usage_example'],
+                  description: 'Type of missing context'
+                },
+                description: {
+                  type: 'string',
+                  description: 'Description of what context was missing'
+                },
+                requestedByAgent: {
+                  type: 'string',
+                  description: 'Name of agent that identified the gap'
+                },
+                contextQuery: {
+                  type: 'string',
+                  description: 'What the agent was trying to find'
+                }
+              },
+              required: ['sessionId', 'missingContextType', 'description', 'requestedByAgent']
+            }
+          },
+          {
+            name: 'get_enhanced_context',
+            description: 'Get enhanced context based on historical patterns and feedback',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Current agent session ID'
+                },
+                contextType: {
+                  type: 'string',
+                  description: 'Type of context needed'
+                }
+              },
+              required: ['sessionId', 'contextType']
+            }
+          },
+          {
+            name: 'analyze_feedback_patterns',
+            description: 'Analyze patterns in agent feedback to identify improvement opportunities',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Analyze patterns for specific session (optional)'
+                }
+              }
+            }
+          },
+          {
+            name: 'get_feedback_stats',
+            description: 'Get statistics and metrics about agent feedback and improvements',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                sessionId: {
+                  type: 'string',
+                  description: 'Get stats for specific session (optional)'
                 }
               }
             }
@@ -1111,6 +1252,200 @@ class ModuleSentinelMCPServer {
     }
   }
 
+  // Agent Feedback Handler Methods
+  private async handleRecordAgentFeedback(args: any) {
+    const params = z.object({
+      sessionId: z.string(),
+      agentName: z.string(),
+      feedbackType: z.enum(['tool_failure', 'missing_context', 'success', 'clarification_needed']),
+      toolName: z.string().optional(),
+      toolParams: z.any().optional(),
+      expectedOutcome: z.string().optional(),
+      actualOutcome: z.string().optional(),
+      errorMessage: z.string().optional(),
+      resolution: z.string().optional()
+    }).parse(args);
+
+    try {
+      await this.thoughtSignaturePreserver.recordAgentFeedback(params);
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `✅ Agent feedback recorded successfully for ${params.feedbackType}${params.toolName ? ` with tool ${params.toolName}` : ''}` 
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error recording agent feedback: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleRecordContextGap(args: any) {
+    const params = z.object({
+      sessionId: z.string(),
+      missingContextType: z.enum(['symbol_info', 'file_relationship', 'architectural_pattern', 'dependency', 'usage_example']),
+      description: z.string(),
+      requestedByAgent: z.string(),
+      contextQuery: z.string().optional()
+    }).parse(args);
+
+    try {
+      const gapId = await this.thoughtSignaturePreserver.recordContextGap(params);
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `✅ Context gap recorded (ID: ${gapId}). Type: ${params.missingContextType}\nDescription: ${params.description}` 
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error recording context gap: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleGetEnhancedContext(args: any) {
+    const params = z.object({
+      sessionId: z.string(),
+      contextType: z.string()
+    }).parse(args);
+
+    try {
+      const enhancedContext = await this.thoughtSignaturePreserver.getEnhancedContext(
+        params.sessionId,
+        params.contextType
+      );
+      
+      return {
+        content: [{ 
+          type: 'text', 
+          text: JSON.stringify(enhancedContext, null, 2)
+        }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error getting enhanced context: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleAnalyzeFeedbackPatterns(args: any) {
+    const params = z.object({
+      sessionId: z.string().optional()
+    }).parse(args);
+
+    try {
+      const analysis = await this.thoughtSignaturePreserver.analyzePatterns(params.sessionId);
+      
+      let report = `📊 **Feedback Pattern Analysis**\n\n`;
+      
+      if (analysis.toolFailures.length > 0) {
+        report += `🔧 **Tool Failures:**\n`;
+        analysis.toolFailures.slice(0, 5).forEach((tf: any) => {
+          report += `- ${tf.tool_name}: ${tf.failure_count} failures (avg confidence: ${(tf.avg_confidence * 100).toFixed(1)}%)\n`;
+        });
+        report += '\n';
+      }
+      
+      if (analysis.contextGaps.length > 0) {
+        report += `🔍 **Context Gaps:**\n`;
+        analysis.contextGaps.slice(0, 5).forEach((cg: any) => {
+          report += `- ${cg.missing_context_type}: ${cg.gap_count} occurrences (${cg.resolution_status})\n`;
+        });
+        report += '\n';
+      }
+      
+      if (analysis.recommendations.length > 0) {
+        report += `💡 **Recommendations:**\n`;
+        analysis.recommendations.forEach((rec: string) => {
+          report += `- ${rec}\n`;
+        });
+        report += '\n';
+      }
+      
+      report += `📈 **Improvement Metrics:**\n`;
+      Object.entries(analysis.improvementMetrics).forEach(([period, metrics]: [string, any]) => {
+        report += `- ${period}: Success rate ${metrics.successRate.toFixed(1)}%, Resolution rate ${metrics.resolutionRate.toFixed(1)}%\n`;
+      });
+      
+      return {
+        content: [{ type: 'text', text: report }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error analyzing feedback patterns: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleGetFeedbackStats(args: any) {
+    const params = z.object({
+      sessionId: z.string().optional()
+    }).parse(args);
+
+    try {
+      const stats = await this.thoughtSignaturePreserver.getFeedbackStats(params.sessionId);
+      
+      let report = `📊 **Agent Feedback Statistics**\n\n`;
+      report += `📝 **Total Feedback:** ${stats.totalFeedback}\n\n`;
+      
+      if (Object.keys(stats.feedbackByType).length > 0) {
+        report += `**Feedback by Type:**\n`;
+        Object.entries(stats.feedbackByType).forEach(([type, count]) => {
+          report += `- ${type}: ${count}\n`;
+        });
+        report += '\n';
+      }
+      
+      report += `**Context Gap Stats:**\n`;
+      report += `- Total: ${stats.contextGapStats.total}\n`;
+      report += `- Resolved: ${stats.contextGapStats.resolved}\n`;
+      report += `- Pending: ${stats.contextGapStats.pending}\n`;
+      report += `- Avg Resolution Time: ${(stats.contextGapStats.avgResolutionTime / 1000).toFixed(1)}s\n\n`;
+      
+      report += `**Learning Pattern Stats:**\n`;
+      report += `- Total Patterns: ${stats.learningPatternStats.total}\n`;
+      report += `- Avg Success Rate: ${(stats.learningPatternStats.avgSuccessRate * 100).toFixed(1)}%\n\n`;
+      
+      if (stats.topTools.length > 0) {
+        report += `**Top Tools:**\n`;
+        stats.topTools.forEach((tool: any) => {
+          const successRate = tool.usage_count > 0 ? (tool.success_count / tool.usage_count * 100).toFixed(1) : '0.0';
+          report += `- ${tool.tool_name}: ${tool.usage_count} uses (${successRate}% success)\n`;
+        });
+      }
+      
+      return {
+        content: [{ type: 'text', text: report }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error getting feedback stats: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
   async start(): Promise<void> {
     // Ensure database directory exists
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
@@ -1125,6 +1460,11 @@ class ModuleSentinelMCPServer {
     // Stop file watcher before shutting down
     this.fileWatcher.stop();
     console.error('File watcher stopped');
+
+    if (this.visualizationAPI) {
+      await this.visualizationAPI.shutdown();
+      console.error('Visualization API server stopped');
+    }
     
     // Close database and server
     this.db.close();

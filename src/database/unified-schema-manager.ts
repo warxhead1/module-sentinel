@@ -1,5 +1,4 @@
 import Database from 'better-sqlite3';
-import * as path from 'path';
 
 /**
  * Unified Database Schema Manager
@@ -56,6 +55,9 @@ export class UnifiedSchemaManager {
     
     // Create parser metrics table
     this.createParserMetricsTable(db);
+    
+    // Create agent feedback tables
+    this.createAgentFeedbackTables(db);
     
     this.initializedDatabases.add(dbIdentifier);
   }
@@ -1382,6 +1384,109 @@ export class UnifiedSchemaManager {
       
       CREATE INDEX IF NOT EXISTS idx_parser_metrics_file ON parser_metrics(file_path);
       CREATE INDEX IF NOT EXISTS idx_parser_metrics_parser ON parser_metrics(parser_name);
+    `);
+  }
+  
+  private createAgentFeedbackTables(db: Database.Database): void {
+    db.exec(`
+      -- Agent feedback tracking for learning and improvement
+      CREATE TABLE IF NOT EXISTS agent_feedback (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        feedback_type TEXT NOT NULL, -- 'tool_failure', 'missing_context', 'success', 'clarification_needed'
+        tool_name TEXT,
+        tool_params TEXT, -- JSON of tool parameters used
+        expected_outcome TEXT,
+        actual_outcome TEXT,
+        error_message TEXT,
+        resolution TEXT,
+        confidence REAL DEFAULT 0.0,
+        FOREIGN KEY (session_id) REFERENCES agent_sessions(session_id)
+      );
+      
+      -- Track context gaps identified by agents
+      CREATE TABLE IF NOT EXISTS context_gaps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        missing_context_type TEXT NOT NULL, -- 'symbol_info', 'file_relationship', 'architectural_pattern', 'dependency', 'usage_example'
+        description TEXT NOT NULL,
+        requested_by_agent TEXT NOT NULL,
+        context_query TEXT, -- What the agent was trying to find
+        resolution_status TEXT DEFAULT 'pending', -- 'pending', 'resolved', 'workaround', 'not_available'
+        resolution_method TEXT,
+        resolved_context TEXT, -- JSON of the context that was eventually found
+        time_to_resolution INTEGER, -- milliseconds
+        FOREIGN KEY (session_id) REFERENCES agent_sessions(session_id)
+      );
+      
+      -- Learning patterns from successful resolutions
+      CREATE TABLE IF NOT EXISTS learning_patterns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_type TEXT NOT NULL, -- 'tool_usage', 'context_retrieval', 'error_recovery', 'optimization'
+        pattern_signature TEXT NOT NULL, -- Hash of the pattern for deduplication
+        description TEXT NOT NULL,
+        trigger_conditions TEXT NOT NULL, -- JSON of conditions that trigger this pattern
+        successful_approach TEXT NOT NULL, -- JSON of the approach that worked
+        failure_approaches TEXT, -- JSON array of approaches that didn't work
+        success_rate REAL DEFAULT 0.0,
+        usage_count INTEGER DEFAULT 0,
+        last_used INTEGER,
+        created_at INTEGER DEFAULT (strftime('%s', 'now')),
+        confidence_score REAL DEFAULT 0.0
+      );
+      
+      -- Feedback loops tracking improvement over time
+      CREATE TABLE IF NOT EXISTS feedback_loops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        loop_id TEXT NOT NULL, -- Unique identifier for a feedback cycle
+        start_time INTEGER NOT NULL,
+        end_time INTEGER,
+        initial_context TEXT NOT NULL, -- JSON of initial context state
+        final_context TEXT, -- JSON of improved context state
+        improvements_made TEXT, -- JSON array of specific improvements
+        metrics_before TEXT, -- JSON of metrics before improvements
+        metrics_after TEXT, -- JSON of metrics after improvements
+        success_indicators TEXT, -- JSON of what indicated success
+        agent_sessions TEXT -- JSON array of session_ids involved in this loop
+      );
+      
+      -- Enhanced context recommendations
+      CREATE TABLE IF NOT EXISTS context_recommendations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        context_type TEXT NOT NULL,
+        trigger_pattern TEXT NOT NULL, -- Pattern that triggers this recommendation
+        recommended_context TEXT NOT NULL, -- JSON of recommended context to include
+        rationale TEXT NOT NULL,
+        success_rate REAL DEFAULT 0.0,
+        usage_count INTEGER DEFAULT 0,
+        created_by TEXT, -- Which agent/pattern created this recommendation
+        created_at INTEGER DEFAULT (strftime('%s', 'now'))
+      );
+      
+      -- Track relationships between feedback and improvements
+      CREATE TABLE IF NOT EXISTS feedback_improvements (
+        feedback_id INTEGER NOT NULL,
+        improvement_type TEXT NOT NULL, -- 'pattern_added', 'context_enhanced', 'tool_updated'
+        improvement_details TEXT NOT NULL, -- JSON of what was improved
+        impact_score REAL DEFAULT 0.0,
+        timestamp INTEGER DEFAULT (strftime('%s', 'now')),
+        FOREIGN KEY (feedback_id) REFERENCES agent_feedback(id)
+      );
+      
+      -- Indices for efficient querying
+      CREATE INDEX IF NOT EXISTS idx_agent_feedback_session ON agent_feedback(session_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_feedback_type ON agent_feedback(feedback_type);
+      CREATE INDEX IF NOT EXISTS idx_agent_feedback_tool ON agent_feedback(tool_name);
+      CREATE INDEX IF NOT EXISTS idx_context_gaps_session ON context_gaps(session_id);
+      CREATE INDEX IF NOT EXISTS idx_context_gaps_type ON context_gaps(missing_context_type);
+      CREATE INDEX IF NOT EXISTS idx_context_gaps_status ON context_gaps(resolution_status);
+      CREATE INDEX IF NOT EXISTS idx_learning_patterns_type ON learning_patterns(pattern_type);
+      CREATE INDEX IF NOT EXISTS idx_learning_patterns_signature ON learning_patterns(pattern_signature);
+      CREATE INDEX IF NOT EXISTS idx_feedback_loops_id ON feedback_loops(loop_id);
+      CREATE INDEX IF NOT EXISTS idx_context_recommendations_type ON context_recommendations(context_type);
     `);
   }
   

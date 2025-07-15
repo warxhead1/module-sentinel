@@ -17,6 +17,7 @@ An MCP server that provides advanced C++ module analysis, dependency tracking, a
 - **Real-time Monitoring**: File watcher automatically updates index when files change
 - **Architectural Decisions**: Encrypted storage of design decisions with reasoning chains
 - **Pipeline Awareness**: Understands project stages (noise_generation → physics_processing → rendering)
+- **Agent Feedback Loop**: Learning system that improves context precision through agent feedback
 
 ### Current Database Scale
 - **18,997 symbols** indexed across **507 files**
@@ -87,6 +88,13 @@ This analysis replaces hours of manual code review with instant, accurate depend
 - `rebuild_index` - Index management
 - `generate_visualization` - Interactive dependency visualizations
 - `validate_claude_code` - AI code validation (requires GEMINI_API_KEY)
+
+### Agent Feedback Tools
+- `record_agent_feedback` - Record tool failures or successes for learning
+- `record_context_gap` - Track missing context that would have been helpful
+- `get_enhanced_context` - Retrieve enriched context based on past experiences
+- `analyze_feedback_patterns` - Identify improvement opportunities
+- `get_feedback_stats` - View metrics about agent performance
 
 ## 🎭 Current Limitations & Future Work
 

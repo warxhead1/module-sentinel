@@ -11,6 +11,10 @@ import { RelationshipExtractionTest } from './unit/RelationshipExtractionTest';
 import { CrossFileRelationshipTest } from './unit/CrossFileRelationshipTest';
 import { ToolsIntegrationTest } from './unit/ToolsIntegrationTest';
 import { SimpleToolTest } from './unit/SimpleToolTest';
+// import { ClangPerformanceTest } from './unit/ClangPerformanceTest';  // Disabled - Clang doesn't support C++23 modules well yet
+import { SemanticSearchTest } from './unit/SemanticSearchTest';
+import { ParserAnalysisTest } from './unit/ParserAnalysisTest';
+import { PatternDebugTest } from './unit/PatternDebugTest';
 import { EventEmitter } from 'events';
 import * as path from 'path';
 import * as fs from 'fs/promises';
@@ -20,10 +24,12 @@ export class TestRunner extends EventEmitter {
   private projectPath = '/home/warxh/planet_procgen';
   private dbPath = 'module-sentinel.db'; // Real production database
   private forceRebuild: boolean;
+  private testFilter?: string;
   
-  constructor(options?: { forceRebuild?: boolean }) {
+  constructor(options?: { forceRebuild?: boolean; testFilter?: string }) {
     super();
     this.forceRebuild = options?.forceRebuild ?? false;
+    this.testFilter = options?.testFilter;
   }
 
   async run(): Promise<void> {
@@ -60,12 +66,29 @@ export class TestRunner extends EventEmitter {
         new ParserFallbackTest(),
         new RelationshipExtractionTest(this.dbPath),
         new CrossFileRelationshipTest(this.dbPath),
-        new SimpleToolTest()
+        new SimpleToolTest(),
+        // new ClangPerformanceTest(),  // Disabled - Clang doesn't support C++23 modules yet
+        new SemanticSearchTest(this.dbPath),  // Add semantic search test
+        new ParserAnalysisTest(this.dbPath),  // Add parser analysis test
+        new PatternDebugTest()  // Add pattern debug test
       ];
       
       console.log('\n🔧 Running test suites...\n');
       
-      for (const test of tests) {
+      // Filter tests if requested
+      const testsToRun = this.testFilter 
+        ? tests.filter(test => {
+            const testName = test.constructor.name.toLowerCase();
+            return testName.includes(this.testFilter!.toLowerCase());
+          })
+        : tests;
+      
+      if (this.testFilter && testsToRun.length === 0) {
+        console.log(`⚠️  No tests found matching filter: "${this.testFilter}"`);
+        return;
+      }
+      
+      for (const test of testsToRun) {
         console.log('='.repeat(60));
         await test.execute();
       }
@@ -167,7 +190,7 @@ export class TestRunner extends EventEmitter {
       
       try {
         // Filter existing files
-        const existingPaths = [];
+        const existingPaths: string[] = [];
         for (const fullPath of batch) {
           try {
             await fs.access(fullPath);
@@ -209,7 +232,7 @@ export class TestRunner extends EventEmitter {
     console.log(`  Empty: ${emptyFiles}`);
     console.log(`  Success rate: ${((totalIndexed - emptyFiles) / totalIndexed * 100).toFixed(1)}%`);
     console.log(`\n📊 Parser Usage:`);
-    console.log(`  Clang: ${parserStats.clang} files (${(parserStats.clang/totalIndexed*100).toFixed(1)}%)`);
+    // console.log(`  Clang: ${parserStats.clang} files (${(parserStats.clang/totalIndexed*100).toFixed(1)}%)`);  // Disabled - not using Clang
     console.log(`  Tree-sitter: ${parserStats.treeSitter} files (${(parserStats.treeSitter/totalIndexed*100).toFixed(1)}%)`);
     console.log(`  Streaming: ${parserStats.streaming} files (${(parserStats.streaming/totalIndexed*100).toFixed(1)}%)`);
     console.log(`  Failed: ${parserStats.failed} files`);

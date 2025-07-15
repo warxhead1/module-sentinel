@@ -470,9 +470,12 @@ export class PatternAwareIndexer {
    * Parse file with hierarchical fallback strategy
    */
   private async parseFileWithFallback(filePath: string): Promise<{ result: any; parser: string; confidence: number } | null> {
-    // Try Clang parser first (highest accuracy)
-    try {
-      await this.treeSitterParser.initialize(); // Ensure it's initialized
+    // DISABLED: Clang parser (contributes 0 symbols, causes performance issues)
+    // Skip to Tree-sitter parser (good accuracy, more reliable)
+    await this.treeSitterParser.initialize(); // Ensure it's initialized
+    
+    // Try Tree-sitter parser (good accuracy, more reliable)
+    if (false) { // Disable clang completely
       await this.clangParser.indexFile(filePath);
       
       // Get symbols from clang indexer - use their schema
@@ -500,9 +503,7 @@ export class PatternAwareIndexer {
         
         return { result: { functions: convertedSymbols, classes: [], methods: convertedSymbols }, parser: 'clang', confidence: 0.95 };
       }
-    } catch (error) {
-      // Clang failed, continue to next parser
-    }
+    } // End of disabled clang block
 
     // Try Tree-sitter parser (good accuracy, more reliable)
     try {
@@ -3570,6 +3571,25 @@ export class PatternAwareIndexer {
     // Store relationships to be inserted later
     const relationships: any[] = [];
     
+    // 0. Extract direct relationships from parser (our enhanced tree-sitter relationships)
+    if (parseResult && parseResult.relationships) {
+      const parserRelationships = Array.isArray(parseResult.relationships) ? 
+        parseResult.relationships : [];
+      
+      for (const rel of parserRelationships) {
+        // Add file context to parser relationships
+        relationships.push({
+          ...rel,
+          fromFile: filePath,
+          toFile: filePath // same file for now, cross-file comes later
+        });
+      }
+      
+      if (this.debugMode && parserRelationships.length > 0) {
+        console.log(`📥 Extracted ${parserRelationships.length} direct relationships from parser`);
+      }
+    }
+    
     // 1. Extract include/import dependencies
     this.extractIncludeRelationships(relationships, parseResult, filePath);
     
@@ -3585,6 +3605,10 @@ export class PatternAwareIndexer {
     // 5. Store all relationships in batch
     if (relationships.length > 0) {
       this.storeRelationshipsBatch(relationships);
+      
+      if (this.debugMode) {
+        console.log(`📊 Total relationships extracted: ${relationships.length} for ${path.basename(filePath)}`);
+      }
     }
   }
 
@@ -3945,33 +3969,54 @@ export class PatternAwareIndexer {
   private storeRelationshipsBatch(relationships: any[]): void {
     const insertStmt = this.db.prepare(`
       INSERT OR IGNORE INTO symbol_relationships (
-        from_symbol_id, to_symbol_id, relationship_type, confidence, detected_by
+        from_symbol_id, to_symbol_id, relationship_type, confidence, detected_by, source_text, line_number
       ) 
       SELECT 
-        (SELECT id FROM enhanced_symbols WHERE name = ? AND file_path = ? LIMIT 1),
-        (SELECT id FROM enhanced_symbols WHERE name = ? LIMIT 1),
-        ?, ?, 'pattern_aware_indexer'
-      WHERE EXISTS (SELECT 1 FROM enhanced_symbols WHERE name = ? AND file_path = ?)
-        AND EXISTS (SELECT 1 FROM enhanced_symbols WHERE name = ?)
+        f.id, t.id, ?, ?, 'enhanced_parser', ?, ?
+      FROM enhanced_symbols f
+      LEFT JOIN enhanced_symbols t ON (
+        (t.name = ? AND t.parent_class = ?) OR 
+        (t.name = ? AND t.parent_class IS NULL)
+      )
+      WHERE f.name = ? AND f.parent_class = ? AND f.file_path = ?
+        AND t.id IS NOT NULL
     `);
 
     const transaction = this.db.transaction((rels: any[]) => {
       for (const rel of rels) {
         try {
-          insertStmt.run(
-            rel.fromSymbol, rel.fromFile,
-            rel.toSymbol,
-            rel.relationshipType, rel.confidence,
-            rel.fromSymbol, rel.fromFile,
-            rel.toSymbol
-          );
+          // Only handle our new clean format
+          if (rel.fromSymbol && rel.toSymbol && rel.fromClass) {
+            insertStmt.run(
+              rel.relationshipType || 'calls',
+              rel.confidence || 0.7,
+              rel.context?.lineText || `${rel.context?.objectName || ''}.${rel.toSymbol}()`,
+              rel.context?.lineNumber || null,
+              rel.toSymbol,      // target method name
+              rel.toClass,       // target class (can be null for free functions)
+              rel.toSymbol,      // fallback: try without class context
+              rel.fromSymbol,    // source method name
+              rel.fromClass,     // source class
+              rel.fromFile || '' // source file
+            );
+            
+            if (this.debugMode) {
+              console.log(`🔗 ${rel.fromClass}.${rel.fromSymbol} -> ${rel.toClass || 'global'}.${rel.toSymbol}`);
+            }
+          }
         } catch (error) {
-          // Silently ignore relationship insertion errors
+          if (this.debugMode) {
+            console.warn(`Failed to store relationship:`, rel, error);
+          }
         }
       }
     });
 
     transaction(relationships);
+    
+    if (this.debugMode && relationships.length > 0) {
+      console.log(`📊 Stored ${relationships.length} relationships to database`);
+    }
   }
 
   /**

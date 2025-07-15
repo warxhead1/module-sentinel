@@ -21,11 +21,19 @@ async function main() {
   const args = process.argv.slice(2);
   const forceRebuild = args.includes('--rebuild') || args.includes('-r');
   
+  // Extract filter parameter
+  const filterIndex = args.findIndex(arg => arg === '--filter' || arg === '-f');
+  const testFilter = filterIndex !== -1 && args[filterIndex + 1] ? args[filterIndex + 1] : undefined;
+  
   if (forceRebuild) {
     console.log('🔄 Force rebuild mode enabled\n');
   }
   
-  const runner = new TestRunner({ forceRebuild });
+  if (testFilter) {
+    console.log(`🔍 Running only tests matching: "${testFilter}"\n`);
+  }
+  
+  const runner = new TestRunner({ forceRebuild, testFilter });
   await runner.run();
 }
 

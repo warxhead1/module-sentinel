@@ -45,13 +45,15 @@ export class DatabaseAwareTreeSitterParser {
   private db: Database.Database | null = null;
   private typeCache: Map<string, TypeLocation[]> = new Map();
   private projectPath: string;
+  private debugMode: boolean = false;
   
   // Chunk size configuration
   private readonly CHUNK_SIZE = 64 * 1024; // 64KB chunks (lowered to handle problematic files)
   private readonly OVERLAP_SIZE = 4 * 1024; // 4KB overlap to maintain context
 
-  constructor(projectPath: string, dbPath?: string) {
+  constructor(projectPath: string, dbPath?: string, debugMode: boolean = false) {
     this.parser = new Parser();
+    this.debugMode = debugMode;
     this.projectPath = projectPath;
     if (dbPath) {
       this.db = new Database(dbPath);
@@ -167,6 +169,10 @@ export class DatabaseAwareTreeSitterParser {
     const classes: ClassInfo[] = [];
     const includes: DetailedImport[] = [];
     
+    // Clear and set current parsing context for relationship extraction
+    this.currentMethods = methods;
+    this.currentClasses = classes;
+    
     this.walkTree(tree.rootNode, {
       content,
       filePath,
@@ -207,6 +213,10 @@ export class DatabaseAwareTreeSitterParser {
       templates: new Map<string, string[]>(),
       unresolvedTypes: new Set<string>()
     };
+    
+    // Set current parsing context for relationship extraction
+    this.currentMethods = allMethods;
+    this.currentClasses = allClasses;
     
     for (const chunk of chunks) {
       try {
@@ -326,9 +336,11 @@ export class DatabaseAwareTreeSitterParser {
       
       if (locations && locations.length > 0) {
         // Found in cache
-        console.log(`Type '${typeName}' found in ${locations.length} location(s):`);
-        for (const loc of locations.slice(0, 3)) { // Show top 3
-          console.log(`  - ${loc.filePath}:${loc.line} (${loc.kind}, confidence: ${loc.confidence})`);
+        if (this.debugMode) {
+          console.log(`Type '${typeName}' found in ${locations.length} location(s):`);
+          for (const loc of locations.slice(0, 3)) { // Show top 3
+            console.log(`  - ${loc.filePath}:${loc.line} (${loc.kind}, confidence: ${loc.confidence})`);
+          }
         }
       } else if (this.db) {
         // Try to find in database
@@ -367,7 +379,7 @@ export class DatabaseAwareTreeSitterParser {
             kind: r.kind
           })));
         } else {
-          console.log(`Type '${typeName}' not found in database`);
+          if (this.debugMode) console.log(`Type '${typeName}' not found in database`);
         }
       }
     }
@@ -627,8 +639,37 @@ export class DatabaseAwareTreeSitterParser {
   }
 
   private extractRelationships(node: any, content: string): SymbolRelationship[] {
-    // Would implement relationship extraction
-    return [];
+    const relationships: SymbolRelationship[] = [];
+    const contentLines = content.split('\n');
+    
+    // Get all extracted methods and classes from current parsing
+    const allMethods = this.getAllMethodsFromContext();
+    const allClasses = this.getAllClassesFromContext();
+    
+    // Add inheritance relationships from classes
+    for (const cls of allClasses) {
+      for (const baseClass of cls.baseClasses || []) {
+        relationships.push({
+          from: cls.name,
+          to: baseClass,
+          type: 'inherits',
+          confidence: 0.95
+        });
+      }
+    }
+    
+    // Extract method call relationships by analyzing method bodies
+    for (const method of allMethods) {
+      if (!method.className || !method.location) continue;
+      
+      // Find the method's body in the source code
+      const methodRelationships = this.extractMethodCallRelationships(
+        method, content, contentLines, allMethods, allClasses
+      );
+      relationships.push(...methodRelationships);
+    }
+    
+    return relationships;
   }
 
   private extractPatterns(node: any, content: string): CodePattern[] {
@@ -641,6 +682,198 @@ export class DatabaseAwareTreeSitterParser {
     exports.push(...methods.map(m => m.name));
     exports.push(...classes.map(c => c.name));
     return exports;
+  }
+
+  // Helper methods for relationship extraction
+  private currentMethods: MethodSignature[] = [];
+  private currentClasses: ClassInfo[] = [];
+  
+  private getAllMethodsFromContext(): MethodSignature[] {
+    return this.currentMethods;
+  }
+  
+  private getAllClassesFromContext(): ClassInfo[] {
+    return this.currentClasses;
+  }
+  
+  private extractMethodCallRelationships(
+    sourceMethod: MethodSignature, 
+    content: string, 
+    contentLines: string[], 
+    allMethods: MethodSignature[], 
+    allClasses: ClassInfo[]
+  ): SymbolRelationship[] {
+    const relationships: SymbolRelationship[] = [];
+    
+    // Find method body boundaries (crude but effective for C++)
+    const startLine = sourceMethod.location.line;
+    const methodBodyStart = this.findMethodBodyStart(contentLines, startLine);
+    const methodBodyEnd = this.findMethodBodyEnd(contentLines, methodBodyStart);
+    
+    if (methodBodyStart === -1 || methodBodyEnd === -1) return relationships;
+    
+    // Analyze each line in the method body for function calls
+    for (let lineNum = methodBodyStart; lineNum <= methodBodyEnd; lineNum++) {
+      const line = contentLines[lineNum] || '';
+      const calls = this.extractCallsFromLine(line, lineNum + 1);
+      
+      for (const call of calls) {
+        // Find matching methods
+        const targets = this.findMatchingMethods(call, allMethods, sourceMethod.className!);
+        
+        for (const target of targets) {
+          relationships.push({
+            from: sourceMethod.name,
+            to: target.name,
+            type: 'calls',
+            confidence: target.confidence
+          });
+        }
+      }
+    }
+    
+    return relationships;
+  }
+  
+  private findMethodBodyStart(contentLines: string[], methodStartLine: number): number {
+    // Look for the opening brace after the method declaration
+    for (let i = methodStartLine - 1; i < Math.min(contentLines.length, methodStartLine + 10); i++) {
+      const line = contentLines[i] || '';
+      if (line.includes('{')) {
+        // Return the line AFTER the opening brace to exclude the declaration
+        return i + 1;
+      }
+    }
+    return -1;
+  }
+  
+  private findMethodBodyEnd(contentLines: string[], bodyStartLine: number): number {
+    if (bodyStartLine === -1) return -1;
+    
+    let braceCount = 0;
+    let foundFirstBrace = false;
+    
+    for (let i = bodyStartLine; i < contentLines.length; i++) {
+      const line = contentLines[i] || '';
+      
+      for (const char of line) {
+        if (char === '{') {
+          braceCount++;
+          foundFirstBrace = true;
+        } else if (char === '}') {
+          braceCount--;
+          if (foundFirstBrace && braceCount === 0) {
+            return i;
+          }
+        }
+      }
+    }
+    
+    return -1;
+  }
+  
+  private extractCallsFromLine(line: string, lineNumber: number): Array<{pattern: string, methodName: string, objectName?: string, lineNumber: number}> {
+    const calls: Array<{pattern: string, methodName: string, objectName?: string, lineNumber: number}> = [];
+    
+    // Pattern 1: object.method() or object->method()
+    const memberCallRegex = /(\w+)(?:\.|\->)(\w+)\s*\(/g;
+    let match;
+    while ((match = memberCallRegex.exec(line)) !== null) {
+      calls.push({
+        pattern: `${match[1]}.${match[2]}()`,
+        methodName: match[2],
+        objectName: match[1],
+        lineNumber: lineNumber
+      });
+    }
+    
+    // Pattern 2: Direct method calls: method()
+    const directCallRegex = /(?<![.\w])(\w+)\s*\(/g;
+    while ((match = directCallRegex.exec(line)) !== null) {
+      const methodName = match[1];
+      
+      // Skip common C++ keywords and operators
+      if (['if', 'for', 'while', 'switch', 'return', 'throw', 'catch', 'sizeof', 'typeof', 'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'].includes(methodName)) {
+        continue;
+      }
+      
+      // Skip if it's already captured as a member call
+      const alreadyCaptured = calls.some(call => call.methodName === methodName && call.lineNumber === lineNumber);
+      if (!alreadyCaptured) {
+        calls.push({
+          pattern: `${methodName}()`,
+          methodName: methodName,
+          lineNumber: lineNumber
+        });
+      }
+    }
+    
+    return calls;
+  }
+  
+  private findMatchingMethods(
+    call: {pattern: string, methodName: string, objectName?: string, lineNumber: number}, 
+    allMethods: MethodSignature[], 
+    sourceClassName: string
+  ): Array<{name: string, className: string | undefined, confidence: number}> {
+    const matches: Array<{name: string, className: string | undefined, confidence: number}> = [];
+    
+    // Find methods with matching names, but exclude duplicates
+    const candidateMethods = allMethods.filter(method => method.name === call.methodName);
+    
+    // Deduplicate candidates by preferring class methods over global duplicates
+    const uniqueCandidates = new Map<string, MethodSignature>();
+    for (const method of candidateMethods) {
+      const key = `${method.name}::${method.location?.line || 0}::${method.parameters?.length || 0}`;
+      
+      if (!uniqueCandidates.has(key)) {
+        uniqueCandidates.set(key, method);
+      } else {
+        // Prefer class method over global method for same location
+        const existing = uniqueCandidates.get(key)!;
+        if (method.className && !existing.className) {
+          uniqueCandidates.set(key, method);
+        }
+      }
+    }
+    
+    for (const method of uniqueCandidates.values()) {
+      // Skip self-references unless it's a legitimate recursive call
+      if (method.className === sourceClassName && method.name === call.methodName) {
+        // Only allow recursive calls if there's clear evidence (e.g., parameters, conditional context)
+        // For now, skip all self-references to avoid false positives
+        continue;
+      }
+      
+      let confidence = 0.5; // Base confidence
+      
+      // Same class methods get highest confidence
+      if (method.className === sourceClassName) {
+        confidence = 0.9;
+      }
+      // Methods in other classes get medium confidence
+      else if (method.className) {
+        confidence = 0.7;
+      }
+      // Global functions get lowest confidence
+      else {
+        confidence = 0.4;
+      }
+      
+      // If this is a member call (object.method), try to match object type
+      if (call.objectName && method.className) {
+        // TODO: Could enhance this by tracking member variable types
+        confidence *= 0.8; // Slightly lower confidence for member calls without type info
+      }
+      
+      matches.push({
+        name: method.name,
+        className: method.className,
+        confidence: confidence
+      });
+    }
+    
+    return matches;
   }
 
   close(): void {

@@ -25,6 +25,14 @@ export class VisualizationAPI {
       }
     });
 
+    this.server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`[VisualizationAPI] Port ${port} is already in use. Not starting a new visualization server.`);
+      } else {
+        console.error(`[VisualizationAPI] An unexpected error occurred:`, err);
+      }
+    });
+
     this.server.listen(port, () => {
       console.log(`🎨 Visualization API server running on http://localhost:${port}`);
       console.log('Available endpoints:');
@@ -81,6 +89,19 @@ export class VisualizationAPI {
         case pathname === '/api/symbols':
           await this.serveSymbolsAPI(res, parsedUrl.query);
           break;
+
+        case pathname === '/api/tables':
+          await this.serveTablesAPI(res);
+          break;
+
+        case pathname.startsWith('/api/table/'):
+          const tableName = pathname.replace('/api/table/', '');
+          await this.serveTableDataAPI(res, tableName, parsedUrl.query);
+          break;
+
+        case pathname === '/browse-database.html':
+          await this.serveBrowseDatabase(res);
+          break;
           
         default:
           res.writeHead(404, { 'Content-Type': 'text/plain' });
@@ -97,6 +118,7 @@ export class VisualizationAPI {
     const html = `<!DOCTYPE html>
 <html>
 <head>
+    <meta charset="UTF-8">
     <title>Planet ProcGen - Live Visualizations</title>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 40px; background: #0a0a0a; color: #e0e0e0; }
@@ -134,15 +156,16 @@ export class VisualizationAPI {
         </div>
         
         <div class="card">
-            <h3>🔧 API Endpoints</h3>
-            <div class="description">Programmatic access to visualization data</div>
+            <h3>🔧 API Endpoints & Database</h3>
+            <div class="description">Programmatic access to visualization data and direct database browsing.</div>
             <a href="/api/symbols?limit=100" class="btn">Symbols API</a>
+            <a href="/browse-database.html" class="btn">Browse Database</a>
         </div>
     </div>
 </body>
 </html>`;
     
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
     res.end(html);
   }
 
@@ -166,7 +189,7 @@ export class VisualizationAPI {
     const html = await visualizer.generateInteractiveHTML();
     visualizer.close();
     
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
     res.end(html);
   }
 
@@ -197,7 +220,7 @@ export class VisualizationAPI {
 </body>
 </html>`;
     
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
     res.end(html);
   }
 
@@ -296,7 +319,7 @@ export class VisualizationAPI {
 </body>
 </html>`;
     
-    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
     res.end(html);
   }
 
@@ -344,8 +367,83 @@ export class VisualizationAPI {
     }, null, 2));
   }
 
+  private async serveTablesAPI(res: http.ServerResponse) {
+    const Database = require('better-sqlite3');
+    const db = new Database(this.dbPath, { readonly: true });
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(tables));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      db.close();
+    }
+  }
+
+  private async serveTableDataAPI(res: http.ServerResponse, tableName: string, query: any) {
+    const Database = require('better-sqlite3');
+    const db = new Database(this.dbPath, { readonly: true });
+    try {
+      // Sanitize table name
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((t: any) => t.name);
+      if (!tables.includes(tableName)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Table not found' }));
+        return;
+      }
+
+      const page = parseInt(query.page as string) || 1;
+      const limit = parseInt(query.limit as string) || 100;
+      const offset = (page - 1) * limit;
+
+      const data = db.prepare(`SELECT * FROM ${tableName} LIMIT ? OFFSET ?`).all(limit, offset);
+      const countResult = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as { count: number };
+      const total = countResult.count;
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        tableName,
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        data
+      }));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      db.close();
+    }
+  }
+
+  private async serveBrowseDatabase(res: http.ServerResponse) {
+    try {
+      const fs = require('fs/promises');
+      const html = await fs.readFile(path.join(__dirname, '../../visualizations/browse-database.html'), 'utf-8');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=UTF-8' });
+      res.end(html);
+    } catch (error) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not Found');
+    }
+  }
+
   public close() {
     this.server.close();
+  }
+
+  public shutdown(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.server.close((err) => {
+        if (err) {
+          return reject(err);
+        }
+        resolve();
+      });
+    });
   }
 }
 

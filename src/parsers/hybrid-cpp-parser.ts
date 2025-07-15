@@ -40,7 +40,7 @@ export class HybridCppParser {
   private maxWorkers = Math.min(os.cpus().length - 1, 8); // Leave one CPU for main thread
   private debugMode: boolean = false;
   
-  constructor(debugMode: boolean = false) {
+  constructor(debugMode: boolean = false, private enableFileWatching: boolean = true) {
     this.debugMode = debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
     this.treeSitterParser = new EnhancedTreeSitterParser();
     this.grammarAwareParser = new GrammarAwareParser();
@@ -71,8 +71,9 @@ export class HybridCppParser {
       await this.dbAwareTreeSitterParser.initialize();
     }
     
-    // Check if clang is available (prefer clang++-19 for better C++23 module support)
-    try {
+    // DISABLED: Clang is available but contributes 0 symbols and causes performance issues
+    // Force clang to be unavailable
+    if (false) { // try {
       const { exec } = await import('child_process');
       
       // Try clang++-19 first
@@ -95,19 +96,23 @@ export class HybridCppParser {
         });
       }
       
-      this.clangParser = new ClangAstParser(clangPath);
-      await this.clangParser.detectIncludePaths(projectPath);
-      this.hasClang = true;
-      if (this.debugMode) console.log(`Clang AST parser available (${clangPath} with lightweight mode)`);
-    } catch {
-      if (this.debugMode) console.log('⚠️  Clang not available, using tree-sitter only');
-    }
+      // this.clangParser = new ClangAstParser(clangPath);
+      // await this.clangParser.detectIncludePaths(projectPath);
+      // this.hasClang = true;
+      // if (this.debugMode) console.log(`Clang AST parser available (${clangPath} with lightweight mode)`);
+    } // catch {
+      if (this.debugMode) console.log('🚀 Clang disabled - using enhanced Tree-sitter and Grammar-aware parsers');
+    // }
 
-    // Start progressive background re-indexing
-    this.startProgressiveReindexing(projectPath);
-    
-    // Set up file save hooks for immediate re-indexing
-    this.setupFileSaveHooks(projectPath);
+    // Start progressive background re-indexing (only if file watching is enabled)
+    if (this.enableFileWatching) {
+      this.startProgressiveReindexing(projectPath);
+      
+      // Set up file save hooks for immediate re-indexing
+      this.setupFileSaveHooks(projectPath);
+    } else if (this.debugMode) {
+      console.log('📋 File watching disabled - skipping progressive re-indexing and file save hooks');
+    }
     
     // Initialize worker pool for parallel parsing
     await this.initializeWorkerPool();
@@ -212,9 +217,10 @@ export class HybridCppParser {
       try {
         const result = await this.clangParser.parseFile(filePath);
         
-        // Enhance with tree-sitter pattern detection
+        // Enhance with tree-sitter pattern detection and relationships
         const treeSitterResult = await this.treeSitterParser.parseFile(filePath);
         result.patterns = treeSitterResult.patterns;
+        result.relationships = treeSitterResult.relationships;
         
         // Store successful parse for preservation
         await this.storeParseData(filePath, result, 'clang');
@@ -256,10 +262,11 @@ export class HybridCppParser {
         if (preservedData) {
           if (this.debugMode) console.log(`Using preserved data for ${filePath} from previous successful parse`);
           
-          // Enhance preserved data with fresh tree-sitter patterns
+          // Enhance preserved data with fresh tree-sitter patterns and relationships
           try {
             const treeSitterResult = await this.treeSitterParser.parseFile(filePath);
             preservedData.patterns = treeSitterResult.patterns;
+            preservedData.relationships = treeSitterResult.relationships;
             return preservedData;
           } catch (tsError) {
             if (this.debugMode) console.log(`Tree-sitter also failed, returning preserved data as-is`);
@@ -433,10 +440,12 @@ export class HybridCppParser {
         // Try Tree-sitter first (faster than Clang for large files)
         try {
           deepResult = await this.treeSitterParser.parseFile(filePath);
-          await this.storeParseData(filePath, deepResult, 'tree-sitter-deep');
-          // Store patterns and relationships in KnowledgeBase
-          await this.knowledgeBase.storePatterns(filePath, deepResult.patterns);
-          await this.knowledgeBase.storeRelationships(filePath, deepResult.relationships);
+          if (deepResult) {
+            await this.storeParseData(filePath, deepResult, 'tree-sitter-deep');
+            // Store patterns and relationships in KnowledgeBase
+            await this.knowledgeBase.storePatterns(filePath, deepResult.patterns);
+            await this.knowledgeBase.storeRelationships(filePath, deepResult.relationships);
+          }
           if (this.debugMode) console.log(`Tree-sitter deep analysis completed for ${filePath}`);
         } catch (tsError: unknown) {
           if (this.debugMode) console.log(`Tree-sitter deep analysis failed for ${filePath}: ${tsError instanceof Error ? tsError.message : tsError}`);
@@ -801,6 +810,10 @@ export class HybridCppParser {
       /Factory/i,
       /Manager/i,
       /Core/i,
+      /Application/i,        // FIX: Add Application files
+      /Feedback/i,           // FIX: Add Feedback files  
+      /Orchestrat/i,         // FIX: Add Orchestrator files
+      /Generator/i,          // FIX: Add Generator files
       /Types\.ixx$/,
       /Types\.h$/
     ];

@@ -1,188 +1,188 @@
 import Parser from 'tree-sitter';
-import * as path from 'path';
+import Cpp from 'tree-sitter-cpp';
 import * as fs from 'fs/promises';
-import { 
-  MethodSignature, 
-  ClassInfo,
-  ParameterInfo,
-  EnhancedModuleInfo 
-} from '../types/essential-features.js';
+import * as path from 'path';
+import { MethodSignature, ClassInfo, ParameterInfo } from '../types/essential-features.js';
 
-/**
- * Enhanced Tree-sitter Parser with better C++ understanding
- * 
- * This improves on the basic tree-sitter approach by:
- * - Better template handling
- * - Namespace tracking
- * - More accurate type extraction
- * - Better understanding of C++ idioms
- */
+// Re-export for convenience
+export { MethodSignature, ClassInfo, ParameterInfo };
+
+// Enhanced interface for tree-sitter parsing results
+interface EnhancedParseResult {
+  methods: MethodSignature[];
+  classes: ClassInfo[];
+  interfaces: ClassInfo[];
+  patterns: any[];
+  relationships: any[];
+  imports: string[];
+  exports: string[];
+}
+
 export class EnhancedTreeSitterParser {
   private parser: Parser;
-  private cpp: any;
-
+  private initialized = false;
+  
   constructor() {
     this.parser = new Parser();
   }
 
   async initialize(): Promise<void> {
-    // Dynamically load tree-sitter-cpp
+    if (this.initialized) return;
+    
     try {
-      const treeSitterCpp = await import('tree-sitter-cpp');
-      // When using dynamic imports, tree-sitter-cpp is wrapped in a module object
-      // and the actual language object is in the .default property
-      this.cpp = treeSitterCpp.default;
-      this.parser.setLanguage(this.cpp);
+      // Handle both static and dynamic imports of tree-sitter-cpp
+      let cppLanguage;
+      if (typeof Cpp === 'function') {
+        cppLanguage = Cpp;
+      } else if ((Cpp as any).default) {
+        cppLanguage = (Cpp as any).default;
+      } else {
+        // Try dynamic import as fallback
+        const treeSitterCpp = await import('tree-sitter-cpp');
+        cppLanguage = (treeSitterCpp as any).default || treeSitterCpp;
+      }
+      
+      this.parser.setLanguage(cppLanguage);
+      this.initialized = true;
     } catch (error) {
-      throw new Error('Failed to load tree-sitter-cpp: ' + error);
+      throw new Error(`Failed to initialize tree-sitter C++ parser: ${error}`);
     }
   }
 
-  async parseFile(filePath: string): Promise<EnhancedModuleInfo> {
-    const content = await fs.readFile(filePath, 'utf-8');
-    
-    // Check file size - tree-sitter has issues with files > 32KB
-    if (content.length > 256 * 1024) {
-      throw new Error(`File too large for tree-sitter (${Math.round(content.length / 1024)}KB). Maximum supported size is 256KB.`);
+  async parseFile(filePath: string): Promise<any> {
+    if (!this.initialized) {
+      await this.initialize();
     }
+
+    let content = await fs.readFile(filePath, 'utf-8');
     
-    // Validate content is not empty or corrupt
     if (!content || content.trim().length === 0) {
-      throw new Error(`File content is empty or invalid: ${filePath}`);
+      throw new Error(`File is empty or could not be read: ${filePath}`);
     }
     
-    // Check for null bytes or other invalid characters that might cause parser issues
-    if (content.includes('\0')) {
-      throw new Error(`File contains null bytes which cannot be parsed: ${filePath}`);
+    // Extract C++23 imports before preprocessing
+    const extractedImports = this.extractModuleImports(content);
+    
+    // Calculate appropriate buffer size for tree-sitter
+    const baseBufferSize = 1024 * 1024; // 1MB base
+    const contentBufferSize = Math.max(baseBufferSize, content.length * 2); // At least 2x content size
+    const maxBufferSize = 16 * 1024 * 1024; // 16MB max to prevent memory issues
+    const bufferSize = Math.min(contentBufferSize, maxBufferSize);
+    
+    if (content.length > 512 * 1024) { // 512KB
+      console.warn(`File ${filePath} is large (${Math.round(content.length / 1024)}KB), using ${Math.round(bufferSize / 1024)}KB buffer`);
     }
     
     let tree;
     try {
-      // Use larger buffer size to handle large files (tree-sitter default is 32KB)
-      const bufferSize = Math.max(262144, content.length + 1024); // At least 256KB, or file size + buffer
+      // Use calculated buffer size for tree-sitter
       tree = this.parser.parse(content, undefined, { bufferSize });
     } catch (error) {
-      throw new Error(`Tree-sitter parsing failed for ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+      // If parsing fails, try with preprocessing and larger buffer
+      console.warn(`Initial parse failed for ${filePath}, trying with preprocessing...`);
+      const processedContent = this.preprocessModuleSyntax(content);
+      const preprocessBufferSize = Math.min(processedContent.length * 3, maxBufferSize);
+      
+      try {
+        tree = this.parser.parse(processedContent, undefined, { bufferSize: preprocessBufferSize });
+      } catch (preprocessError) {
+        // Final attempt with maximum buffer size
+        console.warn(`Preprocessing failed, trying with maximum buffer size...`);
+        tree = this.parser.parse(processedContent, undefined, { bufferSize: maxBufferSize });
+      }
     }
     
     if (!tree || !tree.rootNode) {
-      throw new Error(`Tree-sitter produced invalid parse tree for ${filePath}`);
+      throw new Error(`Failed to parse file: ${filePath}`);
     }
     
-    const context = {
-      namespaces: [] as string[],
-      currentClass: undefined as string | undefined,
-      templates: new Map<string, string[]>()
+    // Initialize state object
+    const state = {
+      methods: [] as MethodSignature[],
+      classes: [] as ClassInfo[],
+      includes: [] as string[],
+      imports: [] as string[],
+      exports: new Set<string>(),
+      context: {
+        currentClass: undefined as string | undefined,
+        namespaces: [] as string[],
+        templates: new Map<string, string[]>(),
+      },
+      content: content
     };
+
+    // Walk the tree to extract symbols
+    this.walkTree(tree.rootNode, state);
     
-    const methods: MethodSignature[] = [];
-    const classes: ClassInfo[] = [];
-    const includes: any[] = [];
-    const exports: any[] = [];
-    
-    this.walkTree(tree.rootNode, {
-      content,
-      filePath,
-      context,
-      methods,
-      classes,
-      includes,
-      exports
-    });
-    
+    // Add extracted imports from preprocessing
+    extractedImports.forEach(imp => state.imports.push(imp));
+
+    // Deduplicate methods and classes before returning
+    const uniqueMethods = this.deduplicateMethods(state.methods);
+    const uniqueClasses = this.deduplicateClasses(state.classes);
+    const includes = Array.from(state.includes);
+    const imports = Array.from(state.imports);
+    const exports = Array.from(state.exports);
+
     return {
       path: filePath,
       relativePath: path.relative(process.cwd(), filePath),
-      methods,
-      classes,
-      interfaces: this.identifyInterfaces(classes),
-      relationships: this.extractRelationships(tree.rootNode, content),
+      methods: uniqueMethods,
+      classes: uniqueClasses,
+      interfaces: this.identifyInterfaces(uniqueClasses),
+      relationships: this.extractRelationshipsFromTree(tree.rootNode, content, uniqueMethods, uniqueClasses),
       patterns: this.extractPatterns(tree.rootNode, content),
-      imports: includes,
-      exports: [...this.identifyExports(methods, classes), ...exports]
+      imports: imports,
+      exports: [...this.identifyExports(uniqueMethods, uniqueClasses), ...exports]
     };
   }
 
   private walkTree(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
-    // Prevent infinite recursion
-    if (depth > 100) {
-      console.warn(`⚠️ Tree walk depth exceeded 100 at node type: ${node.type}`);
-      return;
-    }
-    
-    // Track performance for slow operations
-    const startTime = depth < 3 ? Date.now() : 0;
+    if (depth > 100) return;
     
     switch (node.type) {
       case 'namespace_definition':
         this.handleNamespace(node, state, depth);
         break;
-        
       case 'class_specifier':
       case 'struct_specifier':
         this.handleClass(node, state, depth);
         break;
-        
       case 'function_definition':
         this.handleFunction(node, state);
         break;
-        
       case 'declaration':
         this.handleDeclaration(node, state);
         break;
-        
-      // Enhanced: Handle enum declarations including enum class
-      case 'enum_specifier':
-        this.handleEnum(node, state);
-        break;
-        
-      case 'template_declaration':
-        this.handleTemplate(node, state);
-        break;
-        
       case 'preproc_include':
         this.handleInclude(node, state);
         break;
-        
-      // Enhanced: Handle C++23 module declarations
-      case 'module_declaration':
-        this.handleModuleDeclaration(node, state);
-        break;
-        
-      case 'import_declaration':
-        this.handleImportDeclaration(node, state);
-        break;
-        
-      // Enhanced: Better macro handling
-      case 'preproc_def':
-      case 'preproc_function_def':
-        this.handleMacroDefinition(node, state);
-        break;
-        
-      // Enhanced: Type alias handling for better type resolution
-      case 'alias_declaration':
-      case 'type_definition':
-        this.handleTypeAlias(node, state);
-        break;
-        
-      // Enhanced: Export declarations for C++23 modules
-      case 'export_declaration':
-        this.handleExportDeclaration(node, state, depth);
-        break;
-        
-      // Enhanced: Using declarations for better symbol tracking
-      case 'using_declaration':
-        this.handleUsingDeclaration(node, state);
-        break;
     }
-    
-    // Continue walking the tree
+
+    // CRITICAL FIX: Check for qualified method implementations that tree-sitter might miss
+    this.detectQualifiedMethodImplementations(node, state);
+
+    // Continue walking
     for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child) {
-        this.walkTree(child, state, depth + 1);
+      this.walkTree(node.child(i)!, state, depth + 1);
+    }
+  }
+
+  private handleNamespace(node: Parser.SyntaxNode, state: any, depth: number): void {
+    const nameNode = node.childForFieldName('name');
+    if (!nameNode) return;
+
+    const namespaceName = nameNode.text;
+    state.context.namespaces.push(namespaceName);
+
+    const bodyNode = node.childForFieldName('body');
+    if (bodyNode) {
+      for (let i = 0; i < bodyNode.childCount; i++) {
+        this.walkTree(bodyNode.child(i)!, state, depth + 1);
       }
     }
+
+    state.context.namespaces.pop();
   }
 
   private handleClass(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
@@ -238,32 +238,51 @@ export class EnhancedTreeSitterParser {
       signature.returnType = this.extractType(typeNode, state.content);
     }
     
-    // Check for const qualifier
-    const qualifiersNode = node.childForFieldName('qualifiers');
-    if (qualifiersNode && qualifiersNode.text.includes('const')) {
-      signature.isConst = true;
-    }
-    
-    // Set visibility based on context
-    signature.visibility = this.getCurrentVisibility(node);
-    
-    // Enhanced: Include namespace information
+    // Set visibility and namespace
+    signature.visibility = 'public'; // Default for free functions
     signature.namespace = state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined;
     
     // Check if it's a method or free function
     if (state.context.currentClass) {
       signature.className = state.context.currentClass;
-      // For methods, include class in qualified name
-      signature.qualifiedName = this.getQualifiedName(`${state.context.currentClass}::${signature.name}`, state.context.namespaces);
+      signature.qualifiedName = `${state.context.currentClass}::${signature.name}`;
     } else {
-      // For free functions, just use namespace qualification
-      signature.qualifiedName = this.getQualifiedName(signature.name, state.context.namespaces);
+      signature.qualifiedName = signature.name;
     }
     
-    // Mark as exported if in export namespace
-    signature.isExported = this.isInExportedNamespace(state);
-    
     state.methods.push(signature);
+  }
+
+  private handleDeclaration(node: Parser.SyntaxNode, state: any): void {
+    // Handle various declarations
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i)!;
+      if (child.type === 'function_declarator') {
+        // Function declaration without body
+        const signature = this.parseFunctionDeclarator(child, state.content);
+        if (signature) {
+          signature.visibility = 'public';
+          signature.namespace = state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined;
+          
+          if (state.context.currentClass) {
+            signature.className = state.context.currentClass;
+            signature.qualifiedName = `${state.context.currentClass}::${signature.name}`;
+          } else {
+            signature.qualifiedName = signature.name;
+          }
+          
+          state.methods.push(signature);
+        }
+      }
+    }
+  }
+
+  private handleInclude(node: Parser.SyntaxNode, state: any): void {
+    const pathNode = node.childForFieldName('path');
+    if (pathNode) {
+      const includePath = pathNode.text.replace(/[<>"]/g, '');
+      state.includes.push(includePath);
+    }
   }
 
   private parseFunctionDeclarator(node: Parser.SyntaxNode, content: string): MethodSignature | null {
@@ -275,23 +294,38 @@ export class EnhancedTreeSitterParser {
     while (current) {
       if (current.type === 'function_declarator') {
         const declarator = current.childForFieldName('declarator');
-        if (declarator?.type === 'identifier' || declarator?.type === 'field_identifier') {
+        if (declarator?.type === 'identifier') {
           nameNode = declarator;
-        } else if (declarator?.type === 'qualified_identifier') {
-          nameNode = declarator.lastChild;
+          parametersNode = current.childForFieldName('parameters');
+          break;
         }
-        parametersNode = current.childForFieldName('parameters');
+        current = declarator;
+      } else if (current.type === 'identifier') {
+        nameNode = current;
+        parametersNode = node.childForFieldName('parameters');
+        break;
+      } else {
         break;
       }
-      current = current.firstChild;
     }
-    
+
     if (!nameNode) return null;
-    
-    const signature: MethodSignature = {
+
+    const parameters: ParameterInfo[] = [];
+    if (parametersNode) {
+      for (let i = 0; i < parametersNode.childCount; i++) {
+        const paramNode = parametersNode.child(i)!;
+        if (paramNode.type === 'parameter_declaration') {
+          const param = this.parseParameter(paramNode, content);
+          if (param) parameters.push(param);
+        }
+      }
+    }
+
+    return {
       name: nameNode.text,
-      parameters: [],
-      returnType: 'void',
+      parameters,
+      returnType: 'void', // Will be set by caller
       visibility: 'public',
       isVirtual: false,
       isStatic: false,
@@ -301,29 +335,6 @@ export class EnhancedTreeSitterParser {
         column: nameNode.startPosition.column + 1
       }
     };
-    
-    // Parse parameters
-    if (parametersNode) {
-      signature.parameters = this.parseParameters(parametersNode, content);
-    }
-    
-    return signature;
-  }
-
-  private parseParameters(node: Parser.SyntaxNode, content: string): ParameterInfo[] {
-    const params: ParameterInfo[] = [];
-    
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child && child.type === 'parameter_declaration') {
-        const param = this.parseParameter(child, content);
-        if (param) {
-          params.push(param);
-        }
-      }
-    }
-    
-    return params;
   }
 
   private parseParameter(node: Parser.SyntaxNode, content: string): ParameterInfo | null {
@@ -336,975 +347,565 @@ export class EnhancedTreeSitterParser {
     let name = '';
     
     if (declaratorNode) {
-      // Handle various declarator types
-      if (declaratorNode.type === 'identifier') {
-        name = declaratorNode.text;
-      } else if (declaratorNode.type === 'pointer_declarator' || 
-                 declaratorNode.type === 'reference_declarator') {
-        const id = declaratorNode.lastChild;
-        if (id?.type === 'identifier') {
-          name = id.text;
-        }
-      }
-    }
-    
-    // Check for default value
-    let defaultValue: string | undefined;
-    const defaultNode = node.childForFieldName('default_value');
-    if (defaultNode) {
-      defaultValue = content.substring(defaultNode.startIndex, defaultNode.endIndex);
+      name = this.extractDeclaratorName(declaratorNode, content);
     }
     
     return {
       name,
       type,
-      defaultValue,
-      isConst: type.includes('const'),
-      isReference: type.includes('&') || declaratorNode?.type === 'reference_declarator',
-      isPointer: type.includes('*') || declaratorNode?.type === 'pointer_declarator'
+      defaultValue: undefined,
+      isConst: false,
+      isReference: false,
+      isPointer: false
     };
   }
 
   private extractType(node: Parser.SyntaxNode, content: string): string {
-    // Handle various type constructs
-    let type = content.substring(node.startIndex, node.endIndex).trim();
-    
-    // Clean up the type string
-    type = type.replace(/\s+/g, ' ');
-    
-    // Handle common patterns
-    if (node.type === 'auto') {
-      return 'auto';
+    return content.slice(node.startIndex, node.endIndex).trim();
+  }
+
+  private extractDeclaratorName(node: Parser.SyntaxNode, content: string): string {
+    if (node.type === 'identifier') {
+      return node.text;
     }
     
-    return type;
+    // Handle pointer declarators, etc.
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i)!;
+      if (child.type === 'identifier') {
+        return child.text;
+      }
+    }
+    
+    return '';
   }
 
   private extractBaseClasses(node: Parser.SyntaxNode, content: string): string[] {
-    const bases: string[] = [];
+    const baseClasses: string[] = [];
     
     for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child && (child.type === 'base_class' || child.type === 'type_identifier')) {
-        bases.push(child.text);
+      const child = node.child(i)!;
+      if (child.type === 'type_identifier') {
+        baseClasses.push(child.text);
       }
     }
     
-    return bases;
+    return baseClasses;
   }
 
-
-
-  private getCurrentVisibility(node: Parser.SyntaxNode): 'public' | 'private' | 'protected' {
-    // Walk up the tree to find access specifier
-    let current: Parser.SyntaxNode | null = node;
-    let lastAccessSpecifier: string = 'private';
-    
-    while (current) {
-      if (current.type === 'access_specifier') {
-        const label = current.firstChild;
-        if (label) {
-          lastAccessSpecifier = label.text;
-        }
-      }
-      current = current.previousSibling;
-    }
-    
-    return lastAccessSpecifier as any;
-  }
-
-  private handleNamespace(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
-    const nameNode = node.childForFieldName('name');
-    let namespaceParts: string[] = [];
-    
-    if (nameNode) {
-      // Handle qualified namespace identifiers like "PlanetGen::Rendering"
-      const namespaceName = nameNode.text;
-      // console.log(`🔍 Detected namespace node: "${namespaceName}" (type: ${nameNode.type})`);
-      
-      if (nameNode.type === 'qualified_identifier') {
-        // For qualified identifiers, extract all parts
-        namespaceParts = this.extractQualifiedIdentifierParts(nameNode);
-      } else if (namespaceName.includes('::')) {
-        // Fallback: split by ::
-        namespaceParts = namespaceName.split('::').map(part => part.trim()).filter(part => part);
-      } else {
-        namespaceParts = [namespaceName];
-      }
-      
-      // console.log(`   Namespace parts: [${namespaceParts.join(', ')}]`);
-      
-      // Push each namespace part
-      namespaceParts.forEach(part => {
-        state.context.namespaces.push(part);
-      });
-    }
-    
-    // Process namespace body
-    const bodyNode = node.childForFieldName('body');
-    if (bodyNode) {
-      for (let i = 0; i < bodyNode.childCount; i++) {
-        const child = bodyNode.child(i);
-        if (child) {
-          this.walkTree(child, state, depth + 1);
-        }
-      }
-    }
-    
-    // Pop namespace levels when done
-    for (let i = 0; i < namespaceParts.length; i++) {
-      if (state.context.namespaces.length > 0) {
-        state.context.namespaces.pop();
-      }
-    }
-  }
-  
-  /**
-   * Extract parts from a qualified identifier node
-   */
-  private extractQualifiedIdentifierParts(node: Parser.SyntaxNode): string[] {
-    const parts: string[] = [];
-    
-    // Traverse the qualified identifier structure
-    let current: Parser.SyntaxNode | null = node;
-    while (current) {
-      if (current.type === 'identifier') {
-        parts.unshift(current.text); // Add to beginning
-        break;
-      } else if (current.type === 'qualified_identifier') {
-        // Get the right-most identifier
-        const rightNode = current.lastChild;
-        if (rightNode && rightNode.type === 'identifier') {
-          parts.unshift(rightNode.text);
-        }
-        // Move to the left part
-        current = current.firstChild;
-      } else {
-        break;
-      }
-    }
-    
-    return parts;
-  }
-
-  private handleTemplate(node: Parser.SyntaxNode, state: any): void {
-    const parametersNode = node.childForFieldName('parameters');
-    const declarationNode = node.lastChild;
-    
-    if (parametersNode && declarationNode) {
-      const templateParams = this.extractTemplateParameters(parametersNode);
-      
-      // Store template parameters for the next declaration
-      if (declarationNode.type === 'class_specifier' || 
-          declarationNode.type === 'function_definition') {
-        const nameNode = declarationNode.childForFieldName('name');
-        if (nameNode) {
-          state.context.templates.set(nameNode.text, templateParams);
-        }
-      }
+  private extractClassMembersEnhanced(bodyNode: Parser.SyntaxNode, classInfo: ClassInfo, state: any, depth: number): void {
+    // Walk through class body to find methods and members
+    for (let i = 0; i < bodyNode.childCount; i++) {
+      this.walkTree(bodyNode.child(i)!, state, depth + 1);
     }
   }
 
-  private extractTemplateParameters(node: Parser.SyntaxNode): string[] {
-    const params: string[] = [];
-    
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child && (child.type === 'type_parameter_declaration' || 
-                    child.type === 'variadic_type_parameter_declaration')) {
-        const nameNode = child.childForFieldName('name');
-        if (nameNode) {
-          params.push(nameNode.text);
-        }
-      }
-    }
-    
-    return params;
-  }
-
-  private handleInclude(node: Parser.SyntaxNode, state: any): void {
-    const pathNode = node.lastChild;
-    if (pathNode && (pathNode.type === 'string_literal' || pathNode.type === 'system_lib_string')) {
-      const includePath = pathNode.text.slice(1, -1); // Remove quotes
-      state.includes.push({
-        module: includePath,
-        symbols: [],
-        isSystem: pathNode.type === 'system_lib_string',
-        location: {
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column + 1
-        }
-      });
-    }
-  }
-
-  private handleDeclaration(node: Parser.SyntaxNode, state: any): void {
-    // Handle various declarations like typedefs, using declarations, etc.
-    if (node.text.includes('typedef')) {
-      // Handle typedef
-    } else if (node.text.includes('using')) {
-      // Handle using declarations
-    }
-    
-    // Check for enum declarations within declarations
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (child && child.type === 'enum_specifier') {
-        this.handleEnum(child, state);
-      }
-    }
-  }
-
-  private identifyInterfaces(classes: ClassInfo[]): any[] {
-    // Identify classes that are pure virtual (interfaces)
+  private identifyInterfaces(classes: ClassInfo[]): ClassInfo[] {
     return classes.filter(c => {
       // Simple heuristic: class with only pure virtual methods
       return c.name.startsWith('I') && c.methods.every(m => m.isVirtual);
     });
   }
 
-  private currentClassContext: string | undefined;
-  private currentVisibilityContext: 'public' | 'private' | 'protected' = 'private';
-
-  private extractRelationships(root: Parser.SyntaxNode, content: string): any[] {
-    const relationships: any[] = [];
-    const cursor = root.walk();
-
-    const visit = (currentNode: Parser.SyntaxNode, currentClass?: string) => {
-      if (currentNode.type === 'class_specifier') {
-        const nameNode = currentNode.childForFieldName('name');
-        if (nameNode) {
-          currentClass = nameNode.text;
-        }
-      }
-
-      // Look for function calls, e.g., otherObject.doSomething()
-      if (currentNode.type === 'call_expression') {
-        const functionNode = currentNode.childForFieldName('function');
-        if (functionNode && functionNode.type === 'field_expression') {
-          const objectNode = functionNode.childForFieldName('argument');
-          const methodNode = functionNode.childForFieldName('field');
-
-          if (objectNode && methodNode && currentClass) {
-            relationships.push({
-              source: currentClass,
-              target: objectNode.text, // Note: This is a simplification
-              type: 'uses'
-            });
-          }
-        }
-      }
-
-      for (let i = 0; i < currentNode.childCount; i++) {
-        visit(currentNode.child(i)!, currentClass);
-      }
-    };
-
-    visit(root);
-    return relationships;
+  private identifyExports(methods: MethodSignature[], classes: ClassInfo[]): string[] {
+    const exports: string[] = [];
+    exports.push(...methods.map(m => m.name));
+    exports.push(...classes.map(c => c.name));
+    return exports;
   }
 
   private extractPatterns(root: Parser.SyntaxNode, content: string): any[] {
     const patterns: any[] = [];
-    const classes = this.extractClasses(root, content); // Pass content
+    // Basic pattern detection - can be enhanced
+    return patterns;
+  }
 
-    for (const classInfo of classes) {
-      if (classInfo.name.endsWith('Factory')) {
-        const factoryMethods = classInfo.methods.filter(m => 
-          m.name.startsWith('create') &&
-          (m.returnType.includes('std::unique_ptr') || m.returnType.includes('std::shared_ptr'))
-        );
-
-        if (factoryMethods.length > 0) {
-          patterns.push({
-            type: 'Factory',
-            name: classInfo.name,
-            location: classInfo.location,
-            confidence: 0.8,
-            details: {
-              createdType: factoryMethods[0].returnType.match(/<(.*)>/)?.[1] || 'unknown',
-              factoryMethods: factoryMethods.map(m => m.name)
-            }
+  // NEW: Enhanced relationship extraction
+  private extractRelationshipsFromTree(root: Parser.SyntaxNode, content: string, methods: MethodSignature[], classes: ClassInfo[]): any[] {
+    const relationships: any[] = [];
+    const contentLines = content.split('\n');
+    
+    // Add inheritance relationships from classes
+    for (const cls of classes) {
+      for (const baseClass of cls.baseClasses || []) {
+        relationships.push({
+          from: cls.name,
+          to: baseClass,
+          type: 'inherits',
+          confidence: 0.95
+        });
+      }
+    }
+    
+    // Extract method call relationships by analyzing method bodies
+    for (const method of methods) {
+      if (!method.location) continue; // Allow both class methods and global functions
+      
+      // Find the method's body in the source code
+      const methodRelationships = this.extractMethodCallRelationships(
+        method, content, contentLines, methods, classes
+      );
+      relationships.push(...methodRelationships);
+    }
+    
+    return relationships;
+  }
+  
+  private extractMethodCallRelationships(
+    sourceMethod: MethodSignature, 
+    content: string, 
+    contentLines: string[], 
+    allMethods: MethodSignature[], 
+    allClasses: ClassInfo[]
+  ): any[] {
+    const relationships: any[] = [];
+    
+    // Find method body boundaries (crude but effective for C++)
+    const startLine = sourceMethod.location.line;
+    const methodBodyStart = this.findMethodBodyStart(contentLines, startLine);
+    const methodBodyEnd = this.findMethodBodyEnd(contentLines, methodBodyStart);
+    
+    if (methodBodyStart === -1 || methodBodyEnd === -1) return relationships;
+    
+    // Analyze each line in the method body for function calls
+    for (let lineNum = methodBodyStart; lineNum <= methodBodyEnd; lineNum++) {
+      const line = contentLines[lineNum] || '';
+      const calls = this.extractCallsFromLine(line, lineNum + 1);
+      
+      for (const call of calls) {
+        // Find matching methods
+        const targets = this.findMatchingMethods(call, allMethods, sourceMethod.className || '');
+        
+        for (const target of targets) {
+          relationships.push({
+            from: sourceMethod.name,
+            to: target.name,
+            type: 'calls',
+            confidence: target.confidence
           });
         }
       }
     }
-    return patterns;
+    
+    return relationships;
+  }
+  
+  public findMethodBodyStart(contentLines: string[], methodStartLine: number): number {
+    // Handle C++ constructor initialization lists and method bodies accurately
+    let foundOpenBrace = false;
+    let braceLineIndex = -1;
+    
+    // Look for opening brace, but be smarter about constructor initialization lists
+    for (let i = methodStartLine - 1; i < Math.min(contentLines.length, methodStartLine + 15); i++) {
+      const line = contentLines[i] || '';
+      
+      if (line.includes('{')) {
+        braceLineIndex = i;
+        foundOpenBrace = true;
+        
+        // Check if this is just an empty method body: {}
+        if (line.trim().endsWith('{}')) {
+          // Empty method body - no actual body to analyze
+          return -1;
+        }
+        
+        // Check if opening and closing brace are on the same line (single-line method)
+        const openBraceIndex = line.indexOf('{');
+        const closeBraceIndex = line.indexOf('}', openBraceIndex + 1);
+        if (openBraceIndex !== -1 && closeBraceIndex !== -1) {
+          // Single-line method body like: { return value; }
+          return i; // Include this line as the only body line
+        }
+        
+        // Multi-line method body - return line after opening brace
+        return i + 1;
+      }
+    }
+    
+    return -1;
+  }
+  
+  public findMethodBodyEnd(contentLines: string[], bodyStartLine: number): number {
+    if (bodyStartLine === -1) return -1;
+    
+    const startLine = contentLines[bodyStartLine] || '';
+    
+    // Check if this is a single-line method (opening and closing brace on same line)
+    const openBraceIndex = startLine.indexOf('{');
+    const closeBraceIndex = startLine.indexOf('}', openBraceIndex + 1);
+    if (openBraceIndex !== -1 && closeBraceIndex !== -1) {
+      // Single-line method - start and end are the same line
+      return bodyStartLine;
+    }
+    
+    // Multi-line method - find matching closing brace
+    let braceCount = 0;
+    let foundFirstBrace = false;
+    
+    for (let i = bodyStartLine; i < contentLines.length; i++) {
+      const line = contentLines[i] || '';
+      
+      for (const char of line) {
+        if (char === '{') {
+          braceCount++;
+          foundFirstBrace = true;
+        } else if (char === '}') {
+          braceCount--;
+          if (foundFirstBrace && braceCount === 0) {
+            return i;
+          }
+        }
+      }
+    }
+    
+    return -1;
+  }
+  
+  public extractCallsFromLine(line: string, lineNumber: number): Array<{pattern: string, methodName: string, objectName?: string, lineNumber: number}> {
+    const calls: Array<{pattern: string, methodName: string, objectName?: string, lineNumber: number}> = [];
+    
+    // Pattern 1: object.method() or object->method()
+    const memberCallRegex = /(\w+)(?:\.|\->)(\w+)\s*\(/g;
+    let match;
+    while ((match = memberCallRegex.exec(line)) !== null) {
+      calls.push({
+        pattern: `${match[1]}.${match[2]}()`,
+        methodName: match[2],
+        objectName: match[1],
+        lineNumber: lineNumber
+      });
+    }
+    
+    // Pattern 2: Direct method calls: method()
+    const directCallRegex = /(?<![.\w])(\w+)\s*\(/g;
+    while ((match = directCallRegex.exec(line)) !== null) {
+      const methodName = match[1];
+      
+      // Skip common C++ keywords and operators
+      if (['if', 'for', 'while', 'switch', 'return', 'throw', 'catch', 'sizeof', 'typeof', 'static_cast', 'dynamic_cast', 'const_cast', 'reinterpret_cast'].includes(methodName)) {
+        continue;
+      }
+      
+      // Skip if it's already captured as a member call
+      const alreadyCaptured = calls.some(call => call.methodName === methodName && call.lineNumber === lineNumber);
+      if (!alreadyCaptured) {
+        calls.push({
+          pattern: `${methodName}()`,
+          methodName: methodName,
+          lineNumber: lineNumber
+        });
+      }
+    }
+    
+    return calls;
+  }
+  
+  private findMatchingMethods(
+    call: {pattern: string, methodName: string, objectName?: string, lineNumber: number}, 
+    allMethods: MethodSignature[], 
+    sourceClassName: string
+  ): Array<{name: string, className: string | undefined, confidence: number}> {
+    const matches: Array<{name: string, className: string | undefined, confidence: number}> = [];
+    
+    // Find methods with matching names, but exclude duplicates
+    const candidateMethods = allMethods.filter(method => method.name === call.methodName);
+    
+    // Deduplicate candidates by preferring class methods over global duplicates
+    const uniqueCandidates = new Map<string, MethodSignature>();
+    for (const method of candidateMethods) {
+      const key = `${method.name}::${method.location?.line || 0}::${method.parameters?.length || 0}`;
+      
+      if (!uniqueCandidates.has(key)) {
+        uniqueCandidates.set(key, method);
+      } else {
+        // Prefer class method over global method for same location
+        const existing = uniqueCandidates.get(key)!;
+        if (method.className && !existing.className) {
+          uniqueCandidates.set(key, method);
+        }
+      }
+    }
+    
+    for (const method of uniqueCandidates.values()) {
+      // Skip self-references unless it's a legitimate recursive call
+      if (method.className === sourceClassName && method.name === call.methodName) {
+        // Only allow recursive calls if there's clear evidence (e.g., parameters, conditional context)
+        // For now, skip all self-references to avoid false positives
+        continue;
+      }
+      
+      let confidence = 0.5; // Base confidence
+      
+      // Same class methods get highest confidence
+      if (method.className === sourceClassName) {
+        confidence = 0.9;
+      }
+      // Methods in other classes get medium confidence
+      else if (method.className) {
+        confidence = 0.7;
+      }
+      // Global functions get lowest confidence
+      else {
+        confidence = 0.4;
+      }
+      
+      // If this is a member call (object.method), try to match object type
+      if (call.objectName && method.className) {
+        // TODO: Could enhance this by tracking member variable types
+        confidence *= 0.8; // Slightly lower confidence for member calls without type info
+      }
+      
+      matches.push({
+        name: method.name,
+        className: method.className,
+        confidence: confidence
+      });
+    }
+    
+    return matches;
   }
 
-  // Helper method to extract class information for pattern analysis
-  private extractClasses(root: Parser.SyntaxNode, content: string): ClassInfo[] {
-      const classes: ClassInfo[] = [];
-      const cursor = root.walk();
-      const visit = (node: Parser.SyntaxNode) => {
-          if (node.type === 'class_specifier' || node.type === 'struct_specifier') {
-              const nameNode = node.childForFieldName('name');
-              if (nameNode) {
-                  const className = nameNode.text;
-                  const classInfo: ClassInfo = {
-                      name: className,
-                      namespace: '', // Will be populated by handleNamespace
-                      baseClasses: [],
-                      interfaces: [],
-                      methods: [],
-                      members: [],
-                      isTemplate: false,
-                      templateParams: [],
-                      location: {
-                          line: nameNode.startPosition.row + 1,
-                          column: nameNode.startPosition.column + 1
-                      }
-                  };
+  private preprocessModuleSyntax(content: string): string {
+    // Handle C++23 module syntax that tree-sitter-cpp might not support
+    let processed = content;
+    
+    // Convert module declaration to comment to avoid parsing errors
+    processed = processed.replace(/^module;/gm, '// module;');
+    processed = processed.replace(/^export module\s+([^;]+);/gm, '// export module $1;');
+    processed = processed.replace(/^import\s+([^;]+);/gm, '// import $1;');
+    
+    // Handle C++20/23 features that might cause issues
+    processed = processed.replace(/\bexport\s+namespace\b/g, 'namespace');
+    processed = processed.replace(/\bexport\s+(?=class|struct|enum|template)/g, '');
+    
+    // Handle concepts syntax more aggressively
+    processed = processed.replace(/\brequires\s*\([^)]+\)\s*\{[^}]+\}/g, 'true');
+    processed = processed.replace(/\bif\s+constexpr\s*\(/g, 'if (');
+    processed = processed.replace(/\bconstexpr\s+(?=if|for|while)/g, '');
+    
+    // Handle template syntax that might be problematic
+    processed = processed.replace(/template<typename\s+(\w+)>/g, 'template<class $1>');
+    processed = processed.replace(/template<.*?requires.*?>/g, 'template<class T>');
+    
+    // Handle lambda expressions that might cause issues
+    processed = processed.replace(/\[\s*\]\s*\([^)]*\)\s*mutable/g, '[](auto)');
+    processed = processed.replace(/\[\s*=\s*\]\s*\([^)]*\)/g, '[=](auto)');
+    
+    // Handle auto return types that might be problematic
+    processed = processed.replace(/\->\s*auto\s*\{/g, '-> void {');
+    
+    // Handle C++20 spaceship operator
+    processed = processed.replace(/<=>/g, '== 0 ? 0 : 1');
+    
+    // Handle designated initializers that might cause issues
+    processed = processed.replace(/\{\s*\.\w+\s*=/g, '{');
+    
+    // Handle attribute syntax
+    processed = processed.replace(/\[\[.*?\]\]/g, '');
+    
+    return processed;
+  }
 
-                  // Temporarily set current class context for method/member parsing
-                  const oldCurrentClass = this.currentClassContext;
-                  this.currentClassContext = className;
+  private deduplicateMethods(methods: MethodSignature[]): MethodSignature[] {
+    const uniqueMethods = new Map<string, MethodSignature>();
+    
+    for (const method of methods) {
+      // Create a unique key based on method signature and location
+      const key = `${method.className || 'global'}::${method.name}::${method.location?.line || 0}::${method.parameters?.length || 0}`;
+      
+      if (!uniqueMethods.has(key)) {
+        uniqueMethods.set(key, method);
+      } else {
+        // If duplicate, prefer the one with className over global
+        const existing = uniqueMethods.get(key)!;
+        if (method.className && !existing.className) {
+          uniqueMethods.set(key, method);
+        }
+      }
+    }
+    
+    return Array.from(uniqueMethods.values());
+  }
 
-                  // Extract members and methods within this class
-                  const bodyNode = node.childForFieldName('body');
-                  if (bodyNode) {
-                      let currentVisibility: 'public' | 'private' | 'protected' = 
-                          node.type === 'struct_specifier' ? 'public' : 'private';
+  private deduplicateClasses(classes: ClassInfo[]): ClassInfo[] {
+    const uniqueClasses = new Map<string, ClassInfo>();
+    
+    for (const cls of classes) {
+      // Create a unique key based on class name and location
+      const key = `${cls.name}::${cls.location?.line || 0}`;
+      
+      if (!uniqueClasses.has(key)) {
+        uniqueClasses.set(key, cls);
+      }
+    }
+    
+    return Array.from(uniqueClasses.values());
+  }
 
-                      for (let i = 0; i < bodyNode.childCount; i++) {
-                          const child = bodyNode.child(i);
-                          if (!child) continue;
-
-                          if (child.type === 'access_specifier') {
-                              const labelNode = child.firstChild;
-                              if (labelNode) {
-                                  currentVisibility = labelNode.text.replace(':', '').trim() as any;
-                              }
-                          } else if (child.type === 'field_declaration') {
-                              const field = this.parseFieldDeclaration(child, content, currentVisibility);
-                              if (field) {
-                                  classInfo.members.push(field);
-                              }
-                          } else if (child.type === 'function_definition' || child.type === 'declaration') {
-                              const method = this.parseFunctionDeclarator(child.childForFieldName('declarator')!, content);
-                              if (method) {
-                                  method.visibility = currentVisibility;
-                                  method.className = className;
-                                  classInfo.methods.push(method);
-                              }
-                          }
-                      }
-                  }
-                  classes.push(classInfo);
-
-                  // Restore previous class context
-                  this.currentClassContext = oldCurrentClass;
-              }
-          }
-          for (let i = 0; i < node.childCount; i++) {
-              const child = node.child(i);
-              if (child) {
-                  visit(child);
-              }
-          }
+  /**
+   * CRITICAL FIX: Detect qualified method implementations that tree-sitter might miss
+   * This is essential for C++23 module files where class definitions and implementations are separate
+   */
+  private detectQualifiedMethodImplementations(node: Parser.SyntaxNode, state: any): void {
+    const nodeText = node.text;
+    
+    // Look for qualified method implementations: ClassName::methodName(...) {
+    const qualifiedMethodRegex = /([a-zA-Z_][a-zA-Z0-9_:]*)::(~?[a-zA-Z_][a-zA-Z0-9_]*?)\s*\([^)]*\)\s*(?:const\s*)?\s*\{/g;
+    
+    let match;
+    while ((match = qualifiedMethodRegex.exec(nodeText)) !== null) {
+      const fullQualifiedName = match[1];
+      const methodName = match[2];
+      
+      // Extract the class name (last part of qualified name)
+      const nameParts = fullQualifiedName.split('::');
+      const className = nameParts[nameParts.length - 1];
+      const namespace = nameParts.length > 1 ? nameParts.slice(0, -1).join('::') : undefined;
+      
+      // Find the method location in the source
+      const methodStart = node.startIndex + match.index;
+      const methodPos = this.getLineColumnFromIndex(state.content, methodStart);
+      
+      // Extract return type (look backwards from the match)
+      const beforeMatch = state.content.substring(Math.max(0, methodStart - 200), methodStart);
+      const returnType = this.extractReturnTypeFromPrecedingText(beforeMatch, methodName);
+      
+      // Extract parameters from the matched text
+      const paramMatch = match[0].match(/\(([^)]*)\)/);
+      const parameters = paramMatch ? this.parseParametersFromString(paramMatch[1]) : [];
+      
+      const signature: MethodSignature = {
+        name: methodName,
+        className: className,
+        qualifiedName: `${className}::${methodName}`,
+        parameters: parameters,
+        returnType: returnType || 'auto',
+        visibility: 'public' as const,
+        isVirtual: false,
+        isStatic: false,
+        isConst: match[0].includes('const'),
+        namespace: namespace,
+        location: methodPos
       };
-      visit(root);
-      return classes;
+      
+      // Check if we already have this method to avoid duplicates
+      const existingMethod = state.methods.find((m: MethodSignature) => 
+        m.name === methodName && 
+        m.className === className && 
+        Math.abs((m.location?.line || 0) - (methodPos.line || 0)) < 3
+      );
+      
+      if (!existingMethod) {
+        state.methods.push(signature);
+      }
+    }
   }
-
-  private identifyExports(methods: MethodSignature[], classes: ClassInfo[]): any[] {
-    const exports: any[] = [];
+  
+  /**
+   * Convert byte index to line/column position
+   */
+  private getLineColumnFromIndex(content: string, index: number): { line: number; column: number } {
+    const beforeIndex = content.substring(0, index);
+    const lines = beforeIndex.split('\n');
+    return {
+      line: lines.length,
+      column: lines[lines.length - 1].length + 1
+    };
+  }
+  
+  /**
+   * Extract return type from text preceding a method implementation
+   */
+  private extractReturnTypeFromPrecedingText(text: string, methodName: string): string {
+    // Look for return type patterns before the qualified method name
+    const lines = text.split('\n');
+    const lastLine = lines[lines.length - 1];
     
-    // Export public classes
-    classes.forEach(c => {
-      exports.push({
-        symbol: c.name,
-        type: 'class' as const,
-        signature: `class ${c.name}`,
-        location: c.location
-      });
-    });
+    // Common patterns:
+    // "bool ClassName::methodName" -> "bool"
+    // "void ClassName::methodName" -> "void"
+    // "std::unique_ptr<Type> ClassName::methodName" -> "std::unique_ptr<Type>"
+    const returnTypeMatch = lastLine.match(/^\s*([^\s]+(?:\s*<[^>]+>)?(?:\s*[*&]*)?)\s+[a-zA-Z_][a-zA-Z0-9_:]*::[a-zA-Z_]/);
     
-    // Export public methods
-    methods
-      .filter(m => m.visibility === 'public' || !m.className)
-      .forEach(m => {
-        exports.push({
-          symbol: m.name,
-          type: 'function' as const,
-          signature: `${m.returnType} ${m.name}(${m.parameters.map(p => p.type).join(', ')})`,
-          location: m.location
+    if (returnTypeMatch) {
+      return returnTypeMatch[1].trim();
+    }
+    
+    // Fallback: look for common return types
+    if (lastLine.includes('bool')) return 'bool';
+    if (lastLine.includes('void')) return 'void';
+    if (lastLine.includes('int')) return 'int';
+    if (lastLine.includes('float')) return 'float';
+    if (lastLine.includes('double')) return 'double';
+    if (lastLine.includes('size_t')) return 'size_t';
+    if (lastLine.includes('uint32_t')) return 'uint32_t';
+    
+    return 'auto'; // Default fallback
+  }
+  
+  /**
+   * Parse parameters from parameter string
+   */
+  private parseParametersFromString(paramStr: string): ParameterInfo[] {
+    if (!paramStr.trim()) return [];
+    
+    const parameters: ParameterInfo[] = [];
+    const paramTokens = paramStr.split(',');
+    
+    for (const token of paramTokens) {
+      const trimmed = token.trim();
+      if (!trimmed) continue;
+      
+      // Basic parameter parsing: "type name" or "type name = default"
+      const paramMatch = trimmed.match(/^(.+?)\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*=\s*(.+))?$/);
+      
+      if (paramMatch) {
+        parameters.push({
+          name: paramMatch[2],
+          type: paramMatch[1].trim(),
+          defaultValue: paramMatch[3]?.trim(),
+          isConst: trimmed.includes('const'),
+          isReference: trimmed.includes('&'),
+          isPointer: trimmed.includes('*')
         });
-      });
-    
-    return exports;
-  }
-
-  // Enhanced handlers for better C++ understanding
-
-  /**
-   * Handle C++23 module declarations: export module foo.bar;
-   */
-  private handleModuleDeclaration(node: Parser.SyntaxNode, state: any): void {
-    const moduleNameNode = node.childForFieldName('name');
-    if (moduleNameNode) {
-      const moduleName = moduleNameNode.text;
-      // console.log(`📦 Found module declaration: ${moduleName}`);
-      
-      // Add to exports if it's an export module
-      const isExport = node.text.startsWith('export');
-      if (isExport) {
-        state.includes.push({
-          module: moduleName,
-          symbols: [],
-          isSystem: false,
-          isModuleExport: true,
-          location: {
-            line: node.startPosition.row + 1,
-            column: node.startPosition.column + 1
-          }
+      } else {
+        // Fallback for complex types
+        parameters.push({
+          name: `param${parameters.length}`,
+          type: trimmed,
+          isConst: trimmed.includes('const'),
+          isReference: trimmed.includes('&'),
+          isPointer: trimmed.includes('*')
         });
       }
     }
+    
+    return parameters;
   }
-
+  
   /**
-   * Handle C++23 import declarations: import foo.bar;
+   * Extract C++23 module imports from source code
    */
-  private handleImportDeclaration(node: Parser.SyntaxNode, state: any): void {
-    const moduleNameNode = node.childForFieldName('module_name');
-    if (moduleNameNode) {
-      const moduleName = moduleNameNode.text;
-      // console.log(`📥 Found import declaration: ${moduleName}`);
-      
-      state.includes.push({
-        module: moduleName,
-        symbols: [],
-        isSystem: false,
-        isModuleImport: true,
-        location: {
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column + 1
-        }
-      });
-    }
-  }
-
-  /**
-   * Enhanced macro handling for better symbol resolution
-   */
-  private handleMacroDefinition(node: Parser.SyntaxNode, state: any): void {
-    const nameNode = node.childForFieldName('name');
-    if (!nameNode) return;
-
-    const macroName = nameNode.text;
-    const macroBody = node.text.substring(nameNode.endIndex);
-
-    // Track macros that might define types or functions
-    if (!state.context.macros) {
-      state.context.macros = new Map<string, string>();
-    }
-    
-    state.context.macros.set(macroName, macroBody.trim());
-
-    // Detect common patterns
-    if (macroBody.includes('class') || macroBody.includes('struct')) {
-      // console.log(`🔍 Macro ${macroName} might define types`);
-    } else if (macroBody.includes('(') && macroBody.includes(')')) {
-      // console.log(`🔍 Macro ${macroName} might define functions`);
-    }
-  }
-
-  /**
-   * Handle type aliases for better type resolution
-   */
-  private handleTypeAlias(node: Parser.SyntaxNode, state: any): void {
-    const nameNode = node.childForFieldName('name');
-    const typeNode = node.childForFieldName('type');
-    
-    if (!nameNode || !typeNode) return;
-
-    const aliasName = nameNode.text;
-    const originalType = this.extractType(typeNode, state.content);
-
-    // Track type aliases for better type resolution
-    if (!state.context.typeAliases) {
-      state.context.typeAliases = new Map<string, string>();
-    }
-    
-    state.context.typeAliases.set(aliasName, originalType);
-    // console.log(`Type alias: ${aliasName} -> ${originalType}`);
-  }
-
-  /**
-   * Handle export declarations: export { ... } or export class/function
-   * Enhanced to understand export namespace patterns
-   */
-  private handleExportDeclaration(node: Parser.SyntaxNode, state: any, depth: number = 0): void {
-    const content = state.content;
-    const exportText = content.substring(node.startIndex, node.endIndex);
-    
-    // console.log(`📤 Processing export declaration: ${exportText.substring(0, 100)}...`);
-
-    // Handle export namespace - mark current context as exported
-    if (exportText.includes('namespace')) {
-      // console.log(`   Contains namespace keyword`);
-      
-      // Look for namespace_definition child
-      for (let i = 0; i < node.childCount; i++) {
-        const child = node.child(i);
-        if (child && child.type === 'namespace_definition') {
-          // console.log(`   Found namespace_definition child`);
-          
-          // Mark that we're in an exported namespace context
-          if (!state.context.exportedNamespaces) {
-            state.context.exportedNamespaces = new Set<string>();
-          }
-          
-          // Handle the namespace directly
-          this.handleNamespace(child, state, depth);
-          
-          // Mark the namespace as exported AFTER processing it
-          const currentNamespace = state.context.namespaces.join('::');
-          if (currentNamespace) {
-            state.context.exportedNamespaces.add(currentNamespace);
-            // console.log(`📤 Marked export namespace: ${currentNamespace}`);
-          }
-          return;
-        }
-      }
-    }
-
-    // Handle export blocks: export { ... }
-    if (exportText.includes('{') && exportText.includes('}')) {
-      this.parseExportBlock(node, state);
-      return;
-    }
-
-    // Handle direct exports: export class/function/variable
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (!child) continue;
-
-      switch (child.type) {
-        case 'class_specifier':
-        case 'struct_specifier':
-          const className = child.childForFieldName('name');
-          if (className) {
-            const qualifiedName = this.getQualifiedName(className.text, state.context.namespaces);
-            this.addExport(state, qualifiedName, 'class', child);
-          }
-          break;
-
-        case 'function_definition':
-          const funcDeclarator = child.childForFieldName('declarator');
-          if (funcDeclarator) {
-            const funcName = this.extractFunctionName(funcDeclarator);
-            if (funcName) {
-              const qualifiedName = this.getQualifiedName(funcName, state.context.namespaces);
-              this.addExport(state, qualifiedName, 'function', child);
-            }
-          }
-          break;
-
-        case 'declaration':
-          // Handle variable declarations, using declarations, etc.
-          this.handleExportedDeclaration(child, state);
-          break;
-      }
-    }
-  }
-
-  /**
-   * Parse export block content: export { using statements, declarations }
-   */
-  private parseExportBlock(node: Parser.SyntaxNode, state: any): void {
-    const content = state.content;
-    
-    // Find the block content between { and }
-    const blockStart = node.text.indexOf('{');
-    const blockEnd = node.text.lastIndexOf('}');
-    
-    if (blockStart === -1 || blockEnd === -1) return;
-    
-    const blockContent = node.text.substring(blockStart + 1, blockEnd);
-    const lines = blockContent.split('\n');
+  private extractModuleImports(content: string): string[] {
+    const imports: string[] = [];
+    const lines = content.split('\n');
     
     for (const line of lines) {
-      const cleanLine = line.trim();
-      if (!cleanLine || cleanLine.startsWith('//')) continue;
+      const trimmedLine = line.trim();
       
-      // Parse using alias: using Type = OtherType;
-      const usingAliasMatch = cleanLine.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
-      if (usingAliasMatch) {
-        const aliasName = usingAliasMatch[1];
-        const originalType = usingAliasMatch[2];
-        this.addExport(state, aliasName, 'alias', node);
-        this.addExport(state, `using ${aliasName} = ${originalType}`, 'using_alias', node);
-        continue;
+      // Match C++23 import statements: "import ModuleName;"
+      const importMatch = trimmedLine.match(/^import\s+([a-zA-Z_][a-zA-Z0-9_.]*)\s*;/);
+      if (importMatch) {
+        imports.push(importMatch[1]);
       }
       
-      // Parse using function: using namespace::function;
-      const usingFunctionMatch = cleanLine.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
-      if (usingFunctionMatch) {
-        const functionName = usingFunctionMatch[2];
-        const fullName = `${usingFunctionMatch[1]}::${functionName}`;
-        this.addExport(state, functionName, 'function', node);
-        this.addExport(state, `using ${fullName}`, 'using_function', node);
-        continue;
-      }
-    }
-  }
-
-  /**
-   * Handle using declarations for symbol tracking
-   */
-  private handleUsingDeclaration(node: Parser.SyntaxNode, state: any): void {
-    const content = state.content;
-    const usingText = content.substring(node.startIndex, node.endIndex);
-
-    // Parse using namespace
-    const namespaceMatch = usingText.match(/using\s+namespace\s+([\w:]+)/);
-    if (namespaceMatch) {
-      const namespaceName = namespaceMatch[1];
-      state.includes.push({
-        module: namespaceName,
-        symbols: [],
-        isSystem: false,
-        isUsingNamespace: true,
-        location: {
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column + 1
-        }
-      });
-      return;
-    }
-
-    // Parse using alias: using Type = OtherType;
-    const aliasMatch = usingText.match(/using\s+(\w+)\s*=\s*([\w:]+(?:<[^>]*>)?)/);
-    if (aliasMatch) {
-      const aliasName = aliasMatch[1];
-      const originalType = aliasMatch[2];
-      
-      // Track type alias
-      if (!state.context.typeAliases) {
-        state.context.typeAliases = new Map<string, string>();
-      }
-      state.context.typeAliases.set(aliasName, originalType);
-      
-      // Add to exports if this is a top-level using declaration
-      state.includes.push({
-        module: originalType,
-        symbols: [aliasName],
-        isSystem: false,
-        isUsingAlias: true,
-        aliasName,
-        originalType,
-        location: {
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column + 1
-        }
-      });
-      return;
-    }
-
-    // Parse using function: using namespace::function;
-    const functionMatch = usingText.match(/using\s+([\w:]+)::([\w~]+|operator[+\-*/=<>!&|^%~\[\]()]+)/);
-    if (functionMatch) {
-      const namespacePart = functionMatch[1];
-      const functionName = functionMatch[2];
-      
-      state.includes.push({
-        module: namespacePart,
-        symbols: [functionName],
-        isSystem: false,
-        isUsingFunction: true,
-        functionName,
-        qualifiedName: `${namespacePart}::${functionName}`,
-        location: {
-          line: node.startPosition.row + 1,
-          column: node.startPosition.column + 1
-        }
-      });
-    }
-  }
-
-  /**
-   * Handle exported declarations within export statements
-   */
-  private handleExportedDeclaration(node: Parser.SyntaxNode, state: any): void {
-    // Handle variable declarations, function declarations, etc.
-    const declarationType = node.type;
-    // console.log(`Handling exported declaration type: ${declarationType}`);
-    
-    // This can be expanded to handle specific declaration types
-    // For now, we'll extract basic information
-    const content = state.content;
-    const declText = content.substring(node.startIndex, node.endIndex);
-    
-    // Simple pattern matching for now - can be enhanced with tree-sitter parsing
-    const symbolMatch = declText.match(/(\w+)(?=\s*[;({])/);
-    if (symbolMatch) {
-      this.addExport(state, symbolMatch[1], 'declaration', node);
-    }
-  }
-
-  /**
-   * Get qualified name for a symbol
-   */
-  private getQualifiedName(symbolName: string, namespaces: string[]): string {
-    if (namespaces.length === 0) {
-      return symbolName;
-    }
-    return `${namespaces.join('::')}::${symbolName}`;
-  }
-
-  /**
-   * Check if current context is in an exported namespace
-   */
-  private isInExportedNamespace(state: any): boolean {
-    if (!state.context.exportedNamespaces) {
-      return false;
-    }
-    const currentNamespace = state.context.namespaces.join('::');
-    return state.context.exportedNamespaces.has(currentNamespace) || 
-           Array.from(state.context.exportedNamespaces).some(ns => currentNamespace.startsWith(ns));
-  }
-
-  /**
-   * Add export to the state with enhanced qualification
-   */
-  private addExport(state: any, symbolName: string, symbolType: string, node: Parser.SyntaxNode): void {
-    const exportInfo = {
-      symbol: symbolName,
-      type: symbolType,
-      signature: symbolName,
-      isNamespaceExport: this.isInExportedNamespace(state),
-      namespace: state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined,
-      location: {
-        line: node.startPosition.row + 1,
-        column: node.startPosition.column + 1
-      }
-    };
-
-    // Initialize exports array if it doesn't exist
-    if (!state.exports) {
-      state.exports = [];
-    }
-    
-    state.exports.push(exportInfo);
-    // console.log(`Added export: ${symbolName} (${symbolType}) [namespace: ${exportInfo.namespace || 'global'}]`);
-  }
-
-  /**
-   * Extract function name from declarator node (copied from streaming parser)
-   */
-  private extractFunctionName(declarator: Parser.SyntaxNode): string | null {
-    if (declarator.type === 'function_declarator') {
-      const inner = declarator.childForFieldName('declarator');
-      if (inner?.type === 'identifier') {
-        return inner.text;
-      }
-      if (inner?.type === 'qualified_identifier') {
-        return inner.text.split('::').pop() || null;
-      }
-      if (inner?.type === 'field_identifier') {
-        return inner.text;
-      }
-      // Try direct identifier child
-      const id = declarator.descendantsOfType('identifier')[0];
-      if (id) {
-        return id.text;
-      }
-    }
-    // Handle other declarator types
-    const id = declarator.descendantsOfType('identifier')[0];
-    if (id) {
-      return id.text;
-    }
-    return null;
-  }
-
-  /**
-   * Enhanced type extraction with template and alias resolution
-   */
-  private extractTypeEnhanced(node: Parser.SyntaxNode, content: string, context: any): string {
-    let baseType = this.extractType(node, content);
-
-    // Resolve type aliases if available
-    if (context.typeAliases?.has(baseType)) {
-      baseType = context.typeAliases.get(baseType)!;
-    }
-
-    // Handle template instantiations better
-    if (baseType.includes('<') && baseType.includes('>')) {
-      const templateParts = this.parseTemplateInstantiation(baseType);
-      if (templateParts) {
-        // console.log(`🧬 Template instantiation: ${templateParts.base}<${templateParts.args.join(', ')}>`);
-      }
-    }
-
-    return baseType;
-  }
-
-  /**
-   * Parse template instantiation for better understanding
-   */
-  private parseTemplateInstantiation(type: string): { base: string; args: string[] } | null {
-    const match = type.match(/^([^<]+)<(.+)>$/);
-    if (!match) return null;
-
-    const base = match[1].trim();
-    const argsStr = match[2];
-    
-    // Simple comma splitting (doesn't handle nested templates perfectly)
-    const args = argsStr.split(',').map(arg => arg.trim());
-    
-    return { base, args };
-  }
-
-  /**
-   * Enhanced class member extraction with better visibility tracking
-   */
-  private extractClassMembersEnhanced(bodyNode: Parser.SyntaxNode, classInfo: ClassInfo, state: any, depth: number = 0): void {
-    let currentVisibility: 'public' | 'private' | 'protected' = 'private'; // Default for class
-    
-    if (classInfo.name) {
-      // Structs default to public
-      const isStruct = bodyNode.parent?.type === 'struct_specifier';
-      currentVisibility = isStruct ? 'public' : 'private';
-    }
-
-    for (let i = 0; i < bodyNode.childCount; i++) {
-      const child = bodyNode.child(i);
-      if (!child) continue;
-
-      switch (child.type) {
-        case 'access_specifier':
-          const accessText = child.text.replace(':', '').trim();
-          if (['public', 'private', 'protected'].includes(accessText)) {
-            currentVisibility = accessText as any;
-          }
-          break;
-
-        case 'field_declaration':
-          const member = this.parseFieldDeclaration(child, state.content, currentVisibility);
-          if (member) {
-            classInfo.members.push(member);
-          }
-          break;
-
-        case 'function_definition':
-        case 'declaration':
-          // Handle method declarations with proper visibility
-          const oldCurrentClass = state.context.currentClass;
-          state.context.currentClass = classInfo.name;
-          state.context.currentVisibility = currentVisibility;
-          
-          this.walkTree(child, state, depth + 1);
-          
-          state.context.currentClass = oldCurrentClass;
-          break;
-      }
-    }
-  }
-
-  /**
-   * Handle enum declarations including enum class
-   */
-  private handleEnum(node: Parser.SyntaxNode, state: any): void {
-    const nameNode = node.childForFieldName('name');
-    if (!nameNode) return;
-    
-    const enumName = nameNode.text;
-    const isEnumClass = node.text.trim().startsWith('enum class') || node.text.trim().startsWith('enum struct');
-    const currentNamespace = state.context.namespaces.length > 0 ? state.context.namespaces.join('::') : undefined;
-    
-    // Extract enum values
-    const enumValues: string[] = [];
-    const bodyNode = node.childForFieldName('body');
-    if (bodyNode) {
-      for (let i = 0; i < bodyNode.childCount; i++) {
-        const child = bodyNode.child(i);
-        if (child && child.type === 'enumerator') {
-          const valueNameNode = child.childForFieldName('name');
-          if (valueNameNode) {
-            enumValues.push(valueNameNode.text);
-          }
-        }
+      // Also match import with partition: "import ModuleName:PartitionName;"
+      const importPartitionMatch = trimmedLine.match(/^import\s+([a-zA-Z_][a-zA-Z0-9_.]*):([a-zA-Z_][a-zA-Z0-9_.]*)\s*;/);
+      if (importPartitionMatch) {
+        imports.push(`${importPartitionMatch[1]}:${importPartitionMatch[2]}`);
       }
     }
     
-    // Create enum info (treating as a special kind of class for now)
-    const enumInfo: ClassInfo = {
-      name: enumName,
-      namespace: currentNamespace,
-      baseClasses: [],
-      interfaces: [],
-      methods: [],
-      members: enumValues.map(value => ({
-        name: value,
-        type: enumName,
-        visibility: 'public' as const,
-        isStatic: true,
-        isConst: true,
-        location: {
-          line: nameNode.startPosition.row + 1,
-          column: nameNode.startPosition.column + 1
-        }
-      })),
-      isTemplate: false,
-      isEnum: true,
-      isEnumClass: isEnumClass,
-      location: {
-        line: nameNode.startPosition.row + 1,
-        column: nameNode.startPosition.column + 1
-      }
-    };
-    
-    state.classes.push(enumInfo);
-    
-    // Also add enum values as individual exports if it's in an export namespace
-    if (isEnumClass && enumValues.length > 0) {
-      enumValues.forEach(value => {
-        state.exports.push({
-          symbol: `${enumName}::${value}`,
-          type: 'enum_value',
-          signature: `${enumName}::${value}`,
-          location: {
-            line: nameNode.startPosition.row + 1,
-            column: nameNode.startPosition.column + 1
-          }
-        });
-      });
-    }
-  }
-
-  /**
-   * Parse field declaration with enhanced type information
-   */
-  private parseFieldDeclaration(node: Parser.SyntaxNode, content: string, visibility: string): any {
-    const typeNode = node.childForFieldName('type');
-    const declaratorNode = node.childForFieldName('declarator');
-    
-    if (!typeNode || !declaratorNode) return null;
-
-    const type = this.extractType(typeNode, content);
-    const name = declaratorNode.text;
-
-    return {
-      name,
-      type,
-      visibility,
-      isStatic: node.text.includes('static'),
-      isConst: type.includes('const'),
-      location: {
-        line: declaratorNode.startPosition.row + 1,
-        column: declaratorNode.startPosition.column + 1
-      }
-    };
+    return imports;
   }
 }
-
-// Usage:
-/*
-const parser = new EnhancedTreeSitterParser();
-await parser.initialize();
-const moduleInfo = await parser.parseFile('/path/to/file.cpp');
-// console.log(`Found ${moduleInfo.methods.length} methods and ${moduleInfo.classes.length} classes`);
-*/

@@ -160,17 +160,9 @@ export class ParserFallbackTest extends BaseTest {
     console.log(`  - Methods: ${treeSitterResult.methods.length}`);
     console.log(`  - Patterns: ${treeSitterResult.patterns.length}`);
     
-    // Step 3: Check if Clang can add more detail
-    console.log('\nStep 3: Attempting Clang parser (full detail)');
-    try {
-      const clangResult = await this.parser.parseWithParser(filePath, 'clang');
-      console.log(`  - Classes: ${clangResult.classes.length}`);
-      console.log(`  - Methods: ${clangResult.methods.length}`);
-      console.log(`  - Has type info: ${clangResult.methods.some(m => m.returnType && m.returnType !== 'void')}`);
-    } catch (error) {
-      console.log(`  - Clang failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      console.log(`  - Tree-sitter data preserved`);
-    }
+    // Step 3: Clang parser disabled - doesn't support C++23 modules
+    console.log('\nStep 3: Skipping Clang parser (not compatible with C++23 modules)');
+    console.log(`  - Tree-sitter data preserved`);
     
     // Check final database state
     const db = new Database(path.join(this.projectPath, '.module-sentinel', 'preservation.db'));
