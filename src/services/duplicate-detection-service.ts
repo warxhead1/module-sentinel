@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
 import { ClangIntelligentIndexer } from '../indexing/clang-intelligent-indexer.js';
 import { EventEmitter } from 'events';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 
 /**
  * Duplicate Code Detection Service using Clang AST
@@ -26,7 +26,7 @@ export class DuplicateDetectionService extends EventEmitter {
     this.clangIndexer = new ClangIntelligentIndexer(projectPath, dbPath);
     
     // Initialize database schema through unified manager
-    const schemaManager = UnifiedSchemaManager.getInstance();
+    const schemaManager = CleanUnifiedSchemaManager.getInstance();
     schemaManager.initializeDatabase(this.db);
     
     // Create service-specific tables that aren't in unified schema
@@ -34,44 +34,83 @@ export class DuplicateDetectionService extends EventEmitter {
   }
   
   private initServiceSpecificTables(): void {
-    // Create tables specific to AST-based duplicate detection
-    this.db.exec(`
-      -- AST node hashes for similarity detection
-      CREATE TABLE IF NOT EXISTS ast_hashes (
-        id INTEGER PRIMARY KEY,
-        file_path TEXT NOT NULL,
-        node_type TEXT NOT NULL,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        structure_hash TEXT NOT NULL,
-        semantic_hash TEXT NOT NULL,
-        token_count INTEGER NOT NULL,
-        complexity INTEGER NOT NULL,
-        parent_context TEXT
-      );
+    try {
+      // Create tables specific to AST-based duplicate detection
+      // AST node hashes for similarity detection
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ast_hashes (
+          id INTEGER PRIMARY KEY,
+          file_path TEXT NOT NULL,
+          node_type TEXT NOT NULL,
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          structure_hash TEXT NOT NULL,
+          semantic_hash TEXT NOT NULL,
+          token_count INTEGER NOT NULL,
+          complexity INTEGER NOT NULL,
+          parent_context TEXT
+        )
+      `);
       
-      -- Clone groups (multiple fragments with same pattern)
-      CREATE TABLE IF NOT EXISTS clone_groups (
-        group_id TEXT PRIMARY KEY,
-        clone_type INTEGER NOT NULL,
-        member_count INTEGER NOT NULL,
-        total_lines INTEGER NOT NULL,
-        pattern_description TEXT,
-        refactoring_suggestion TEXT
-      );
+      // Clone groups (multiple fragments with same pattern)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS clone_groups (
+          group_id TEXT PRIMARY KEY,
+          clone_type INTEGER NOT NULL,
+          member_count INTEGER NOT NULL,
+          total_lines INTEGER NOT NULL,
+          pattern_description TEXT,
+          refactoring_suggestion TEXT
+        )
+      `);
       
-      -- Clone group members
-      CREATE TABLE IF NOT EXISTS clone_group_members (
-        group_id TEXT NOT NULL,
-        fragment_id INTEGER NOT NULL,
-        PRIMARY KEY (group_id, fragment_id),
-        FOREIGN KEY (group_id) REFERENCES clone_groups(group_id),
-        FOREIGN KEY (fragment_id) REFERENCES ast_hashes(id)
-      );
+      // Clone group members
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS clone_group_members (
+          group_id TEXT NOT NULL,
+          fragment_id INTEGER NOT NULL,
+          PRIMARY KEY (group_id, fragment_id)
+        )
+      `);
       
-      CREATE INDEX IF NOT EXISTS idx_structure_hash ON ast_hashes(structure_hash);
-      CREATE INDEX IF NOT EXISTS idx_semantic_hash ON ast_hashes(semantic_hash);
-    `);
+      // Create indexes - wrap in try-catch in case table doesn't exist yet
+      try {
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_structure_hash ON ast_hashes(structure_hash)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_semantic_hash ON ast_hashes(semantic_hash)`);
+      } catch (indexError) {
+        console.warn('Could not create indexes on ast_hashes:', indexError);
+      }
+      
+      // Code clones table for storing detected duplicates
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS code_clones (
+          id INTEGER PRIMARY KEY,
+          clone_type INTEGER NOT NULL,
+          similarity_score REAL NOT NULL,
+          fragment1_id INTEGER NOT NULL,
+          fragment2_id INTEGER NOT NULL,
+          detection_timestamp INTEGER
+        )
+      `);
+      
+      // Duplication anti-patterns table
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS duplication_antipatterns (
+          id INTEGER PRIMARY KEY,
+          pattern_name TEXT NOT NULL,
+          description TEXT,
+          severity TEXT NOT NULL,
+          file_path TEXT NOT NULL,
+          line_start INTEGER NOT NULL,
+          line_end INTEGER NOT NULL,
+          suggestion TEXT,
+          detected_at INTEGER
+        )
+      `);
+    } catch (error) {
+      console.error('Failed to create duplicate detection tables:', error);
+      throw error;
+    }
   }
 
 

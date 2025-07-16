@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 import {
   ApiSurfaceRequest,
   ApiSurfaceResponse,
@@ -9,6 +9,7 @@ import {
   ImpactAnalysisRequest,
   ImpactAnalysisResponse,
   MethodInfo,
+  ApiMemberInfo,
   UsageExample
 } from '../types/essential-features.js';
 
@@ -20,7 +21,7 @@ export class Priority2Tools {
       // Legacy mode: create our own database connection
       this.db = new Database(dbPathOrDatabase);
       // Initialize unified schema
-      const schemaManager = UnifiedSchemaManager.getInstance();
+      const schemaManager = CleanUnifiedSchemaManager.getInstance();
       schemaManager.initializeDatabase(this.db);
     } else {
       // New mode: use existing database (schema already initialized)
@@ -34,19 +35,44 @@ export class Priority2Tools {
   async getApiSurface(request: ApiSurfaceRequest): Promise<ApiSurfaceResponse> {
     // Get all public methods/functions from enhanced_symbols
     const methods = this.db.prepare(`
-      SELECT name, signature, return_type, parent_class, namespace, file_path, kind
-      FROM enhanced_symbols 
-      WHERE file_path LIKE ? 
-        AND kind IN ('function', 'method')
-        AND parser_confidence > 0.5
-      ORDER BY parent_class, name
+      SELECT 
+        s.id,
+        s.name, 
+        s.signature, 
+        s.return_type, 
+        s.parent_class, 
+        s.namespace, 
+        s.file_path, 
+        s.kind,
+        s.qualified_name
+      FROM enhanced_symbols s
+      WHERE s.file_path LIKE ? 
+        AND s.kind IN ('function', 'method')
+        AND s.parser_confidence > 0.5
+      ORDER BY s.parent_class, s.name
     `).all(`%${request.module}%`) as Array<any>;
 
-    const public_methods: MethodInfo[] = methods.map((m: any) => ({
+    // Get usage counts for each method
+    const methodsWithUsage = methods.map((m: any) => {
+      const usageCount = this.db.prepare(`
+        SELECT COUNT(DISTINCT sr.from_symbol_id) as usage_count
+        FROM symbol_relationships sr
+        WHERE sr.to_symbol_id = ?
+          AND sr.relationship_type IN ('calls', 'uses')
+      `).get(m.id) as any;
+      
+      return {
+        ...m,
+        usage_count: usageCount?.usage_count || 0
+      };
+    });
+
+    const public_methods: MethodInfo[] = methodsWithUsage.map((m: any) => ({
       name: m.name,
       params: this.parseSignatureParams(m.signature || ''),
       returns: m.return_type || 'void',
-      description: this.generateMethodDescription(m)
+      description: this.generateMethodDescription(m),
+      usage_count: m.usage_count
     }));
 
     // Get class information from class_hierarchies view (compatibility)
@@ -85,8 +111,84 @@ export class Priority2Tools {
     // Remove duplicates between required and optional
     const optionalFiltered = optional.filter(dep => !required.includes(dep));
 
-    // Get public members (simplified - would need enhanced parser)
-    const public_members: any[] = [];
+    // Get all exported symbols (classes, structs, enums, variables, etc.)
+    const allExports = this.db.prepare(`
+      SELECT 
+        s.id,
+        s.name,
+        s.qualified_name,
+        s.kind,
+        s.signature,
+        s.file_path,
+        s.parent_class,
+        s.namespace,
+        s.semantic_tags
+      FROM enhanced_symbols s
+      WHERE s.file_path LIKE ?
+        AND s.parser_confidence > 0.5
+        AND s.kind IN ('class', 'struct', 'enum', 'variable', 'typedef', 'namespace')
+      ORDER BY s.kind, s.name
+    `).all(`%${request.module}%`) as Array<any>;
+
+    // Get usage counts and import locations for each export
+    const exports = allExports.map((symbol: any) => {
+      // Get all places where this symbol is used
+      const usages = this.db.prepare(`
+        SELECT 
+          from_s.file_path,
+          from_s.name as from_symbol,
+          sr.relationship_type
+        FROM symbol_relationships sr
+        JOIN enhanced_symbols from_s ON sr.from_symbol_id = from_s.id
+        WHERE sr.to_symbol_id = ?
+          AND sr.relationship_type IN ('uses', 'calls', 'inherits', 'implements', 'instance_of', 'imports')
+      `).all(symbol.id) as any[];
+      
+      // Group by file to show where it's imported
+      const importedBy = [...new Set(usages.map((u: any) => u.file_path))];
+      
+      return {
+        name: symbol.name,
+        qualified_name: symbol.qualified_name,
+        kind: symbol.kind,
+        usage_count: usages.length,
+        imported_by: importedBy,
+        import_count: importedBy.length
+      };
+    });
+
+    // Get public members (member variables) with usage counts
+    const memberVariables = this.db.prepare(`
+      SELECT 
+        s.id,
+        s.name,
+        s.qualified_name,
+        s.kind,
+        s.signature,
+        s.parent_class
+      FROM enhanced_symbols s
+      WHERE s.file_path LIKE ?
+        AND s.kind = 'variable'
+        AND s.parent_class IS NOT NULL
+        AND s.parser_confidence > 0.5
+      ORDER BY s.parent_class, s.name
+    `).all(`%${request.module}%`) as Array<any>;
+
+    const public_members: ApiMemberInfo[] = memberVariables.map((m: any) => {
+      const usageCount = this.db.prepare(`
+        SELECT COUNT(DISTINCT sr.from_symbol_id) as usage_count
+        FROM symbol_relationships sr
+        WHERE sr.to_symbol_id = ?
+          AND sr.relationship_type IN ('uses', 'reads', 'writes')
+      `).get(m.id) as any;
+      
+      return {
+        name: m.name,
+        parent_class: m.parent_class,
+        qualified_name: m.qualified_name,
+        usage_count: usageCount?.usage_count || 0
+      };
+    });
 
     return {
       public_methods,
@@ -95,7 +197,8 @@ export class Priority2Tools {
       dependencies: {
         required: required,
         optional: optionalFiltered
-      }
+      },
+      exports: exports.filter(e => e.usage_count > 0 || e.kind === 'class' || e.kind === 'struct')
     };
   }
 
@@ -514,6 +617,346 @@ export class Priority2Tools {
     }
     
     return `src/${stage}/${concept}`;
+  }
+
+  /**
+   * Find all callers of a given symbol
+   */
+  async findCallers(symbolName: string): Promise<any> {
+    // First find the symbol
+    const targetSymbols = this.db.prepare(`
+      SELECT id, name, qualified_name, kind, file_path, line
+      FROM enhanced_symbols
+      WHERE name = ? OR qualified_name = ? OR qualified_name LIKE ?
+    `).all(symbolName, symbolName, `%::${symbolName}`) as any[];
+    
+    if (targetSymbols.length === 0) {
+      return {
+        symbol: symbolName,
+        found: false,
+        direct_callers: [],
+        indirect_callers: [],
+        test_coverage: []
+      };
+    }
+    
+    // Get the most likely match (prefer exact qualified name match)
+    const targetSymbol = targetSymbols.find(s => s.qualified_name === symbolName) || targetSymbols[0];
+    
+    // Find direct callers
+    const directCallers = this.db.prepare(`
+      SELECT DISTINCT
+        from_s.name as caller_name,
+        from_s.qualified_name as caller_qualified_name,
+        from_s.file_path,
+        from_s.line,
+        from_s.kind,
+        sr.relationship_type
+      FROM symbol_relationships sr
+      JOIN enhanced_symbols from_s ON sr.from_symbol_id = from_s.id
+      WHERE sr.to_symbol_id = ?
+        AND sr.relationship_type IN ('calls', 'uses')
+      ORDER BY from_s.file_path, from_s.line
+    `).all(targetSymbol.id) as any[];
+    
+    // Find indirect callers (who calls the direct callers)
+    const indirectCallers = [];
+    const seenCallers = new Set<string>();
+    
+    for (const directCaller of directCallers) {
+      const callersOfCaller = this.db.prepare(`
+        SELECT DISTINCT
+          from_s.name as caller_name,
+          from_s.qualified_name as caller_qualified_name,
+          from_s.file_path,
+          from_s.line,
+          from_s.kind
+        FROM symbol_relationships sr
+        JOIN enhanced_symbols from_s ON sr.from_symbol_id = from_s.id
+        JOIN enhanced_symbols to_s ON sr.to_symbol_id = to_s.id
+        WHERE to_s.qualified_name = ?
+          AND sr.relationship_type IN ('calls', 'uses')
+          AND from_s.qualified_name != ?
+        LIMIT 10
+      `).all(directCaller.caller_qualified_name, targetSymbol.qualified_name) as any[];
+      
+      for (const indirect of callersOfCaller) {
+        const key = `${indirect.caller_qualified_name}:${indirect.file_path}:${indirect.line}`;
+        if (!seenCallers.has(key)) {
+          seenCallers.add(key);
+          indirectCallers.push({
+            ...indirect,
+            via: directCaller.caller_qualified_name
+          });
+        }
+      }
+    }
+    
+    // Find test coverage
+    const testCoverage = directCallers
+      .filter(c => c.file_path.includes('test') || c.file_path.includes('Test'))
+      .map(c => ({
+        test_name: c.caller_name,
+        test_file: c.file_path,
+        test_line: c.line
+      }));
+    
+    return {
+      symbol: targetSymbol.qualified_name,
+      found: true,
+      location: `${targetSymbol.file_path}:${targetSymbol.line}`,
+      direct_callers: directCallers.map(c => ({
+        name: c.caller_qualified_name,
+        location: `${c.file_path}:${c.line}`,
+        type: c.kind,
+        relationship: c.relationship_type
+      })),
+      indirect_callers: indirectCallers.slice(0, 20).map(c => ({
+        name: c.caller_qualified_name,
+        location: `${c.file_path}:${c.line}`,
+        type: c.kind,
+        via: c.via
+      })),
+      test_coverage: testCoverage,
+      summary: {
+        total_direct_callers: directCallers.length,
+        total_indirect_callers: indirectCallers.length,
+        test_count: testCoverage.length,
+        is_tested: testCoverage.length > 0
+      }
+    };
+  }
+
+  /**
+   * Check if it's safe to inline a function/method
+   */
+  async checkInlineSafety(symbolName: string): Promise<any> {
+    // Find the symbol
+    const symbol = this.db.prepare(`
+      SELECT id, name, qualified_name, kind, signature, complexity, file_path, line
+      FROM enhanced_symbols
+      WHERE (name = ? OR qualified_name = ?) AND kind IN ('function', 'method')
+      LIMIT 1
+    `).get(symbolName, symbolName) as any;
+    
+    if (!symbol) {
+      return {
+        symbol: symbolName,
+        found: false,
+        is_safe: false,
+        reasons: ['Symbol not found']
+      };
+    }
+    
+    // Get callers count
+    const callerCount = this.db.prepare(`
+      SELECT COUNT(DISTINCT from_symbol_id) as count
+      FROM symbol_relationships
+      WHERE to_symbol_id = ? AND relationship_type = 'calls'
+    `).get(symbol.id) as any;
+    
+    // Check for side effects (calls to other functions)
+    const callsOut = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM symbol_relationships
+      WHERE from_symbol_id = ? AND relationship_type = 'calls'
+    `).get(symbol.id) as any;
+    
+    // Check if it's virtual or overridden
+    const isVirtual = symbol.signature?.includes('virtual') || false;
+    
+    // Check if it's recursive
+    const isRecursive = this.db.prepare(`
+      SELECT COUNT(*) as count
+      FROM symbol_relationships
+      WHERE from_symbol_id = ? AND to_symbol_id = ? AND relationship_type = 'calls'
+    `).get(symbol.id, symbol.id) as any;
+    
+    const reasons = [];
+    const warnings = [];
+    let isSafe = true;
+    
+    // Safety checks
+    if (callerCount.count === 0) {
+      warnings.push('Function is not called anywhere - consider removing instead');
+    } else if (callerCount.count === 1) {
+      reasons.push('Single call site - ideal for inlining');
+    } else if (callerCount.count > 10) {
+      isSafe = false;
+      reasons.push(`Called from ${callerCount.count} locations - too many to inline efficiently`);
+    }
+    
+    if (symbol.complexity > 10) {
+      isSafe = false;
+      reasons.push(`High complexity (${symbol.complexity}) - would make calling code harder to understand`);
+    }
+    
+    if (isVirtual) {
+      isSafe = false;
+      reasons.push('Virtual function - cannot be inlined due to polymorphism');
+    }
+    
+    if (isRecursive.count > 0) {
+      isSafe = false;
+      reasons.push('Recursive function - cannot be inlined');
+    }
+    
+    if (callsOut.count > 5) {
+      warnings.push(`Makes ${callsOut.count} function calls - consider the increased code size`);
+    }
+    
+    // Get all call sites for preview
+    const callSites = this.db.prepare(`
+      SELECT 
+        from_s.qualified_name as caller,
+        from_s.file_path,
+        from_s.line
+      FROM symbol_relationships sr
+      JOIN enhanced_symbols from_s ON sr.from_symbol_id = from_s.id
+      WHERE sr.to_symbol_id = ? AND sr.relationship_type = 'calls'
+      LIMIT 10
+    `).all(symbol.id) as any[];
+    
+    return {
+      symbol: symbol.qualified_name,
+      found: true,
+      is_safe: isSafe,
+      reasons: reasons,
+      warnings: warnings,
+      side_effects: {
+        makes_calls: callsOut.count > 0,
+        call_count: callsOut.count,
+        is_recursive: isRecursive.count > 0,
+        is_virtual: isVirtual
+      },
+      metrics: {
+        complexity: symbol.complexity || 0,
+        call_sites: callerCount.count,
+        size_estimate: symbol.signature?.length || 0
+      },
+      call_sites: callSites.map(cs => ({
+        caller: cs.caller,
+        location: `${cs.file_path}:${cs.line}`
+      })),
+      recommendation: isSafe ? 
+        (callerCount.count === 1 ? 'RECOMMENDED: Single call site makes this ideal for inlining' :
+         callerCount.count <= 3 ? 'SAFE: Low number of call sites' :
+         'PROCEED WITH CAUTION: Multiple call sites will increase code size') :
+        'NOT RECOMMENDED: ' + reasons.filter(r => r.includes('cannot') || r.includes('too many')).join('; ')
+    };
+  }
+
+  /**
+   * Analyze the impact of renaming a symbol
+   */
+  async analyzeRename(oldName: string, newName: string): Promise<any> {
+    // Find all symbols matching the old name
+    const symbols = this.db.prepare(`
+      SELECT id, name, qualified_name, kind, file_path, line, parent_class
+      FROM enhanced_symbols
+      WHERE name = ? OR qualified_name = ? OR qualified_name LIKE ?
+    `).all(oldName, oldName, `%::${oldName}`) as any[];
+    
+    if (symbols.length === 0) {
+      return {
+        old_name: oldName,
+        new_name: newName,
+        found: false,
+        files_affected: 0,
+        locations_affected: 0,
+        potential_conflicts: [],
+        suggested_approach: 'Symbol not found - no rename needed'
+      };
+    }
+    
+    // Check for naming conflicts with new name
+    const conflicts = this.db.prepare(`
+      SELECT name, qualified_name, kind, file_path
+      FROM enhanced_symbols
+      WHERE name = ? OR qualified_name = ? OR qualified_name LIKE ?
+    `).all(newName, newName, `%::${newName}`) as any[];
+    
+    // Get all references to the symbols
+    const allReferences = new Set<string>();
+    const fileSet = new Set<string>();
+    
+    for (const symbol of symbols) {
+      // Add definition location
+      allReferences.add(`${symbol.file_path}:${symbol.line}`);
+      fileSet.add(symbol.file_path);
+      
+      // Find all places that reference this symbol
+      const references = this.db.prepare(`
+        SELECT DISTINCT
+          from_s.file_path,
+          from_s.line
+        FROM symbol_relationships sr
+        JOIN enhanced_symbols from_s ON sr.from_symbol_id = from_s.id
+        WHERE sr.to_symbol_id = ?
+      `).all(symbol.id) as any[];
+      
+      for (const ref of references) {
+        allReferences.add(`${ref.file_path}:${ref.line}`);
+        fileSet.add(ref.file_path);
+      }
+    }
+    
+    // Categorize the rename complexity
+    let complexity = 'SIMPLE';
+    let approach = 'Direct find and replace';
+    
+    if (symbols.some(s => s.kind === 'class' || s.kind === 'struct')) {
+      complexity = 'MODERATE';
+      approach = 'Update class/struct definitions and all usages';
+    }
+    
+    if (symbols.some(s => s.parent_class)) {
+      complexity = 'COMPLEX';
+      approach = 'Member rename - ensure all class instances are updated';
+    }
+    
+    if (conflicts.length > 0) {
+      complexity = 'HIGH_RISK';
+      approach = 'Name conflict detected - consider namespacing or different name';
+    }
+    
+    // Check if it affects public API
+    const affectsAPI = symbols.some(s => 
+      s.file_path.includes('.h') || 
+      s.file_path.includes('.hpp') ||
+      s.file_path.includes('.ixx')
+    );
+    
+    return {
+      old_name: oldName,
+      new_name: newName,
+      found: true,
+      files_affected: fileSet.size,
+      locations_affected: allReferences.size,
+      complexity: complexity,
+      affects_public_api: affectsAPI,
+      potential_conflicts: conflicts.map(c => ({
+        name: c.qualified_name,
+        kind: c.kind,
+        file: c.file_path,
+        severity: c.kind === symbols[0]?.kind ? 'HIGH' : 'MEDIUM'
+      })),
+      symbol_types: [...new Set(symbols.map(s => s.kind))],
+      suggested_approach: approach,
+      warnings: [
+        ...(affectsAPI ? ['Affects public API - external users may be impacted'] : []),
+        ...(conflicts.length > 0 ? [`Name '${newName}' already exists in ${conflicts.length} places`] : []),
+        ...(fileSet.size > 20 ? ['Large number of files affected - consider incremental approach'] : [])
+      ],
+      affected_files: Array.from(fileSet).slice(0, 20).sort(),
+      refactoring_steps: [
+        'Update all declarations',
+        'Update all references',
+        ...(affectsAPI ? ['Update documentation', 'Notify API consumers'] : []),
+        'Run tests to verify',
+        'Update any string references in configs/comments'
+      ]
+    };
   }
 
   close(): void {

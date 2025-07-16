@@ -9,33 +9,16 @@ Module Sentinel is an MCP (Model Context Protocol) server that provides intellig
 ## Key Commands
 
 ### Building and Running
+
 ```bash
-# Build the TypeScript project
-npm run build
+#  Organized into subdirectories:
 
-# Run tests with comprehensive analysis
-npx tsx run-tests.ts
-
-# Run specific test suites
-npx tsx test/TestRunner.ts
-
-# Development mode with hot reload
-npm run dev:enhanced
-
-# Start as MCP server
-npm start:enhanced
-```
-
-### Testing Individual Components
-```bash
-# Test C++23 module parsing directly
-npx tsx test-module-sentinel.ts
-
-# Run pattern-aware indexing test
-npx tsx test/unit/PatternAwareIndexingTest.ts
-
-# Build and test enhanced features
-npm run test:enhanced
+  npm run test          # Run all tests
+  npm run test:rebuild  # Force rebuild before tests
+  npm run test:filter   # Run specific tests
+  npm run build:test    # Build and test in one command
+  npm run dashboard     # Start the visualization dashboard
+  npm run clean        # Clean build artifacts
 ```
 
 ## Architecture Overview
@@ -43,17 +26,20 @@ npm run test:enhanced
 ### Core Components
 
 1. **StreamingCppParser** (`src/parsers/streaming-cpp-parser.ts`)
+
    - Handles C++23 module syntax (`export module`, `import`, etc.)
    - Falls back to line-based parsing for large files (>50KB)
    - Returns `ModuleSymbols` with Sets of exports, imports, functions, classes
 
 2. **PatternAwareIndexer** (`src/indexing/pattern-aware-indexer.ts`)
+
    - Creates SQLite database with `enhanced_symbols` table
    - Detects patterns: GPU/CPU execution, factory patterns, anti-patterns
    - Builds semantic tags and relationships between symbols
    - Critical: Must be initialized before other tools can query the database
 
 3. **ModuleSentinel** (`src/module-sentinel.ts`)
+
    - Main orchestrator class
    - Uses lazy database initialization for ModuleIndexer
    - Manages caching and parallel processing
@@ -67,6 +53,7 @@ npm run test:enhanced
 ### Database Schema
 
 The system uses SQLite databases with these key tables:
+
 - `enhanced_symbols`: Main symbol storage with semantic tags
 - `semantic_connections`: Relationships between symbols
 - `pattern_cache`: Cached pattern search results
@@ -75,6 +62,7 @@ The system uses SQLite databases with these key tables:
 ### Pipeline Stages
 
 The project uses a defined pipeline architecture:
+
 - `noise_generation`: Noise algorithms and generators
 - `terrain_formation`: Terrain generation and orchestration
 - `atmospheric_dynamics`: Weather and atmosphere
@@ -86,6 +74,7 @@ The project uses a defined pipeline architecture:
 ### Test Architecture
 
 Tests follow SOLID principles with:
+
 - `BaseTest`: Abstract base for all tests
 - `TestDatabaseManager`: Handles database lifecycle
 - `TestRunner`: Builds index once, runs all tests
@@ -94,12 +83,14 @@ Tests follow SOLID principles with:
 ## Important Implementation Details
 
 ### C++23 Module Support
+
 - The parser detects `export module X;` and `import Y;` statements
 - Module files use `.ixx` extension
 - Export detection includes namespaces, classes, and functions
 - The parser does NOT currently add `module:` prefix to exports (known issue)
 
 ### Database Management
+
 - Uses lazy initialization pattern to handle connection failures
 - `getDatabase()` method recreates connections if closed
 - Pattern-aware indexer must run before querying enhanced_symbols
@@ -108,11 +99,13 @@ Tests follow SOLID principles with:
 ### Common Issues and Solutions
 
 1. **"no such table: enhanced_symbols"**
+
    - Ensure PatternAwareIndexer has run first
    - Check database path consistency
    - Verify table creation in initDatabase()
 
 2. **Database connection errors**
+
    - ModuleIndexer uses lazy initialization
    - Check for premature close() calls
    - Ensure shared database paths in tests
@@ -125,6 +118,7 @@ Tests follow SOLID principles with:
 ## Configuration
 
 The system uses `module-sentinel.config.json` to specify:
+
 - Project path: `/home/warxh/planet_procgen`
 - Scan paths for indexing
 - File patterns for C++ source and headers

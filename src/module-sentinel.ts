@@ -17,41 +17,42 @@ import {
 } from './types/index';
 import { ParallelProcessingEngine } from './engines/parallel-engine';
 import { ThoughtSignaturePreserver } from './engines/thought-signature';
-import { CppAstAnalyzer } from './parsers/cpp-ast-analyzer';
-import { StreamingCppParser } from './parsers/streaming-cpp-parser';
+import { UnifiedCppParser } from './parsers/unified-cpp-parser';
 import { ModuleIndexer } from './services/module-indexer';
 import { GeminiTool } from './tools/gemini-tool';
-import { KnowledgeBase } from './services/knowledge-base';
+// import { KnowledgeBase } from './services/knowledge-base'; // Removed - unused service
 
 export class ModuleSentinel {
   private moduleCache: Map<string, ModuleInfo> = new Map();
   private parallelEngine: ParallelProcessingEngine;
   private consciousness?: ThoughtSignaturePreserver;
   private mcpServer?: Server;
-  private cppAnalyzer: CppAstAnalyzer;
-  private streamingParser: StreamingCppParser;
+  private unifiedParser!: UnifiedCppParser;
   private indexer?: ModuleIndexer;
   private geminiTool: GeminiTool; // New member
-  private knowledgeBase: KnowledgeBase; // New member
+  // private knowledgeBase: KnowledgeBase; // Removed - replaced with direct DB queries
   private watchHandles: Map<string, any> = new Map();
   private config: any;
 
   constructor() {
     this.parallelEngine = new ParallelProcessingEngine();
     // ThoughtSignaturePreserver will be initialized later when we have a database
-    this.cppAnalyzer = new CppAstAnalyzer();
-    this.streamingParser = new StreamingCppParser();
+    this.unifiedParser = new UnifiedCppParser({
+      enableModuleAnalysis: true,
+      enableSemanticAnalysis: true,
+      enableTypeAnalysis: true,
+      debugMode: process.env.MODULE_SENTINEL_DEBUG === 'true'
+    });
     // Initialize geminiTool with env var if available, otherwise empty string
     const apiKey = process.env.GEMINI_API_KEY || '';
     this.geminiTool = new GeminiTool(apiKey); 
-    // Initialize knowledgeBase with placeholder path
-    this.knowledgeBase = new KnowledgeBase('');
+    // KnowledgeBase removed - using direct DB queries instead
   }
 
   async initialize(options?: { skipAutoIndex?: boolean }): Promise<void> {
     await this.parallelEngine.initialize();
     // await this.consciousness.initialize();
-    await this.cppAnalyzer.initialize();
+    // CppAstAnalyzer removed - was unused and redundant with EnhancedTreeSitterParser
     
     // Load configuration if available
     try {
@@ -83,9 +84,7 @@ export class ModuleSentinel {
       // Don't test database connection immediately - let it initialize lazily
       console.log('Module indexer initialized with lazy database connection');
       
-      // Initialize knowledgeBase with project path
-      this.knowledgeBase = new KnowledgeBase(this.config.projectPath);
-      await this.knowledgeBase.initialize();
+      // KnowledgeBase initialization removed - using indexer DB directly
       
       // Set up indexer event handlers
       this.indexer.on('indexing:skipped', (data) => {
@@ -118,11 +117,69 @@ export class ModuleSentinel {
   }
 
   async queryPatterns(filePath?: string, type?: string): Promise<any[]> {
-    return this.knowledgeBase.getPatterns(filePath, type);
+    if (!this.indexer) {
+      throw new Error('Indexer not initialized');
+    }
+    
+    // Query patterns from the database
+    const db = (this.indexer as any).db;
+    let query = 'SELECT * FROM detected_patterns WHERE 1=1';
+    const params: any[] = [];
+    
+    if (filePath) {
+      query += ' AND symbol_id IN (SELECT id FROM enhanced_symbols WHERE file_path = ?)';
+      params.push(filePath);
+    }
+    
+    if (type) {
+      query += ' AND pattern_type = ?';
+      params.push(type);
+    }
+    
+    try {
+      return db.prepare(query).all(...params);
+    } catch (error) {
+      console.error('Error querying patterns:', error);
+      return [];
+    }
   }
 
   async queryRelationships(filePath?: string, source?: string, target?: string, type?: string): Promise<any[]> {
-    return this.knowledgeBase.getRelationships(filePath, source, target, type);
+    if (!this.indexer) {
+      throw new Error('Indexer not initialized');
+    }
+    
+    // Query relationships from the database
+    const db = (this.indexer as any).db;
+    let query = 'SELECT * FROM symbol_relationships WHERE 1=1';
+    const params: any[] = [];
+    
+    if (filePath) {
+      query += ' AND (from_symbol_id IN (SELECT id FROM enhanced_symbols WHERE file_path = ?) OR to_symbol_id IN (SELECT id FROM enhanced_symbols WHERE file_path = ?))';
+      params.push(filePath, filePath);
+    }
+    
+    if (source) {
+      query += ' AND from_name = ?';
+      params.push(source);
+    }
+    
+    if (target) {
+      query += ' AND to_name = ?';
+      params.push(target);
+    }
+    
+    if (type) {
+      query += ' AND relationship_type = ?';
+      params.push(type);
+    }
+    
+    try {
+      return db.prepare(query).all(...params);
+    } catch (error) {
+      console.error('Error querying relationships:', error);
+      return [];
+    }
   }
 
   async analyzeModule(moduleFile: string): Promise<ModuleInfo> {
@@ -146,15 +203,15 @@ export class ModuleSentinel {
     
     try {
       // Use streaming parser for large files
-      const symbols = await this.streamingParser.parseFile(moduleFile);
+      const symbols = await this.unifiedParser.parseFile(moduleFile);
       const stage = this.identifyPipelineStage(moduleFile);
 
       const moduleInfo: ModuleInfo = {
         path: moduleFile,
-        exports: Array.from(symbols.exports),
-        imports: Array.from(symbols.imports),
+        exports: symbols.exports?.map(e => typeof e === 'string' ? e : e.symbol) || [],
+        imports: symbols.imports?.map(i => typeof i === 'string' ? i : i.module) || [],
         stage,
-        dependencies: Array.from(symbols.dependencies),
+        dependencies: symbols.relationships?.map(r => r.to) || [],
         performanceProfile: {
           parseTime: Date.now() - startTime,
           memoryUsage: process.memoryUsage().heapUsed,

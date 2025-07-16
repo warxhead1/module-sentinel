@@ -1,0 +1,97 @@
+name: Module Sentinel Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Use Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v3
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+    
+    - name: Build project
+      run: npm run build
+    
+    - name: Build dashboard
+      run: npm run build:dashboard
+    
+    - name: Run tests
+      run: npm test
+      env:
+        CI: true
+    
+    - name: Run type checks
+      run: npm run typecheck
+    
+    - name: Run linter
+      run: npm run lint
+      continue-on-error: true # Don't fail on lint warnings
+    
+    - name: Test MCP Server Integration
+      run: npx tsx test/mcp-server-integration-test.ts
+      env:
+        CI: true
+    
+    - name: Test API Endpoints
+      run: npx tsx test/integration/api-endpoints-test.ts
+      env:
+        CI: true
+        NODE_ENV: development
+    
+    - name: Validate Test Coverage and Assertions
+      run: |
+        echo "🔍 Validating test assertions and coverage..."
+        
+        # Check if test results file exists
+        if [ ! -f "test-results.xml" ]; then
+          echo "❌ Missing test-results.xml file"
+          exit 1
+        fi
+        
+        # Check for test failures in JUnit XML
+        if grep -q 'failures="[^0]"' test-results.xml; then
+          echo "❌ Test failures detected in test-results.xml"
+          exit 1
+        fi
+        
+        if grep -q 'errors="[^0]"' test-results.xml; then
+          echo "❌ Test errors detected in test-results.xml"
+          exit 1
+        fi
+        
+        # Check for minimum number of tests
+        test_count=$(grep -c '<testcase' test-results.xml || echo "0")
+        if [ "$test_count" -lt 10 ]; then
+          echo "❌ Too few tests executed: $test_count (expected ≥10)"
+          exit 1
+        fi
+        
+        echo "✅ All test validations passed"
+        echo "✅ Test count: $test_count"
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.node-version }}
+        path: |
+          test-results.xml
+          .test-db/
+        retention-days: 30

@@ -2,6 +2,12 @@
 
 An MCP server that provides advanced C++ module analysis, dependency tracking, and architectural insights for large-scale C++ codebases using C++23 modules.
 
+## 📸 Dashboard Overview
+
+![Module Sentinel Dashboard](docs/image.png)
+
+*Real-time visualization dashboard showing live code analysis, relationships, and architectural insights*
+
 ## 🎯 Current Capabilities
 
 ### Core Analysis Tools

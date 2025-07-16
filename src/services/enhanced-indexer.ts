@@ -10,12 +10,12 @@ import {
   CodePattern,
   SymbolRelationship 
 } from '../types/essential-features.js';
-import { StreamingCppParser } from '../parsers/streaming-cpp-parser.js';
+import { UnifiedCppParser } from '../parsers/unified-cpp-parser.js';
 import { PipelineStage } from '../types/index.js';
 
 export class EnhancedIndexer extends EventEmitter {
   private db: Database.Database;
-  private parser: StreamingCppParser;
+  private parser: UnifiedCppParser;
   private patternCache: Map<string, CodePattern> = new Map();
   private dbPath: string;
 
@@ -34,7 +34,12 @@ export class EnhancedIndexer extends EventEmitter {
       // Don't call initDatabase() - assume UnifiedSchemaManager has already set up the schema
     }
     
-    this.parser = new StreamingCppParser({ fastMode: false });
+    this.parser = new UnifiedCppParser({
+      enableModuleAnalysis: true,
+      enableSemanticAnalysis: true,
+      enableTypeAnalysis: true,
+      debugMode: false
+    });
   }
 
   private initDatabase(): void {
@@ -168,14 +173,14 @@ export class EnhancedIndexer extends EventEmitter {
       interfaces: [], // Would be populated by enhanced parser
       relationships: [],
       patterns: [],
-      imports: Array.from(basicSymbols.includes).map((inc: string) => ({
+      imports: Array.from(basicSymbols.includes || []).map((inc: string) => ({
         module: inc,
         symbols: [],
         isSystem: inc.startsWith('<'),
         location: { line: 0, column: 0 }
       })),
-      exports: Array.from(basicSymbols.exports).map(exp => ({
-        symbol: exp,
+      exports: Array.from(basicSymbols.exports || []).map((exp: any) => ({
+        symbol: typeof exp === 'string' ? exp : exp.symbol,
         type: 'function' as const,
         location: { line: 0, column: 0 }
       }))

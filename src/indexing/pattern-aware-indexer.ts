@@ -2,15 +2,14 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import Database from 'better-sqlite3';
 import { createHash } from 'crypto';
-import { StreamingCppParser } from '../parsers/streaming-cpp-parser.js';
-import { EnhancedTreeSitterParser } from '../parsers/enhanced-tree-sitter-parser.js';
-import { ClangIntelligentIndexer } from './clang-intelligent-indexer.js';
+import { UnifiedCppParser } from '../parsers/unified-cpp-parser.js';
 import { ParallelProcessingEngine } from '../engines/parallel-engine.js';
 import { Worker } from 'worker_threads';
 import * as os from 'os';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 import { EnhancedAntiPatternDetector } from '../services/enhanced-antipattern-detector.js';
-import { HybridCppParser } from '../parsers/hybrid-cpp-parser.js';
+import { RelationshipExtractionHelper } from './relationship-extraction-helper.js';
+import { AntiPatternDetectionHelper } from './antipattern-detection-helper.js';
 
 /**
  * Pattern-aware indexer specifically designed for the planet_procgen codebase
@@ -23,32 +22,43 @@ interface PatternCache {
 
 export class PatternAwareIndexer {
   private db: Database.Database;
-  private clangParser: ClangIntelligentIndexer;
-  private treeSitterParser: EnhancedTreeSitterParser;
-  private streamingParser: StreamingCppParser;
-  private hybridParser: HybridCppParser;
+  private unifiedParser: UnifiedCppParser;
   private parallelEngine: ParallelProcessingEngine;
   private patternCache: PatternCache;
   private semanticWorker: Worker | null = null;
-  private parserStats = { clang: 0, treeSitter: 0, streaming: 0, hybrid: 0, failed: 0 };
+  private parserStats = { clang: 0, unified: 0, failed: 0 };
   private antiPatternDetector: EnhancedAntiPatternDetector;
+  private relationshipHelper: RelationshipExtractionHelper;
+  private antiPatternHelper: AntiPatternDetectionHelper;
   private debugMode: boolean = false;
   
-  constructor(private projectPath: string, private dbPath: string, debugMode: boolean = false) {
+  constructor(private projectPath: string, private dbPath: string, debugMode: boolean = false, enableFileWatching: boolean = false, existingDb?: Database.Database) {
     this.debugMode = debugMode;
-    this.db = new Database(dbPath);
     
-    // Initialize database schema through unified manager
-    const schemaManager = UnifiedSchemaManager.getInstance();
-    schemaManager.initializeDatabase(this.db);
+    if (existingDb) {
+      // Use existing database connection
+      this.db = existingDb;
+      console.log('PatternAwareIndexer: Using existing database connection, db path:', this.dbPath);
+      
+    } else {
+      // Create new database connection - use provided dbPath for tests, DATABASE_PATH for production
+      const actualDbPath = process.env.NODE_ENV === 'test' ? dbPath : (process.env.DATABASE_PATH || dbPath);
+      this.db = new Database(actualDbPath);
+      console.log('PatternAwareIndexer: Created new database connection at:', actualDbPath);
+      
+      // Initialize database schema through clean unified manager
+      const schemaManager = CleanUnifiedSchemaManager.getInstance();
+      schemaManager.initializeDatabase(this.db);
+    }
     
-    // Initialize hierarchical parsers - all use same database
-    // TODO: Clang parser disabled temporarily - requires compilation database setup
-    // this.clangParser = new ClangIntelligentIndexer(projectPath, dbPath);
-    this.clangParser = null as any; // Temporary placeholder
-    this.treeSitterParser = new EnhancedTreeSitterParser();
-    this.streamingParser = new StreamingCppParser({ fastMode: true });
-    this.hybridParser = new HybridCppParser(this.debugMode);
+    // Initialize unified parser
+    this.unifiedParser = new UnifiedCppParser({
+      enableModuleAnalysis: true,
+      enableSemanticAnalysis: true,
+      enableTypeAnalysis: true,
+      debugMode: this.debugMode,
+      projectPath: this.projectPath
+    });
     
     this.parallelEngine = new ParallelProcessingEngine(Math.min(os.cpus().length, 8));
     this.patternCache = {
@@ -58,8 +68,111 @@ export class PatternAwareIndexer {
     
     // Initialize enhanced anti-pattern detector
     this.antiPatternDetector = new EnhancedAntiPatternDetector(dbPath);
+    
+    // Initialize relationship extraction helper
+    this.relationshipHelper = new RelationshipExtractionHelper(this.db, this.debugMode);
+    
+    // Initialize anti-pattern detection helper
+    this.antiPatternHelper = new AntiPatternDetectionHelper(this.db, this.debugMode);
   }
   
+  /**
+   * Filter files that have changed since last indexing
+   */
+  private async filterChangedFiles(filePaths: string[]): Promise<string[]> {
+    const changedFiles: string[] = [];
+    
+    for (const filePath of filePaths) {
+      try {
+        // Get file stats
+        const stats = await fs.stat(filePath);
+        const fileContent = await fs.readFile(filePath, 'utf-8');
+        const currentHash = createHash('sha256').update(fileContent).digest('hex');
+        
+        // Check if file is already indexed with same hash
+        const existingFile = this.db.prepare(`
+          SELECT hash, last_indexed FROM indexed_files WHERE path = ?
+        `).get(filePath) as any;
+        
+        if (!existingFile || existingFile.hash !== currentHash) {
+          changedFiles.push(filePath);
+        }
+      } catch (error) {
+        // If we can't read the file or check its status, include it for processing
+        changedFiles.push(filePath);
+      }
+    }
+    
+    return changedFiles;
+  }
+
+  /**
+   * Update file tracking after successful processing
+   */
+  private async updateFileTracking(processedResults: any[]): Promise<void> {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO indexed_files (
+        path, relative_path, hash, last_indexed, 
+        confidence, symbol_count, file_size, is_module
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    for (const result of processedResults) {
+      try {
+        // Calculate file hash
+        const fileContent = await fs.readFile(result.filePath, 'utf-8');
+        const fileHash = createHash('sha256').update(fileContent).digest('hex');
+        const stats = await fs.stat(result.filePath);
+        
+        // Count symbols extracted from this file
+        const symbolCount = this.db.prepare(`
+          SELECT COUNT(*) as count FROM enhanced_symbols WHERE file_path = ?
+        `).get(result.filePath) as any;
+        
+        // Check if it's a module file
+        const isModule = result.parseResult?.isModule || result.filePath.endsWith('.ixx');
+        
+        const params = [
+          result.filePath,
+          result.relativePath || path.relative(this.projectPath, result.filePath),
+          fileHash,
+          Date.now(),
+          (typeof result.parseResult?.confidence === 'object' 
+            ? result.parseResult.confidence.overall 
+            : result.parseResult?.confidence) || 0.8,
+          symbolCount?.count || 0,
+          stats.size,
+          isModule ? 1 : 0
+        ];
+        
+        // Validate parameters
+        if (params.some(p => p === undefined)) {
+          console.warn(`Skipping file tracking for ${result.filePath} - undefined parameters:`, params);
+          continue;
+        }
+        
+        stmt.run(...params);
+      } catch (error) {
+        console.warn(`Failed to update file tracking for ${result.filePath}:`, error);
+      }
+    }
+  }
+
+  /**
+   * Parse files with original fast approach
+   */
+  private async parseFilesWithAdaptiveConcurrency(filesToProcess: string[]): Promise<any[]> {
+    // Back to original approach - just parse all files in parallel
+    return Promise.all(filesToProcess.map(async (filePath) => {
+      try {
+        const result = await this.unifiedParser.parseFile(filePath);
+        return { filePath, result, success: true };
+      } catch (error) {
+        return { filePath, error, success: false };
+      }
+    }));
+  }
+
   /**
    * Index multiple files in parallel with batch processing
    */
@@ -69,44 +182,59 @@ export class PatternAwareIndexer {
     if (this.debugMode) console.log(`\n🚀 Indexing ${filePaths.length} files in parallel...`);
     const startTime = Date.now();
     
+    // Skip file change detection for now - it's slowing things down
+    // TODO: Add back file change detection as an optimization later
+    const filesToProcess = filePaths;
+    
     // Initialize parsers
-    await this.hybridParser.initialize(this.projectPath);
-    await this.treeSitterParser.initialize();
+    const initStart = Date.now();
+    await this.unifiedParser.initialize();
+    console.log(`⏱️  Parser initialization: ${Date.now() - initStart}ms`);
     
     // Initialize semantic worker if needed
+    const workerStart = Date.now();
     if (!this.semanticWorker) {
       await this.initializeSemanticWorker();
     }
+    console.log(`⏱️  Semantic worker initialization: ${Date.now() - workerStart}ms`);
     
-    // Use HybridCppParser's worker pool for parallel parsing
-    const parseResults = await this.hybridParser.parseFilesInParallel(filePaths);
+    // Use adaptive concurrency for parsing
+    const parseStart = Date.now();
+    const parseResults = await this.parseFilesWithAdaptiveConcurrency(filesToProcess);
+    console.log(`⏱️  File parsing: ${Date.now() - parseStart}ms for ${filesToProcess.length} files`);
     
     const allSymbols: any[] = [];
     const failedFiles: string[] = [];
     const allValidResults: any[] = [];
     
     // Process parsed results
-    for (const [filePath, parseResult] of parseResults) {
-      const relativePath = path.relative(this.projectPath, filePath);
+    for (const result of parseResults) {
+      if (!result.success) {
+        failedFiles.push(result.filePath);
+        continue;
+      }
+      
+      const relativePath = path.relative(this.projectPath, result.filePath);
       allValidResults.push({
-        filePath,
+        filePath: result.filePath,
         relativePath,
-        parseResult,
-        parserUsed: 'hybrid-worker-pool'
+        parseResult: result.result,
+        parserUsed: 'unified'
       });
     }
     
     // Add failed files (those not in results)
     for (const filePath of filePaths) {
-      if (!parseResults.has(filePath)) {
+      if (!parseResults.find(r => r.filePath === filePath)?.success) {
         failedFiles.push(filePath);
       }
     }
     
-    // Extract symbols from parsed results
+    // Extract symbols from parsed results (WITHOUT processing relationships yet)
+    const symbolStart = Date.now();
     for (const result of allValidResults) {
       try {
-        const symbols = await this.extractSymbolsWithWorker(
+        const symbols = await this.extractSymbolsWithoutRelationships(
           result.parseResult,
           result.filePath,
           result.relativePath,
@@ -118,27 +246,56 @@ export class PatternAwareIndexer {
         failedFiles.push(result.filePath);
       }
     }
+    console.log(`⏱️  Symbol extraction: ${Date.now() - symbolStart}ms for ${allSymbols.length} symbols`);
     
-    // Batch insert all symbols and extract comprehensive module information
+    // Batch insert all symbols FIRST
     if (allSymbols.length > 0) {
+      const storeStart = Date.now();
       await this.storeSymbolsBatch(allSymbols);
+      console.log(`⏱️  Symbol storage: ${Date.now() - storeStart}ms`);
+      
+      // NOW process relationships after symbols are in the database - BATCH OPTIMIZED
+      const relationshipStart = Date.now();
+      await this.relationshipHelper.extractAndStoreAllFileRelationshipsBatch(allValidResults);
+      console.log(`⏱️  File relationships: ${Date.now() - relationshipStart}ms`);
       
       // Extract and store module information from parse results
+      const moduleStart = Date.now();
       await this.extractAndStoreModuleInformation(allValidResults);
+      console.log(`⏱️  Module information: ${Date.now() - moduleStart}ms`);
       
-      // Run enhanced anti-pattern detection on all processed files
-      await this.runAntiPatternDetection(allValidResults);
+      // Extract and store patterns from parse results
+      const patternStart = Date.now();
+      await this.extractAndStorePatternsFromParseResults(allValidResults);
+      console.log(`⏱️  Pattern extraction: ${Date.now() - patternStart}ms`);
+      
+      // Run enhanced anti-pattern detection on all processed files - BATCH OPTIMIZED
+      const antiPatternStart = Date.now();
+      await this.antiPatternHelper.runAntiPatternDetectionBatch(allValidResults);
+      console.log(`⏱️  Anti-pattern detection: ${Date.now() - antiPatternStart}ms`);
       
       // Build semantic connections
+      const semanticStart = Date.now();
       await this.buildSemanticConnections(allSymbols);
+      console.log(`⏱️  Semantic connections: ${Date.now() - semanticStart}ms`);
       
       // Build cross-file dependency map for all processed files
+      const dependencyStart = Date.now();
       await this.buildCrossFileDependencyMap(allValidResults);
+      console.log(`⏱️  Cross-file dependencies: ${Date.now() - dependencyStart}ms`);
+      
+      // Resolve any pending relationships now that all symbols are processed
+      const pendingStart = Date.now();
+      await this.resolvePendingRelationships();
+      console.log(`⏱️  Pending relationships: ${Date.now() - pendingStart}ms`);
     }
     
+    // Update file tracking for successfully processed files
+    await this.updateFileTracking(allValidResults);
+    
     const elapsed = Date.now() - startTime;
-    const successCount = filePaths.length - failedFiles.length;
-    if (this.debugMode) console.log(`Indexed ${allSymbols.length} symbols from ${successCount}/${filePaths.length} files in ${elapsed}ms`);
+    const successCount = filesToProcess.length - failedFiles.length;
+    if (this.debugMode) console.log(`Indexed ${allSymbols.length} symbols from ${successCount}/${filesToProcess.length} files in ${elapsed}ms`);
     
     if (failedFiles.length > 0) {
       if (this.debugMode) console.log(`  ⚠️  ${failedFiles.length} files could not be indexed (likely due to compilation errors)`);
@@ -189,6 +346,7 @@ export class PatternAwareIndexer {
   private async storeSymbolsBatch(symbols: any[]): Promise<void> {
     if (symbols.length === 0) return;
     
+    
     // Smart conflict resolution: only insert if higher confidence or new symbol
     const insertStmt = this.db.prepare(`
       INSERT INTO enhanced_symbols (
@@ -196,8 +354,9 @@ export class PatternAwareIndexer {
         parent_class, namespace, mangled_name, is_definition, is_template, template_params, usr,
         execution_mode, is_async, is_factory, is_generator, pipeline_stage, 
         returns_vector_float, uses_gpu_compute, has_cpu_fallback,
-        semantic_tags, related_symbols, parser_used, parser_confidence, parse_timestamp
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        is_constructor, is_destructor,
+        semantic_tags, related_symbols, parser_used, parser_confidence, parse_timestamp, body_hash
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(name, file_path, line, kind) DO UPDATE SET
         qualified_name = CASE 
           WHEN excluded.parser_confidence > enhanced_symbols.parser_confidence 
@@ -244,7 +403,12 @@ export class PatternAwareIndexer {
           THEN excluded.parser_confidence 
           ELSE enhanced_symbols.parser_confidence 
         END,
-        parse_timestamp = excluded.parse_timestamp
+        parse_timestamp = excluded.parse_timestamp,
+        body_hash = CASE 
+          WHEN excluded.body_hash IS NOT NULL 
+          THEN excluded.body_hash 
+          ELSE enhanced_symbols.body_hash 
+        END
     `);
     
     const transaction = this.db.transaction((symbols: any[]) => {
@@ -276,11 +440,14 @@ export class PatternAwareIndexer {
             symbol.returnsVectorFloat ? 1 : 0,
             symbol.usesGpuCompute ? 1 : 0,
             symbol.hasCpuFallback ? 1 : 0,
+            symbol.isConstructor ? 1 : 0,
+            symbol.isDestructor ? 1 : 0,
             JSON.stringify(symbol.semanticTags),
             JSON.stringify(symbol.relatedSymbols || []),
             symbol.parserUsed || 'streaming',
             symbol.parserConfidence || 0.6,
-            Date.now()
+            Date.now(),
+            symbol.bodyHash || null
           );
         } catch (e) {
           console.error(`Failed to insert symbol ${symbol.name}: ${(e as Error).message}`);
@@ -296,6 +463,78 @@ export class PatternAwareIndexer {
     // After storing symbols, extract and store enhanced method signatures and class hierarchies
     await this.extractMethodSignatures(symbols);
     await this.extractClassHierarchies(symbols);
+    
+    // Store parameters for methods that have them
+    await this.storeParametersBatch(symbols);
+  }
+  
+  /**
+   * Store method parameters in the enhanced_parameters table
+   */
+  private async storeParametersBatch(symbols: any[]): Promise<void> {
+    const methodSymbols = symbols.filter(s => s.parameters && s.parameters.length > 0);
+    if (methodSymbols.length === 0) return;
+    
+    // First, get the symbol IDs for the functions we need to store parameters for
+    const functionIds = new Map<string, number>();
+    
+    // Query for function IDs based on name, file_path, and line
+    const getIdStmt = this.db.prepare(`
+      SELECT id, name, file_path, line FROM enhanced_symbols 
+      WHERE name = ? AND file_path = ? AND line = ?
+    `);
+    
+    for (const symbol of methodSymbols) {
+      const result = getIdStmt.get(symbol.name, symbol.filePath, symbol.line) as any;
+      if (result) {
+        functionIds.set(`${symbol.name}:${symbol.filePath}:${symbol.line}`, result.id);
+      }
+    }
+    
+    // Prepare the parameter insertion statement
+    const insertStmt = this.db.prepare(`
+      INSERT OR REPLACE INTO enhanced_parameters (
+        function_id, parameter_name, parameter_type, position,
+        is_const, is_pointer, is_reference, is_template,
+        template_args, default_value, semantic_role, data_flow_stage
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    // Store parameters in a transaction
+    const transaction = this.db.transaction(() => {
+      for (const symbol of methodSymbols) {
+        const key = `${symbol.name}:${symbol.filePath}:${symbol.line}`;
+        const functionId = functionIds.get(key);
+        
+        if (!functionId) continue;
+        
+        // Store each parameter
+        for (let i = 0; i < symbol.parameters.length; i++) {
+          const param = symbol.parameters[i];
+          
+          try {
+            insertStmt.run(
+              functionId,
+              param.name || `param_${i}`,
+              param.type || 'unknown',
+              i + 1, // position (1-based)
+              param.isConst ? 1 : 0,
+              param.isPointer ? 1 : 0,
+              param.isReference ? 1 : 0,
+              param.isTemplate ? 1 : 0,
+              param.templateArguments ? JSON.stringify(param.templateArguments) : '[]',
+              param.defaultValue || null,
+              param.semanticRole || null,
+              symbol.pipelineStage || null
+            );
+          } catch (e) {
+            console.error(`Failed to insert parameter ${param.name} for function ${symbol.name}: ${(e as Error).message}`);
+          }
+        }
+      }
+    });
+    
+    transaction();
   }
   
   /**
@@ -470,61 +709,18 @@ export class PatternAwareIndexer {
    * Parse file with hierarchical fallback strategy
    */
   private async parseFileWithFallback(filePath: string): Promise<{ result: any; parser: string; confidence: number } | null> {
-    // DISABLED: Clang parser (contributes 0 symbols, causes performance issues)
-    // Skip to Tree-sitter parser (good accuracy, more reliable)
-    await this.treeSitterParser.initialize(); // Ensure it's initialized
-    
-    // Try Tree-sitter parser (good accuracy, more reliable)
-    if (false) { // Disable clang completely
-      await this.clangParser.indexFile(filePath);
-      
-      // Get symbols from clang indexer - use their schema
-      const symbols = this.clangParser.db.prepare('SELECT * FROM symbols WHERE file_path = ?').all(filePath);
-      if (symbols && symbols.length > 0) {
-        this.parserStats.clang++;
-        // Convert Clang symbols to our unified format with full metadata
-        const convertedSymbols = (symbols as any[]).map(s => ({
-          name: s.name,
-          qualifiedName: s.qualified_name || s.name,
-          kind: s.kind,
-          filePath: s.file_path,
-          line: s.line,
-          column: s.column || 0,
-          signature: s.signature,
-          returnType: s.return_type,
-          parentClass: s.parent_class,
-          namespace: s.namespace,
-          mangledName: s.mangled_name,
-          isDefinition: s.is_definition,
-          isTemplate: s.is_template,
-          templateParams: s.template_params ? JSON.parse(s.template_params) : null,
-          usr: s.usr
-        }));
-        
-        return { result: { functions: convertedSymbols, classes: [], methods: convertedSymbols }, parser: 'clang', confidence: 0.95 };
-      }
-    } // End of disabled clang block
+    // Use unified parser which combines all parsing strategies
+    await this.unifiedParser.initialize();
 
-    // Try Tree-sitter parser (good accuracy, more reliable)
+    // Use unified parser (combines all parsing strategies)
     try {
-      const result = await this.treeSitterParser.parseFile(filePath);
+      const result = await this.unifiedParser.parseFile(filePath);
       if (result && this.hasValidSymbols(result)) {
-        this.parserStats.treeSitter++;
-        return { result, parser: 'tree-sitter', confidence: 0.8 };
+        this.parserStats.unified++;
+        return { result, parser: 'unified', confidence: result.confidence?.overall || 0.8 };
       }
     } catch (error) {
-      // Tree-sitter failed, continue to fallback
-    }
-
-    // Fallback to streaming parser (basic but reliable)
-    try {
-      const result = await this.streamingParser.parseFile(filePath);
-      if (result && this.hasValidSymbols(result)) {
-        this.parserStats.streaming++;
-        return { result, parser: 'streaming', confidence: 0.6 };
-      }
-    } catch (error) {
-      // All parsers failed
+      // Unified parser failed
     }
 
     this.parserStats.failed++;
@@ -615,6 +811,9 @@ export class PatternAwareIndexer {
       case 'tree-sitter': 
         baseConfidence = 0.7; // Medium base
         break;
+      case 'unified':
+        baseConfidence = 0.75; // Good base for unified parser
+        break;
       case 'streaming': 
         baseConfidence = 0.5; // Low base
         break;
@@ -624,28 +823,41 @@ export class PatternAwareIndexer {
 
     // Quality scoring based on actual extracted information
     
-    // 1. Signature quality (up to 0.3 points)
-    maxQualityPoints += 0.3;
-    if (symbol.signature) {
-      if (symbol.signature.includes('(') && symbol.signature.includes(')')) {
-        qualityScore += 0.2; // Has parameter list
-        if (symbol.signature.includes(',') || symbol.signature.includes('void')) {
-          qualityScore += 0.05; // Has parameters or explicit void
+    // 1. Signature quality (up to 0.3 points) - not applicable to classes
+    if (symbol.kind !== 'class' && symbol.kind !== 'struct' && symbol.kind !== 'enum') {
+      maxQualityPoints += 0.3;
+      if (symbol.signature) {
+        if (symbol.signature.includes('(') && symbol.signature.includes(')')) {
+          qualityScore += 0.2; // Has parameter list
+          if (symbol.signature.includes(',') || symbol.signature.includes('void')) {
+            qualityScore += 0.05; // Has parameters or explicit void
+          }
+          if (symbol.signature.includes('const') || symbol.signature.includes('noexcept')) {
+            qualityScore += 0.05; // Has qualifiers
+          }
+        } else {
+          qualityScore += 0.1; // Basic signature
         }
-        if (symbol.signature.includes('const') || symbol.signature.includes('noexcept')) {
-          qualityScore += 0.05; // Has qualifiers
-        }
-      } else {
-        qualityScore += 0.1; // Basic signature
+      }
+    } else {
+      // For classes, check if we have member information
+      maxQualityPoints += 0.3;
+      if (symbol.name && symbol.line > 0) {
+        qualityScore += 0.2; // Has name and location
+      }
+      if (symbol.namespace || symbol.qualifiedName?.includes('::')) {
+        qualityScore += 0.1; // Has namespace context
       }
     }
 
-    // 2. Return type information (up to 0.2 points)
-    maxQualityPoints += 0.2;
-    if (symbol.returnType) {
-      qualityScore += 0.15;
-      if (symbol.returnType.includes('::') || symbol.returnType.includes('<')) {
-        qualityScore += 0.05; // Complex type (namespace or template)
+    // 2. Return type information (up to 0.2 points) - not applicable to classes
+    if (symbol.kind !== 'class' && symbol.kind !== 'struct' && symbol.kind !== 'enum') {
+      maxQualityPoints += 0.2;
+      if (symbol.returnType) {
+        qualityScore += 0.15;
+        if (symbol.returnType.includes('::') || symbol.returnType.includes('<')) {
+          qualityScore += 0.05; // Complex type (namespace or template)
+        }
       }
     }
 
@@ -664,8 +876,10 @@ export class PatternAwareIndexer {
     maxQualityPoints += 0.1;
     if (symbol.kind === 'method' || symbol.kind === 'constructor' || symbol.kind === 'destructor') {
       qualityScore += 0.1; // Specific method types
-    } else if (symbol.kind === 'function' || symbol.kind === 'class') {
-      qualityScore += 0.05; // General types
+    } else if (symbol.kind === 'function') {
+      qualityScore += 0.05; // General function
+    } else if (symbol.kind === 'class') {
+      qualityScore += 0.1; // Classes are well-defined entities
     }
 
     // 5. Additional semantic information (up to 0.2 points)
@@ -719,7 +933,73 @@ export class PatternAwareIndexer {
   }
   
   /**
-   * Extract symbols with worker-based semantic analysis
+   * Extract symbols WITHOUT processing relationships (for two-phase indexing)
+   */
+  private async extractSymbolsWithoutRelationships(parseResult: any, filePath: string, relativePath: string, parserUsed?: string): Promise<any[]> {
+    const symbols = await this.extractSymbols(parseResult, filePath, relativePath, parserUsed);
+
+    if (!this.semanticWorker || symbols.length === 0) {
+      return symbols;
+    }
+
+    // Perform semantic analysis in worker with timeout
+    return new Promise((resolve, reject) => {
+      let isResolved = false;
+      
+      const cleanup = () => {
+        if (this.semanticWorker) {
+          this.semanticWorker.off('message', messageHandler);
+          this.semanticWorker.off('error', errorHandler);
+        }
+      };
+      
+      const messageHandler = (analyzed: any) => {
+        if (isResolved) return;
+        isResolved = true;
+        cleanup();
+        
+        // Check if we got an error response
+        if (analyzed && analyzed.error) {
+          console.error('Semantic worker error:', analyzed.error);
+          resolve(symbols); // Return original symbols if worker fails
+          return;
+        }
+        
+        // Return enhanced symbols (but skip relationship processing)
+        resolve(analyzed && analyzed.length > 0 ? analyzed : symbols);
+      };
+      
+      const errorHandler = (error: Error) => {
+        if (isResolved) return;
+        isResolved = true;
+        cleanup();
+        console.warn(`Semantic worker error for ${path.basename(filePath)}:`, error.message);
+        resolve(symbols); // Return original symbols if worker fails
+      };
+      
+      this.semanticWorker!.on('message', messageHandler);
+      this.semanticWorker!.on('error', errorHandler);
+      
+      this.semanticWorker!.postMessage({ 
+        symbols, 
+        filePath, 
+        projectPath: this.projectPath 
+      });
+      
+      // Timeout after 5 seconds
+      setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          cleanup();
+          console.warn(`Semantic analysis timeout for ${path.basename(filePath)}`);
+          resolve(symbols);
+        }
+      }, 5000);
+    });
+  }
+
+  /**
+   * Extract symbols with worker-based semantic analysis (legacy method)
    */
   private async extractSymbolsWithWorker(parseResult: any, filePath: string, relativePath: string, parserUsed?: string): Promise<any[]> {
     const symbols = await this.extractSymbols(parseResult, filePath, relativePath, parserUsed);
@@ -793,185 +1073,77 @@ export class PatternAwareIndexer {
    */
   private async extractSymbols(parseResult: any, filePath: string, relativePath: string, parserUsed: string = 'streaming'): Promise<any[]> {
     const symbols: any[] = [];
+    const relationships: any[] = [];
     
     // Minimal debug logging for specific files if needed
     const fileName = path.basename(filePath);
     
     // Determine pipeline stage from path
     const pipelineStage = this.detectPipelineStage(relativePath);
-    
-    // Handle StreamingCppParser format (Sets of strings)
-    if ((parseResult as any).functions instanceof Set) {
-      // Convert Set<string> to array of function objects
-      const functionNames = Array.from((parseResult as any).functions);
-      
-      // Debug output removed - parent class extraction is working
-      
-      for (const funcName of functionNames) {
-        const funcNameStr = funcName as string;
-        // Improved classification and analysis
-        const isMethod = funcNameStr.includes('::');
-        const parentClass = isMethod ? funcNameStr.split('::')[0] : undefined;
-        const methodName = isMethod ? funcNameStr.split('::').pop() : funcNameStr;
-        const kind = this.classifySymbolKind(funcNameStr, isMethod);
-        const complexity = this.estimateComplexity(funcNameStr);
-        
-        const symbol = {
-          name: methodName || funcNameStr,
-          qualifiedName: funcNameStr,
-          kind: kind,
-          filePath,
-          line: 0, // StreamingCppParser doesn't provide line numbers
-          signature: funcNameStr + '(...)', // Basic signature
-          returnType: undefined,
-          parentClass: parentClass,
-          namespace: Array.from((parseResult as any).namespaces || [])[0],
-          
-          // Add complexity estimation
-          complexity: complexity,
-          
-          // Pattern detection based on name
-          executionMode: this.detectExecutionModeFromName(funcNameStr, relativePath),
-          isAsync: funcNameStr.toLowerCase().includes('async'),
-          isFactory: this.isFactoryMethodName(funcNameStr),
-          isGenerator: this.isGeneratorMethodName(funcNameStr),
-          pipelineStage,
-          
-          // Performance hints
-          returnsVectorFloat: funcNameStr.toLowerCase().includes('heightmap') || funcNameStr.toLowerCase().includes('generate'),
-          usesGpuCompute: this.usesGpuComputeFromName(funcNameStr, relativePath),
-          hasCpuFallback: false,
-          
-          // Semantic analysis
-          semanticTags: this.extractSemanticTagsFromName(funcNameStr, relativePath),
-          relatedSymbols: [],
-          
-          // Parser metadata
-          parserUsed,
-          parserConfidence: 0 // Will be calculated after symbol is built
-        };
-        
-        symbols.push(symbol);
-      }
-      
-      // Process classes from Set
-      if ((parseResult as any).classes instanceof Set) {
-        const classNames = Array.from((parseResult as any).classes);
-        for (const className of classNames) {
-          const classNameStr = className as string;
-          const symbol = {
-            name: classNameStr,
-            qualifiedName: classNameStr,
-            kind: 'class',
-            filePath,
-            line: 0,
-            signature: null,
-            returnType: null,
-            parentClass: null,
-            namespace: Array.from((parseResult as any).namespaces || [])[0],
-            executionMode: this.detectClassExecutionModeFromName(classNameStr, relativePath),
-            isAsync: false,
-            isFactory: classNameStr.includes('Factory'),
-            isGenerator: classNameStr.includes('Generator'),
-            pipelineStage,
-            returnsVectorFloat: false,
-            usesGpuCompute: classNameStr.includes('GPU') || classNameStr.includes('Vulkan'),
-            hasCpuFallback: false,
-            semanticTags: this.extractClassSemanticTagsFromName(classNameStr, relativePath),
-            relatedSymbols: [],
-            
-            // Parser metadata
-            parserUsed,
-            parserConfidence: 0 // Will be calculated after symbol is built
-          };
-          
-          symbols.push(symbol);
-        }
-      }
-      
-      // Process exports from Set (for C++20 modules in .ixx files)
-      if ((parseResult as any).exports instanceof Set) {
-        const exports = Array.from((parseResult as any).exports);
-        for (const exportItem of exports) {
-          const exportStr = exportItem as string;
-          
-          // Skip module declarations (handled separately)
-          if (exportStr.startsWith('module:')) continue;
-          
-          // Determine the kind of export
-          let kind = 'export';
-          let name = exportStr;
-          let qualifiedName = exportStr;
-          
-          // Check if it's a namespace export
-          if (exportStr.includes('::')) {
-            const parts = exportStr.split('::');
-            name = parts[parts.length - 1];
-            qualifiedName = exportStr;
-            kind = 'namespace_export';
-          }
-          
-          // Check if it's a constant/variable export (common in physics constants)
-          if (exportStr.includes('constexpr') || exportStr.includes('const')) {
-            kind = 'constant';
-            // Extract the actual constant name
-            const match = exportStr.match(/(?:constexpr|const)\s+\w+\s+(\w+)/);
-            if (match) {
-              name = match[1];
-            }
-          }
-          
-          const symbol = {
-            name: name,
-            qualifiedName: qualifiedName,
-            kind: kind,
-            filePath,
-            line: 0, // StreamingCppParser doesn't provide line numbers
-            signature: exportStr,
-            returnType: null,
-            parentClass: null,
-            namespace: Array.from((parseResult as any).namespaces || [])[0],
-            
-            // Pattern detection
-            executionMode: 'sync',
-            isAsync: false,
-            isFactory: false,
-            isGenerator: false,
-            pipelineStage,
-            
-            // Performance hints
-            returnsVectorFloat: false,
-            usesGpuCompute: false,
-            hasCpuFallback: false,
-            
-            // Semantic tags
-            semanticTags: ['export', 'module'],
-            relatedSymbols: [],
-            
-            // Parser metadata
-            parserUsed,
-            parserConfidence: 0 // Will be calculated after symbol is built
-          };
-          
-          symbols.push(symbol);
-        }
-      }
-      
-      // Calculate real confidence for all symbols
-      symbols.forEach(symbol => {
-        symbol.parserConfidence = this.calculateRealConfidence(symbol, parserUsed);
-      });
-      
-      return symbols;
-    }
-    
+
     // Handle HybridCppParser's EnhancedModuleInfo format
     if (parseResult.methods && parseResult.classes) {
       // This is EnhancedModuleInfo format from HybridCppParser
       const enhancedInfo = parseResult as any;
       
+      // Create module symbol if this is a module file
+      if (enhancedInfo.moduleInfo && enhancedInfo.moduleInfo.moduleName) {
+        const moduleSymbol = {
+          name: enhancedInfo.moduleInfo.moduleName,
+          qualifiedName: enhancedInfo.moduleInfo.moduleName,
+          kind: 'module',
+          filePath,
+          line: 1, // Module declaration is typically at the beginning
+          column: 0,
+          signature: `export module ${enhancedInfo.moduleInfo.moduleName}`,
+          returnType: '',
+          parentClass: null,
+          namespace: null,
+          
+          // Module-specific information
+          isModule: true,
+          isModuleInterface: enhancedInfo.moduleInfo.isModuleInterface || filePath.endsWith('.ixx'),
+          moduleType: enhancedInfo.moduleInfo.moduleType || 'primary_interface',
+          importedModules: enhancedInfo.moduleInfo.importedModules || [],
+          exportNamespaces: enhancedInfo.moduleInfo.exportNamespaces || [],
+          
+          // Enhanced type information
+          isTemplate: false,
+          templateParams: [],
+          isExported: true, // Modules are always exported
+          exportNamespace: enhancedInfo.moduleInfo.moduleName,
+          moduleName: enhancedInfo.moduleInfo.moduleName,
+          
+          // Pattern detection
+          executionMode: 'sync',
+          isAsync: false,
+          isFactory: false,
+          isGenerator: false,
+          pipelineStage,
+          
+          // Performance hints
+          returnsVectorFloat: false,
+          usesGpuCompute: false,
+          hasCpuFallback: false,
+          
+          // Semantic tags
+          semanticTags: ['module', 'module_interface', `module:${enhancedInfo.moduleInfo.moduleName}`],
+          relatedSymbols: [],
+          
+          // Parser metadata
+          parserUsed,
+          parserConfidence: 0.95, // High confidence for module declarations
+          
+          // Body hash
+          bodyHash: null
+        };
+        
+        symbols.push(moduleSymbol);
+      }
+      
       // Process methods
-      for (const method of enhancedInfo.methods || []) {
+      for (let i = 0; i < (enhancedInfo.methods || []).length; i++) {
+        const method = enhancedInfo.methods[i];
         const symbol = {
           name: method.name,
           qualifiedName: method.qualifiedName || (method.className ? `${method.className}::${method.name}` : method.name),
@@ -1007,7 +1179,13 @@ export class PatternAwareIndexer {
           
           // Parser metadata
           parserUsed,
-          parserConfidence: 0
+          parserConfidence: 0,
+          
+          // Duplicate detection
+          bodyHash: method.bodyHash || null,
+          
+          // Parameters for storage in enhanced_parameters table
+          parameters: method.parameters || []
         };
         
         symbols.push(symbol);
@@ -1059,6 +1237,61 @@ export class PatternAwareIndexer {
         };
         
         symbols.push(symbol);
+        
+        // Process class members as separate symbols  
+        for (const member of cls.members || []) {
+          const memberSymbol = {
+            name: member.name,
+            qualifiedName: `${cls.name}::${member.name}`,
+            kind: 'variable',
+            filePath,
+            line: 0,
+            column: 0,
+            signature: `${member.type} ${member.name}`,
+            returnType: null,
+            parentClass: cls.name,
+            namespace: cls.namespace,
+            
+            // Enhanced type information
+            isTemplate: false,
+            templateParams: [],
+            isExported: false,
+            exportNamespace: cls.exportNamespace,
+            moduleName: enhancedInfo.moduleInfo?.moduleName,
+            
+            // Pattern detection
+            executionMode: 'sync',
+            isAsync: false,
+            isFactory: false,
+            isGenerator: false,
+            pipelineStage,
+            
+            // Performance hints
+            returnsVectorFloat: false,
+            usesGpuCompute: false,
+            hasCpuFallback: false,
+            
+            // Semantic tags
+            semanticTags: ['member_variable', member.visibility || 'private'],
+            relatedSymbols: [],
+            
+            // Parser metadata
+            parserUsed,
+            parserConfidence: 0.8
+          };
+          
+          symbols.push(memberSymbol);
+          
+          // Store relationship data for later processing
+          relationships.push({
+            from: `${cls.name}::${member.name}`,
+            to: member.type,
+            type: 'instance_of',
+            confidence: 0.9,
+            filePath: filePath,
+            location: { line: 0, column: 0 }
+          });
+        }
       }
       
       // Calculate real confidence for all symbols
@@ -1066,14 +1299,13 @@ export class PatternAwareIndexer {
         symbol.parserConfidence = this.calculateRealConfidence(symbol, parserUsed);
       });
       
-      return symbols;
-    }
+    } else {
     
-    // Check if parseResult is null or empty
-    if (!parseResult || (typeof parseResult === 'object' && Object.keys(parseResult).length === 0)) {
-      // Empty parse result - file likely has no symbols
-      return symbols;
-    }
+      // Check if parseResult is null or empty
+      if (!parseResult || (typeof parseResult === 'object' && Object.keys(parseResult).length === 0)) {
+        // Empty parse result - file likely has no symbols
+        // Don't return here - let it fall through to final return
+      } else {
     
     // Original code for object-based format
     // Process functions (handle both 'functions' and 'methods' keys)
@@ -1112,6 +1344,10 @@ export class PatternAwareIndexer {
         parentClass: parentClass,
         namespace: func.namespace,
         
+        // Add constructor/destructor flags
+        isConstructor: func.isConstructor || false,
+        isDestructor: func.isDestructor || false,
+        
         // Add complexity calculation
         complexity: complexity,
         
@@ -1127,13 +1363,19 @@ export class PatternAwareIndexer {
         usesGpuCompute: this.usesGpuCompute(func, relativePath),
         hasCpuFallback: this.hasCpuFallback(func),
         
-        // Semantic analysis
-        semanticTags: this.extractSemanticTags(func, relativePath),
+        // Semantic analysis - merge existing tags with new ones
+        semanticTags: [
+          ...(func.semanticTags || []), // Preserve tags from parser
+          ...this.extractSemanticTags(func, relativePath) // Add additional tags
+        ],
         relatedSymbols: [],
         
         // Parser metadata
         parserUsed,
-        parserConfidence: 0 // Will be calculated after symbol is built
+        parserConfidence: 0, // Will be calculated after symbol is built
+        
+        // Duplicate detection
+        bodyHash: func.bodyHash || null
       };
       
       symbols.push(symbol);
@@ -1159,7 +1401,10 @@ export class PatternAwareIndexer {
         returnsVectorFloat: false,
         usesGpuCompute: (cls.name || '').includes('GPU') || (cls.name || '').includes('Vulkan'),
         hasCpuFallback: false,
-        semanticTags: this.extractClassSemanticTags(cls, relativePath),
+        semanticTags: [
+          ...(cls.semanticTags || []), // Preserve tags from parser
+          ...this.extractClassSemanticTags(cls, relativePath) // Add additional tags
+        ],
         relatedSymbols: [],
         
         // Parser metadata
@@ -1168,6 +1413,84 @@ export class PatternAwareIndexer {
       };
       
       symbols.push(symbol);
+      
+      // Process class members as separate symbols
+      for (const member of cls.members || []) {
+        const memberSymbol = {
+          name: member.name,
+          qualifiedName: `${cls.name}::${member.name}`,
+          kind: 'variable',
+          filePath,
+          line: 0, // Member line numbers would need to be tracked separately
+          signature: `${member.type} ${member.name}`,
+          returnType: null,
+          parentClass: cls.name,
+          namespace: cls.namespace,
+          executionMode: 'sync',
+          isAsync: false,
+          isFactory: false,
+          isGenerator: false,
+          pipelineStage,
+          returnsVectorFloat: false,
+          usesGpuCompute: false,
+          hasCpuFallback: false,
+          semanticTags: ['member_variable', member.visibility || 'private'],
+          relatedSymbols: [],
+          parserUsed,
+          parserConfidence: 0.8 // Good confidence for member variables
+        };
+        
+        symbols.push(memberSymbol);
+        
+        // Store relationship data for later processing
+        relationships.push({
+          from: `${cls.name}::${member.name}`,
+          to: member.type,
+          type: 'instance_of',
+          confidence: 0.9,
+          filePath: filePath,
+          location: { line: 0, column: 0 }
+        });
+      }
+    }
+    
+        // Process imports from the parser result and create symbol entries
+        if (parseResult.imports && Array.isArray(parseResult.imports)) {
+      for (const importItem of parseResult.imports) {
+        const moduleName = typeof importItem === 'string' ? importItem : importItem.module;
+        
+        // Skip system/standard library imports
+        if (moduleName.startsWith('std::') || moduleName.startsWith('<') || moduleName.includes('.h') || moduleName.includes('/')) {
+          continue;
+        }
+        
+        const symbol = {
+          name: moduleName,
+          qualifiedName: moduleName,
+          kind: 'module',
+          filePath,
+          line: 0,
+          signature: `import ${moduleName}`,
+          returnType: null,
+          parentClass: null,
+          namespace: null,
+          executionMode: 'sync',
+          isAsync: false,
+          isFactory: false,
+          isGenerator: false,
+          pipelineStage,
+          returnsVectorFloat: false,
+          usesGpuCompute: false,
+          hasCpuFallback: false,
+          semanticTags: ['module', 'import'],
+          relatedSymbols: [],
+          parserUsed,
+          parserConfidence: 0.9 // High confidence for imports
+        };
+        
+          symbols.push(symbol);
+        }
+      }
     }
     
     // Calculate real confidence for all symbols
@@ -1175,8 +1498,14 @@ export class PatternAwareIndexer {
       symbol.parserConfidence = this.calculateRealConfidence(symbol, parserUsed);
     });
     
-    // Extract comprehensive relationships from the parse data
-    this.extractFileRelationships(symbols, parseResult, filePath);
+    // Add relationships to parseResult for separate processing
+    if (relationships.length > 0) {
+      parseResult.relationships = (parseResult.relationships || []).concat(relationships);
+      }
+    }
+    
+    // Note: Relationship extraction moved to separate phase for proper timing
+    // this.extractFileRelationships(symbols, parseResult, filePath);
     
     return symbols;
   }
@@ -1579,10 +1908,11 @@ export class PatternAwareIndexer {
     if (this.debugMode) console.log(`🔗 Building semantic connections for ${symbols.length} symbols...`);
     const startTime = Date.now();
     
-    const insertConn = this.db.prepare(`
-      INSERT OR IGNORE INTO semantic_connections 
-      (symbol_id, connected_id, connection_type, confidence, evidence)
-      VALUES (?, ?, ?, ?, ?)
+    // Use symbol_relationships as the primary table (used by all tools)
+    const insertRel = this.db.prepare(`
+      INSERT OR IGNORE INTO symbol_relationships 
+      (from_symbol_id, to_symbol_id, from_name, to_name, relationship_type, confidence, source_text)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     
     // Run all inserts in a single transaction for ~100x speedup
@@ -1633,7 +1963,7 @@ export class PatternAwareIndexer {
           `).get(cpuName, symbol.pipelineStage) as any;
           
           if (cpuSymbol) {
-            insertConn.run(symbol.id, cpuSymbol.id, 'gpu_cpu_pair', 0.9, 
+            insertRel.run(symbol.id, cpuSymbol.id, symbol.name, cpuName, 'gpu_cpu_pair', 0.9, 
               JSON.stringify({ pattern: 'execution_mode_pair', cpu_name: cpuName }));
             break;
           }
@@ -1661,7 +1991,7 @@ export class PatternAwareIndexer {
             `).get(productType) as any;
             
             if (product) {
-              insertConn.run(symbol.id, product.id, 'factory_product', 0.95,
+              insertRel.run(symbol.id, product.id, symbol.name, productType, 'factory_product', 0.95,
                 JSON.stringify({ pattern: 'factory_creates', product_type: productType }));
             }
           }
@@ -1669,25 +1999,6 @@ export class PatternAwareIndexer {
       }
     }
     
-    // 3. Interface implementation relationships
-    for (const symbol of symbols) {
-      if (symbol.kind === 'class' && symbol.id) {
-        // Look for interface patterns (I prefix, abstract base classes)
-        const interfacePatterns = [
-          `I${symbol.name}`,
-          symbol.name.replace(/Impl$/, ''),
-          symbol.name.replace(/Implementation$/, '')
-        ];
-        
-        for (const interfaceName of interfacePatterns) {
-          const iface = symbolByName.get(interfaceName);
-          if (iface && iface.id && iface.kind === 'class') {
-            insertConn.run(symbol.id, iface.id, 'implements_interface', 0.8,
-              JSON.stringify({ pattern: 'interface_implementation', interface_name: interfaceName }));
-          }
-        }
-      }
-    }
     
     // 4. Manager-managed relationships
     for (const symbol of symbols) {
@@ -1695,7 +2006,7 @@ export class PatternAwareIndexer {
         const managedType = symbol.name.replace(/Manager$/, '').replace(/Manager/g, '');
         const managed = symbolByName.get(managedType);
         if (managed && managed.id) {
-          insertConn.run(symbol.id, managed.id, 'manager_manages', 0.85,
+          insertRel.run(symbol.id, managed.id, symbol.name, managedType, 'manager_manages', 0.85,
             JSON.stringify({ pattern: 'manager_managed', managed_type: managedType }));
         }
       }
@@ -1713,44 +2024,20 @@ export class PatternAwareIndexer {
         
         for (const spec of specializations) {
           if (spec.id && spec.id !== symbol.id) {
-            insertConn.run(symbol.id, spec.id, 'template_specialization', 0.9,
+            insertRel.run(symbol.id, spec.id, symbol.name, spec.name, 'template_specialization', 0.9,
               JSON.stringify({ pattern: 'template_spec', template_name: templateName }));
           }
         }
       }
     }
     
-    // 6. Namespace cohesion relationships (symbols in same namespace/module)
-    // Process in batches to keep all data but avoid memory issues
-    for (const [namespace, nsSymbols] of symbolsByNamespace) {
-      if (nsSymbols.length > 1 && namespace !== 'global') {
-        // For large namespaces, create connections more efficiently
-        if (nsSymbols.length > 50) {
-          // Connect each symbol to a few representatives instead of all-to-all
-          const representatives = nsSymbols.slice(0, 5); // First 5 as representatives
-          for (let i = 5; i < nsSymbols.length; i++) {
-            for (const rep of representatives) {
-              if (nsSymbols[i].id && rep.id) {
-                insertConn.run(nsSymbols[i].id, rep.id, 'namespace_cohesion', 0.5,
-                  JSON.stringify({ pattern: 'same_namespace_large', namespace: namespace }));
-              }
-            }
-          }
-        } else {
-          // Small namespaces: keep all connections
-          for (let i = 0; i < nsSymbols.length; i++) {
-            for (let j = i + 1; j < nsSymbols.length; j++) {
-              const sym1 = nsSymbols[i];
-              const sym2 = nsSymbols[j];
-              if (sym1.id && sym2.id) {
-                insertConn.run(sym1.id, sym2.id, 'namespace_cohesion', 0.6,
-                  JSON.stringify({ pattern: 'same_namespace', namespace: namespace }));
-              }
-            }
-          }
-        }
-      }
-    }
+    // 6. Namespace information is already stored in each symbol's record
+    // We can use the 'namespace' and 'qualified_name' fields for resolution
+    // No need to create O(n²) relationships - that's what indexes are for!
+    
+    // Instead, let's create namespace membership entries in a separate table if needed
+    // This would allow queries like "show all symbols in namespace X"
+    // But for now, we can just query: WHERE namespace = 'X'
     
     // 7. Pipeline stage relationships (symbols in same stage often work together)
     const stageGroups = new Map<string, any[]>();
@@ -1770,7 +2057,7 @@ export class PatternAwareIndexer {
             const sym1 = stageSymbols[i];
             const sym2 = stageSymbols[j];
             if (sym1.id && sym2.id) {
-              insertConn.run(sym1.id, sym2.id, 'pipeline_stage_cohesion', 0.4,
+              insertRel.run(sym1.id, sym2.id, sym1.name, sym2.name, 'pipeline_stage_cohesion', 0.4,
                 JSON.stringify({ pattern: 'same_pipeline_stage', stage: stage }));
             }
           }
@@ -1821,7 +2108,7 @@ export class PatternAwareIndexer {
       for (const planetSym of planetGenTypes) {
         if (planetSym.return_type?.includes(vulkanSym.name) || 
             planetSym.name.toLowerCase().includes(vulkanSym.name.toLowerCase())) {
-          insertConn.run(planetSym.id, vulkanSym.id, 'vulkan_wrapper', 0.85,
+          insertRel.run(planetSym.id, vulkanSym.id, planetSym.name, vulkanSym.name, 'vulkan_wrapper', 0.85,
             JSON.stringify({ 
               pattern: 'type_ecosystem', 
               wrapper_type: 'planetgen_vulkan',
@@ -1839,7 +2126,7 @@ export class PatternAwareIndexer {
       const className = ctor.name.replace(/^(.+)::\1$/, '$1'); // Extract class name
       const dtor = destructors.find(d => d.name.includes(className));
       if (dtor) {
-        insertConn.run(ctor.id, dtor.id, 'constructor_destructor_pair', 0.95,
+        insertRel.run(ctor.id, dtor.id, ctor.name, dtor.name, 'constructor_destructor_pair', 0.95,
           JSON.stringify({ pattern: 'lifecycle_pair', class_name: className }));
       }
     }
@@ -1861,7 +2148,7 @@ export class PatternAwareIndexer {
       if (ops.length > 1) {
         for (let i = 0; i < ops.length; i++) {
           for (let j = i + 1; j < ops.length; j++) {
-            insertConn.run(ops[i].id, ops[j].id, 'operator_overload_family', 0.7,
+            insertRel.run(ops[i].id, ops[j].id, ops[i].name, ops[j].name, 'operator_overload_family', 0.7,
               JSON.stringify({ pattern: 'operator_family', operator_type: opType }));
           }
         }
@@ -1873,7 +2160,7 @@ export class PatternAwareIndexer {
       if (exportedSyms.length > 1 && exportedSyms.length < 100) {
         for (let i = 0; i < exportedSyms.length; i++) {
           for (let j = i + 1; j < exportedSyms.length; j++) {
-            insertConn.run(exportedSyms[i].id, exportedSyms[j].id, 'module_export_cohesion', 0.6,
+            insertRel.run(exportedSyms[i].id, exportedSyms[j].id, exportedSyms[i].name, exportedSyms[j].name, 'module_export_cohesion', 0.6,
               JSON.stringify({ 
                 pattern: 'module_cohesion', 
                 module_name: moduleName,
@@ -1903,7 +2190,7 @@ export class PatternAwareIndexer {
     const parameters = this.db.prepare(`
       SELECT ep.*, es.name as symbol_name, es.id as symbol_id
       FROM enhanced_parameters ep
-      JOIN enhanced_symbols es ON ep.symbol_id = es.id
+      JOIN enhanced_symbols es ON ep.function_id = es.id
     `).all() as any[];
     
     for (const param of parameters) {
@@ -1927,7 +2214,7 @@ export class PatternAwareIndexer {
           for (let j = i + 1; j < relatedSyms.length; j++) {
             const sym1 = relatedSyms[i];
             const sym2 = relatedSyms[j];
-            insertConn.run(sym1.id, sym2.id, 'type_affinity', 0.5,
+            insertRel.run(sym1.id, sym2.id, sym1.name, sym2.name, 'type_affinity', 0.5,
               JSON.stringify({ 
                 pattern: 'type_usage',
                 base_type: baseType,
@@ -1956,7 +2243,7 @@ export class PatternAwareIndexer {
         const constVariant = variants.find(v => v.is_const);
         const nonConstVariant = variants.find(v => !v.is_const);
         if (constVariant && nonConstVariant) {
-          insertConn.run(constVariant.id, nonConstVariant.id, 'const_nonconst_pair', 0.9,
+          insertRel.run(constVariant.id, nonConstVariant.id, constVariant.name, nonConstVariant.name, 'const_nonconst_pair', 0.9,
             JSON.stringify({ pattern: 'const_overload', method_name: methodName }));
         }
       }
@@ -1987,7 +2274,7 @@ export class PatternAwareIndexer {
             );
             
             if (takesOutput) {
-              insertConn.run(currentSym.id, nextSym.id, 'pipeline_data_flow', 0.8,
+              insertRel.run(currentSym.id, nextSym.id, currentSym.name, nextSym.name, 'pipeline_data_flow', 0.8,
                 JSON.stringify({ 
                   pattern: 'stage_transition',
                   from_stage: currentStage,
@@ -3419,6 +3706,48 @@ export class PatternAwareIndexer {
   }
 
   /**
+   * Extract and store patterns from parse results
+   */
+  private async extractAndStorePatternsFromParseResults(validResults: any[]): Promise<void> {
+    if (validResults.length === 0) return;
+    
+    const patternInsert = this.db.prepare(`
+      INSERT OR IGNORE INTO code_patterns (
+        pattern_type, pattern_name, file_path, line, confidence, 
+        evidence, detected_by, detection_timestamp
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    const transaction = this.db.transaction((results: any[]) => {
+      for (const result of results) {
+        try {
+          const parseResult = result.parseResult;
+          const filePath = result.filePath;
+          
+          if (parseResult && parseResult.patterns && Array.isArray(parseResult.patterns)) {
+            for (const pattern of parseResult.patterns) {
+              patternInsert.run(
+                pattern.type || 'unknown',
+                pattern.name || 'unnamed',
+                filePath,
+                pattern.location?.line || 0,
+                pattern.confidence || 0.8,
+                JSON.stringify(pattern.evidence || {}),
+                'parser',
+                Date.now()
+              );
+            }
+          }
+        } catch (error) {
+          console.warn(`Failed to store patterns for ${result.filePath}:`, error);
+        }
+      }
+    });
+    
+    transaction(validResults);
+  }
+
+  /**
    * Extract and store module information from parse results
    */
   private async extractAndStoreModuleInformation(validResults: any[]): Promise<void> {
@@ -3565,6 +3894,26 @@ export class PatternAwareIndexer {
   }
 
   /**
+   * Extract and store file relationships AFTER symbols are in database
+   */
+  private async extractAndStoreFileRelationships(parseResult: any, filePath: string): Promise<void> {
+    // Get symbols for this file from the database (they should exist now)
+    const symbols = this.db.prepare(`
+      SELECT id, name, qualified_name, kind, parent_class, signature, line
+      FROM enhanced_symbols 
+      WHERE file_path = ?
+    `).all(filePath) as any[];
+
+    if (symbols.length === 0) {
+      console.warn(`⚠️  No symbols found in database for ${path.basename(filePath)} - skipping relationships`);
+      return;
+    }
+
+    // Now extract relationships with symbols that exist in database
+    this.extractFileRelationships(symbols, parseResult, filePath);
+  }
+
+  /**
    * Extract comprehensive relationships from parse data and symbols
    */
   private extractFileRelationships(symbols: any[], parseResult: any, filePath: string): void {
@@ -3587,6 +3936,25 @@ export class PatternAwareIndexer {
       
       if (this.debugMode && parserRelationships.length > 0) {
         console.log(`📥 Extracted ${parserRelationships.length} direct relationships from parser`);
+      }
+    }
+    
+    // 0. First, add relationships directly from the parser
+    if (parseResult && parseResult.relationships && Array.isArray(parseResult.relationships)) {
+      // Store parser relationships directly (imports, inherits, etc.)
+      this.storeParserRelationships(parseResult.relationships, filePath, symbols);
+      
+      // Also add to relationships array for further processing
+      for (const rel of parseResult.relationships) {
+        relationships.push({
+          fromSymbol: rel.from || rel.source,
+          fromFile: filePath,
+          toSymbol: rel.to || rel.target,
+          toFile: filePath, // Same file for now
+          relationshipType: rel.type || 'unknown',
+          confidence: rel.confidence || 0.8,
+          evidence: rel.evidence || null
+        });
       }
     }
     
@@ -3616,6 +3984,11 @@ export class PatternAwareIndexer {
    * Extract include and import relationships
    */
   private extractIncludeRelationships(relationships: any[], parseResult: any, filePath: string): void {
+    // Get the module name from moduleInfo if available
+    const fromModuleName = (parseResult.moduleInfo && parseResult.moduleInfo.moduleName) 
+      ? parseResult.moduleInfo.moduleName 
+      : path.basename(filePath, path.extname(filePath));
+    
     // Extract includes
     if (parseResult && parseResult.includes) {
       const includes = parseResult.includes instanceof Set ? 
@@ -3623,7 +3996,7 @@ export class PatternAwareIndexer {
       
       for (const include of includes) {
         relationships.push({
-          fromSymbol: path.basename(filePath),
+          fromSymbol: fromModuleName,
           fromFile: filePath,
           toSymbol: include,
           toFile: null, // Will be resolved later
@@ -3639,10 +4012,11 @@ export class PatternAwareIndexer {
         Array.from(parseResult.imports) : parseResult.imports;
       
       for (const importItem of imports) {
+        const targetModuleName = typeof importItem === 'string' ? importItem : importItem.module;
         relationships.push({
-          fromSymbol: path.basename(filePath),
+          fromSymbol: fromModuleName,
           fromFile: filePath,
-          toSymbol: importItem,
+          toSymbol: targetModuleName,
           toFile: null,
           relationshipType: 'imports',
           confidence: 0.9
@@ -3964,6 +4338,186 @@ export class PatternAwareIndexer {
   }
 
   /**
+   * Store parser relationships (imports, inherits, etc.) directly
+   */
+  private storeParserRelationships(relationships: any[], filePath: string, symbols: any[]): void {
+    // Improved insert statement with better cross-file support
+    const insertStmt = this.db.prepare(`
+      INSERT OR IGNORE INTO symbol_relationships (
+        from_symbol_id, to_symbol_id, relationship_type, confidence, detected_by,
+        from_name, to_name
+      ) VALUES (
+        (SELECT id FROM enhanced_symbols WHERE name = ? AND file_path = ? LIMIT 1),
+        COALESCE(
+          (SELECT id FROM enhanced_symbols WHERE name = ? LIMIT 1),
+          (SELECT id FROM enhanced_symbols WHERE qualified_name = ? LIMIT 1),
+          (SELECT id FROM enhanced_symbols WHERE name LIKE '%' || ? || '%' LIMIT 1)
+        ),
+        ?, ?, 'unified', ?, ?
+      )
+    `);
+
+    for (const rel of relationships) {
+      if (rel.type === 'imports' || rel.type === 'inherits' || rel.type === 'calls') {
+        try {
+          // For imports, from is the file/module, to is the imported module
+          // For inherits, from is the child class, to is the parent class
+          // For calls, from is the caller, to is the callee
+          
+          // Try to store the relationship with multiple fallback strategies
+          insertStmt.run(
+            rel.from,           // from_symbol name
+            filePath,           // from_symbol file
+            rel.to,             // to_symbol name (exact match)
+            rel.to,             // to_symbol qualified name (fallback)
+            rel.to,             // to_symbol partial match (fallback)
+            rel.type,           // relationship_type
+            rel.confidence || 0.85, // confidence
+            rel.from,           // from_name (for debugging)
+            rel.to              // to_name (for debugging)
+          );
+          
+          if (this.debugMode) {
+            console.log(`📎 Stored ${rel.type} relationship: ${rel.from} -> ${rel.to}`);
+          }
+        } catch (error) {
+          // If relationship storage fails, store it as a pending relationship
+          this.storePendingRelationship(rel, filePath, error);
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolve pending relationships after all symbols are processed
+   */
+  private async resolvePendingRelationships(): Promise<void> {
+    try {
+      // Check if pending_relationships table exists
+      const tableExists = this.db.prepare(`
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name='pending_relationships'
+      `).get();
+
+      if (!tableExists) {
+        return; // No pending relationships to process
+      }
+
+      const pendingRels = this.db.prepare(`
+        SELECT * FROM pending_relationships ORDER BY created_at
+      `).all() as any[];
+
+      if (pendingRels.length === 0) {
+        return;
+      }
+
+      if (this.debugMode) {
+        console.log(`🔗 Resolving ${pendingRels.length} pending relationships...`);
+      }
+
+      const insertStmt = this.db.prepare(`
+        INSERT OR IGNORE INTO symbol_relationships (
+          from_symbol_id, to_symbol_id, relationship_type, confidence, detected_by,
+          from_name, to_name
+        ) VALUES (?, ?, ?, ?, 'unified', ?, ?)
+      `);
+
+      const deleteStmt = this.db.prepare(`
+        DELETE FROM pending_relationships WHERE id = ?
+      `);
+
+      let resolvedCount = 0;
+
+      for (const rel of pendingRels) {
+        // Try to find both symbols now that all files are processed
+        const fromSymbol = this.db.prepare(`
+          SELECT id FROM enhanced_symbols 
+          WHERE (name = ? OR qualified_name = ?) AND file_path = ?
+          LIMIT 1
+        `).get(rel.from_name, rel.from_name, rel.from_file_path) as any;
+
+        const toSymbol = this.db.prepare(`
+          SELECT id FROM enhanced_symbols 
+          WHERE name = ? OR qualified_name = ? OR name LIKE '%' || ? || '%'
+          LIMIT 1
+        `).get(rel.to_name, rel.to_name, rel.to_name) as any;
+
+        if (fromSymbol && toSymbol) {
+          // Both symbols found, store the relationship
+          insertStmt.run(
+            fromSymbol.id,
+            toSymbol.id,
+            rel.relationship_type,
+            rel.confidence,
+            rel.from_name,
+            rel.to_name
+          );
+          
+          // Remove from pending
+          deleteStmt.run(rel.id);
+          resolvedCount++;
+        }
+      }
+
+      if (this.debugMode && resolvedCount > 0) {
+        console.log(`✅ Resolved ${resolvedCount}/${pendingRels.length} pending relationships`);
+      }
+
+    } catch (error) {
+      if (this.debugMode) {
+        console.warn('Error resolving pending relationships:', error);
+      }
+    }
+  }
+
+  /**
+   * Store relationships that couldn't be resolved immediately
+   */
+  private storePendingRelationship(rel: any, filePath: string, error: any): void {
+    try {
+      // Create pending_relationships table if it doesn't exist
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS pending_relationships (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_name TEXT NOT NULL,
+          to_name TEXT NOT NULL,
+          relationship_type TEXT NOT NULL,
+          confidence REAL DEFAULT 0.8,
+          from_file_path TEXT NOT NULL,
+          to_file_path TEXT,
+          created_at INTEGER DEFAULT (strftime('%s', 'now')),
+          error_message TEXT
+        )
+      `);
+
+      const insertPending = this.db.prepare(`
+        INSERT INTO pending_relationships (
+          from_name, to_name, relationship_type, confidence, 
+          from_file_path, to_file_path, error_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insertPending.run(
+        rel.from,
+        rel.to,
+        rel.type,
+        rel.confidence || 0.8,
+        filePath,
+        rel.toFile || null,
+        error?.message || 'Unknown error'
+      );
+
+      if (this.debugMode) {
+        console.log(`📋 Stored pending relationship: ${rel.from} -> ${rel.to} (${rel.type})`);
+      }
+    } catch (pendingError) {
+      if (this.debugMode) {
+        console.warn(`Failed to store pending relationship:`, rel, pendingError);
+      }
+    }
+  }
+
+  /**
    * Store relationships in the database
    */
   private storeRelationshipsBatch(relationships: any[]): void {
@@ -3985,8 +4539,27 @@ export class PatternAwareIndexer {
     const transaction = this.db.transaction((rels: any[]) => {
       for (const rel of rels) {
         try {
-          // Only handle our new clean format
-          if (rel.fromSymbol && rel.toSymbol && rel.fromClass) {
+          // Handle both old format (from parser) and new format
+          if (rel.from && rel.to && rel.type) {
+            // Parser format: from, to, type
+            insertStmt.run(
+              rel.type,
+              rel.confidence || 0.7,
+              rel.source_text || '',
+              rel.location?.line || null,
+              rel.to,            // target symbol name
+              null,              // target class (unknown)
+              rel.to,            // fallback: try without class context
+              rel.from,          // source symbol name
+              null,              // source class (unknown)
+              rel.filePath || '' // source file
+            );
+            
+            if (this.debugMode) {
+              console.log(`🔗 ${rel.from} -[${rel.type}]-> ${rel.to}`);
+            }
+          } else if (rel.fromSymbol && rel.toSymbol && rel.fromClass) {
+            // Enhanced format with class context
             insertStmt.run(
               rel.relationshipType || 'calls',
               rel.confidence || 0.7,
@@ -4139,10 +4712,6 @@ export class PatternAwareIndexer {
       }
     }
     
-    // Store cross-file dependencies
-    if (dependencies.length > 0) {
-      await this.storeCrossFileDependencies(dependencies);
-    }
     
     const elapsed = Date.now() - startTime;
     if (this.debugMode) console.log(`  🔗 Cross-file analysis complete: ${dependencies.length} dependencies found in ${elapsed}ms`);
@@ -4440,9 +5009,9 @@ export class PatternAwareIndexer {
     this.parallelEngine.shutdown();
     this.antiPatternDetector.close();
     
-    // Stop any background re-indexing from UnifiedSchemaManager
-    const schemaManager = UnifiedSchemaManager.getInstance();
-    schemaManager.stopProgressiveReindexing(this.db);
+    // Stop any background re-indexing from CleanUnifiedSchemaManager
+    const schemaManager = CleanUnifiedSchemaManager.getInstance();
+    // Note: Clean schema manager doesn't have progressive reindexing
     
     this.db.close();
   }

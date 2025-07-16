@@ -57,3 +57,6 @@ test-cross-file-fix.js
 # Visualization outputs (keep only the source files)
 visualizations/*.html
 visualizations/*.svg
+
+# Test database directory
+.test-db/

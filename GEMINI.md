@@ -40,6 +40,17 @@ The `module-sentinel` employs a database-centric architecture, leveraging SQLite
 *   **Engines (`src/engines/`)**: Contains core processing engines like `ParallelProcessingEngine` and `ThoughtSignaturePreserver`.
 *   **Visualizations (`src/visualization/`)**: Logic for generating architectural visualizations.
 
+	
+	claude mcp add-json module-sentinel '{
+      "command": "/home/warxh/.nvm/versions/node/v22.17.0/bin/node",
+      "args": ["/home/warxh/cpp_mcp_master/module-sentinel/dist/index.js"],
+      "cwd": "/home/warxh/cpp_mcp_master/module-sentinel",
+      "env": {
+        "GEMINI_API_KEY": "'$GEMINI_API_KEY'",
+        "NODE_ENV": "development"
+      }
+    }'
+
 ## 3. Available MCP Tools
 
 The `module-sentinel` MCP server exposes a rich set of tools for code analysis and architectural insights. When interacting with the project, prioritize using these tools to gather information or perform actions.

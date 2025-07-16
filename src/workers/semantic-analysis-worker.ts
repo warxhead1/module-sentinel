@@ -12,6 +12,15 @@ interface Symbol {
 // Semantic analysis functions
 const extractSemanticTags = (symbol: Symbol, relativePath: string): string[] => {
   const tags: string[] = [];
+  
+  // Add null checks
+  if (!symbol.name || typeof symbol.name !== 'string') {
+    return tags;
+  }
+  if (!relativePath || typeof relativePath !== 'string') {
+    return tags;
+  }
+  
   const nameLower = symbol.name.toLowerCase();
   const pathLower = relativePath.toLowerCase();
   
@@ -52,6 +61,9 @@ const extractSemanticTags = (symbol: Symbol, relativePath: string): string[] => 
 };
 
 const detectExecutionMode = (symbol: Symbol, relativePath: string): string => {
+  if (!symbol.name || typeof symbol.name !== 'string') return 'cpu';
+  if (!relativePath || typeof relativePath !== 'string') return 'cpu';
+  
   const nameLower = symbol.name.toLowerCase();
   const pathLower = relativePath.toLowerCase();
   
@@ -77,6 +89,8 @@ const detectExecutionMode = (symbol: Symbol, relativePath: string): string => {
 };
 
 const isFactoryMethod = (symbol: Symbol): boolean => {
+  if (!symbol.name || typeof symbol.name !== 'string') return false;
+  
   const nameLower = symbol.name.toLowerCase();
   return nameLower.startsWith('create') || 
          nameLower.startsWith('make') || 
@@ -85,6 +99,8 @@ const isFactoryMethod = (symbol: Symbol): boolean => {
 };
 
 const isGeneratorMethod = (symbol: Symbol): boolean => {
+  if (!symbol.name || typeof symbol.name !== 'string') return false;
+  
   const nameLower = symbol.name.toLowerCase();
   return nameLower.includes('generate') || 
          nameLower.includes('build') ||
@@ -92,6 +108,8 @@ const isGeneratorMethod = (symbol: Symbol): boolean => {
 };
 
 const detectPipelineStage = (relativePath: string): string => {
+  if (!relativePath || typeof relativePath !== 'string') return 'unknown';
+  
   const path = relativePath.toLowerCase();
   
   if (path.includes('generation/heightmap') || path.includes('generation/noise')) {
@@ -125,16 +143,25 @@ const detectPipelineStage = (relativePath: string): string => {
 // Main message handler
 parentPort?.on('message', ({ symbols, relativePath }) => {
   try {
-    const analyzed = symbols.map((symbol: Symbol) => ({
+    // Filter out symbols with invalid names
+    const validSymbols = symbols.filter((symbol: Symbol) => 
+      symbol && symbol.name && typeof symbol.name === 'string' && symbol.name.trim().length > 0
+    );
+    
+    const analyzed = validSymbols.map((symbol: Symbol) => ({
       ...symbol,
-      semanticTags: extractSemanticTags(symbol, relativePath),
+      semanticTags: [
+        ...(symbol.semanticTags || []), // Preserve existing tags
+        ...extractSemanticTags(symbol, relativePath) // Add new tags
+      ],
       executionMode: detectExecutionMode(symbol, relativePath),
       isFactory: isFactoryMethod(symbol),
       isGenerator: isGeneratorMethod(symbol),
       pipelineStage: detectPipelineStage(relativePath),
       // Performance hints based on analysis
       returnsVectorFloat: symbol.returnType === 'std::vector<float>' || 
-                         (symbol.name.toLowerCase().includes('heightmap') && 
+                         (symbol.name && typeof symbol.name === 'string' && 
+                          symbol.name.toLowerCase().includes('heightmap') && 
                           symbol.name.toLowerCase().includes('generate')),
       usesGpuCompute: detectExecutionMode(symbol, relativePath) === 'gpu',
       hasCpuFallback: symbol.signature?.includes('GPUMode') || false

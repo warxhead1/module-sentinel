@@ -1,4 +1,4 @@
-import { UnifiedIndexer } from '../services/unified-indexer.js';
+// import { UnifiedIndexer } from '../services/unified-indexer.js'; // Removed - using database directly
 import {
   FindImplementationsRequest,
   FindImplementationsResponse,
@@ -18,18 +18,15 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 
 export class Priority1Tools {
-  private indexer: UnifiedIndexer;
   private db: Database.Database;
 
   constructor(dbPathOrDatabase: string | Database.Database, projectPath: string = '/home/warxh/planet_procgen') {
     if (typeof dbPathOrDatabase === 'string') {
       // Legacy mode: create our own database connection
       this.db = new Database(dbPathOrDatabase);
-      this.indexer = new UnifiedIndexer(projectPath, dbPathOrDatabase);
     } else {
       // New mode: use existing database
       this.db = dbPathOrDatabase;
-      this.indexer = new UnifiedIndexer(projectPath, this.db.name || 'unknown');
     }
   }
 
@@ -40,28 +37,54 @@ export class Priority1Tools {
     const exact_matches: ImplementationMatch[] = [];
     const similar_implementations: ImplementationMatch[] = [];
 
-    // Search for methods matching the criteria using unified indexer
-    const methods = await this.indexer.findImplementations(
-      request.functionality,
-      request.keywords,
-      request.returnType
+    // Search for methods matching the criteria using database directly
+    // Now includes namespace-aware search!
+    const methods = this.db.prepare(`
+      SELECT name, parent_class, return_type, signature, file_path, line, 
+             qualified_name, kind, namespace, export_namespace
+      FROM enhanced_symbols
+      WHERE kind IN ('function', 'method')
+        AND (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? 
+             OR namespace LIKE ? OR namespace || '::' || name LIKE ?)
+      ORDER BY 
+        CASE 
+          WHEN name = ? THEN 1
+          WHEN name LIKE ? THEN 2
+          WHEN qualified_name LIKE ? THEN 3
+          WHEN namespace LIKE ? THEN 4
+          ELSE 4
+        END,
+        name
+    `).all(
+      `%${request.functionality}%`,  // name LIKE
+      `%${request.functionality}%`,  // qualified_name LIKE
+      `%${request.functionality}%`,  // signature LIKE
+      `%${request.functionality}%`,  // namespace LIKE
+      `%${request.functionality}%`,  // namespace::name LIKE
+      request.functionality,         // name = (exact match)
+      `${request.functionality}%`,   // name LIKE (prefix match)
+      `%${request.functionality}%`,  // qualified_name LIKE
+      `%${request.functionality}%`   // namespace LIKE
     );
 
     // Categorize matches by relevance
     for (const method of methods) {
       // UnifiedIndexer returns enhanced format with both schemas
-      const methodName = method.name;
-      const className = method.parent_class || method.className;
-      const returnType = method.return_type || method.returnType;
-      const parameters = method.parameters || [];
+      const methodName = (method as any).name;
+      const className = (method as any).parent_class || (method as any).className;
+      const returnType = (method as any).return_type || (method as any).returnType;
+      const parameters = (method as any).parameters || [];
+      
+      const namespace = (method as any).namespace || '';
+      const qualifiedName = (method as any).qualified_name || methodName;
       
       const match: ImplementationMatch = {
-        module: className || 'Global',
-        method: methodName,
-        signature: method.signature || `${returnType || 'void'} ${methodName}(...)`,
-        location: `${method.file_path}:${method.line}`,
+        module: className || namespace || 'Global',
+        method: qualifiedName,
+        signature: (method as any).signature || `${returnType || 'void'} ${methodName}(...)`,
+        location: `${(method as any).file_path}:${(method as any).line}`,
         description: this.generateMethodDescription(method),
-        score: method.score // From pattern-aware scoring
+        score: (method as any).score // From pattern-aware scoring
       };
 
       // Check if it's an exact match
@@ -121,14 +144,29 @@ export class Priority1Tools {
    * Find similar code patterns
    */
   async findSimilarCode(request: SimilarCodeRequest): Promise<SimilarCodeResponse> {
-    const patterns = await this.indexer.findSimilarPatterns(
-      request.pattern,
-      request.threshold
+    // Search for similar code patterns using database directly
+    const patterns = this.db.prepare(`
+      SELECT name, signature, file_path, line, parent_class, return_type, qualified_name
+      FROM enhanced_symbols
+      WHERE kind IN ('function', 'method')
+        AND (signature LIKE ? OR name LIKE ?)
+      ORDER BY 
+        CASE 
+          WHEN signature LIKE ? THEN 1
+          WHEN name LIKE ? THEN 2
+          ELSE 3
+        END
+      LIMIT 50
+    `).all(
+      `%${request.pattern}%`,
+      `%${request.pattern}%`,
+      `%${request.pattern}%`,
+      `%${request.pattern}%`
     );
 
     const similar_patterns: SimilarCodeMatch[] = patterns.map(pattern => ({
-      location: pattern.locations[0], // Take first occurrence
-      pattern: this.describePattern(pattern),
+      location: `${(pattern as any).file_path}:${(pattern as any).line}`,
+      pattern: this.describePattern(pattern as any),
       suggestion: this.generateSuggestion(pattern, request.context)
     }));
 
@@ -626,8 +664,77 @@ export class Priority1Tools {
     };
   }
 
+  /**
+   * Find all symbols in a namespace (or namespace pattern)
+   * Example: "PlanetGen::Rendering" or "PlanetGen::*"
+   */
+  async findInNamespace(namespace: string): Promise<any[]> {
+    // Convert * wildcards to SQL % wildcards
+    const namespacePattern = namespace.replace(/\*/g, '%');
+    
+    const symbols = this.db.prepare(`
+      SELECT name, qualified_name, kind, namespace, file_path, line,
+             return_type, signature, semantic_tags
+      FROM enhanced_symbols
+      WHERE namespace LIKE ?
+         OR namespace = ?
+      ORDER BY namespace, kind, name
+    `).all(namespacePattern, namespace);
+    
+    // Group by namespace for better organization
+    const grouped = new Map<string, any[]>();
+    for (const symbol of symbols) {
+      const ns = (symbol as any).namespace || 'global';
+      if (!grouped.has(ns)) {
+        grouped.set(ns, []);
+      }
+      grouped.get(ns)!.push(symbol);
+    }
+    
+    return Array.from(grouped.entries()).map(([ns, syms]) => ({
+      namespace: ns,
+      symbolCount: syms.length,
+      symbols: syms
+    }));
+  }
+
+  /**
+   * Resolve a symbol name from a given namespace context
+   * This implements C++ name lookup rules
+   */
+  async resolveSymbol(symbolName: string, fromNamespace: string, fromFile: string): Promise<any[]> {
+    // Try to resolve in order of C++ lookup rules
+    const candidates = this.db.prepare(`
+      SELECT name, qualified_name, kind, namespace, file_path, line,
+             return_type, signature, semantic_tags,
+             CASE 
+               WHEN namespace = ? THEN 1              -- Same namespace
+               WHEN namespace = ? THEN 2              -- Parent namespace
+               WHEN namespace = '' THEN 3             -- Global namespace
+               WHEN namespace IN (                    -- Imported namespaces
+                 SELECT DISTINCT import_namespace 
+                 FROM imports 
+                 WHERE file_path = ?
+               ) THEN 4
+               ELSE 5
+             END as priority
+      FROM enhanced_symbols
+      WHERE name = ?
+      ORDER BY priority, qualified_name
+    `).all(
+      fromNamespace,
+      fromNamespace.substring(0, fromNamespace.lastIndexOf('::') || 0),
+      fromFile,
+      symbolName
+    );
+    
+    return candidates;
+  }
+
   close(): void {
-    this.indexer.close();
-    this.db.close();
+    // Only close if we own the database connection
+    if (this.db) {
+      this.db.close();
+    }
   }
 }

@@ -1,0 +1,69 @@
+{
+  "name": "Module Sentinel Development",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": true,
+      "upgradePackages": true,
+      "username": "automatic",
+      "userUid": "automatic",
+      "userGid": "automatic"
+    },
+    "ghcr.io/devcontainers/features/git:1": {
+      "ppa": true,
+      "version": "os-provided"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.vscode-typescript-next",
+        "bradlc.vscode-tailwindcss",
+        "esbenp.prettier-vscode",
+        "ms-vscode.vscode-json",
+        "ms-vscode.cpptools",
+        "ms-vscode.cpptools-extension-pack",
+        "twxs.cmake",
+        "jeff-hykin.better-cpp-syntax",
+        "ms-python.python",
+        "ms-toolsai.jupyter"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "typescript.preferences.quoteStyle": "single",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.fixAll": "explicit"
+        }
+      }
+    }
+  },
+  "postCreateCommand": "npm install",
+  "remoteUser": "devuser",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/planet_procgen,target=/home/warxh/planet_procgen,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.zshrc,target=/home/devuser/.zshrc,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.oh-my-zsh,target=/home/devuser/.oh-my-zsh,type=bind,consistency=cached"
+  ],
+  "forwardPorts": [3000, 8080, 9229],
+  "portsAttributes": {
+    "3000": {
+      "label": "Development Server",
+      "onAutoForward": "notify"
+    },
+    "8080": {
+      "label": "Dashboard",
+      "onAutoForward": "silent"
+    },
+    "9229": {
+      "label": "Node Debug",
+      "onAutoForward": "silent"
+    }
+  }
+}

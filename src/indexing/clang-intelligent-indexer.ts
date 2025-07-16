@@ -4,7 +4,7 @@ import { spawn } from 'child_process';
 import Database from 'better-sqlite3';
 import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 
 /**
  * Intelligent C++ Indexer using Clang's compilation database
@@ -30,7 +30,7 @@ export class ClangIntelligentIndexer extends EventEmitter {
 
   private initDatabase(): void {
     // Use unified schema manager instead of creating conflicting schemas
-    const schemaManager = UnifiedSchemaManager.getInstance();
+    const schemaManager = CleanUnifiedSchemaManager.getInstance();
     schemaManager.initializeDatabase(this.db);
     
     // Create Clang-specific tables that don't conflict with unified schema

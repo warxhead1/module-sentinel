@@ -14,8 +14,7 @@ import { Priority1Tools } from './tools/priority-1-tools.js';
 import { Priority2Tools } from './tools/priority-2-tools.js';
 import { UnifiedSearch } from './tools/unified-search.js';
 import { PatternAwareIndexer } from './indexing/pattern-aware-indexer.js';
-import { AnalyticsService } from './services/analytics-service.js';
-import { UnifiedSchemaManager } from './database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from './database/clean-unified-schema.js';
 import { FileWatcher } from './services/file-watcher.js';
 import { ThoughtSignaturePreserver } from './engines/thought-signature.js';
 import { ClaudeValidationTool } from './tools/claude-validation-tool.js';
@@ -26,22 +25,24 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as dotenv from 'dotenv';
 
-class ModuleSentinelMCPServer {
+export class ModuleSentinelMCPServer {
   private server: Server;
   private priority1Tools: Priority1Tools;
   private priority2Tools: Priority2Tools;
   private unifiedSearch: UnifiedSearch;
-  private patternAwareIndexer: PatternAwareIndexer;
-  private analyticsService: AnalyticsService;
+  private patternAwareIndexer!: PatternAwareIndexer;
   private dbPath: string;
   private db: Database.Database;
-  private schemaManager: UnifiedSchemaManager;
-  private fileWatcher: FileWatcher;
+  private schemaManager: CleanUnifiedSchemaManager;
+  private fileWatcher!: FileWatcher;
   private thoughtSignaturePreserver: ThoughtSignaturePreserver;
   private claudeValidationTool?: ClaudeValidationTool;
   private visualizationAPI?: VisualizationAPI;
+  private enableFileWatcher: boolean;
 
-  constructor() {
+  constructor(options?: { enableFileWatcher?: boolean, skipAutoIndex?: boolean }) {
+    this.enableFileWatcher = options?.enableFileWatcher ?? true;
+    const skipAutoIndex = options?.skipAutoIndex ?? false;
     // Load environment variables (for backwards compatibility)
     dotenv.config();
     
@@ -53,11 +54,10 @@ class ModuleSentinelMCPServer {
                         process.env.MODULE_SENTINEL_PROJECT_PATH || 
                         '/home/warxh/planet_procgen';
     
-    const dbDir = secureConfig.dbPath ? path.dirname(secureConfig.dbPath) :
+    this.dbPath = secureConfig.dbPath || 
+                  process.env.DATABASE_PATH || 
                   process.env.MODULE_SENTINEL_DB_PATH || 
-                  path.join(process.env.HOME || '/tmp', '.module-sentinel');
-    
-    this.dbPath = secureConfig.dbPath || path.resolve(dbDir, 'module-sentinel.db');
+                  path.join(process.env.HOME || '/tmp', '.module-sentinel', 'module-sentinel.db');
     
     // Ensure database directory exists
     const dbDirPath = path.dirname(this.dbPath);
@@ -71,7 +71,9 @@ class ModuleSentinelMCPServer {
     
     // Initialize database and schema manager first
     this.db = new Database(this.dbPath);
-    this.schemaManager = UnifiedSchemaManager.getInstance();
+    this.schemaManager = CleanUnifiedSchemaManager.getInstance();
+    
+    // Always initialize the schema (safe to call multiple times)
     this.schemaManager.initializeDatabase(this.db);
     
     // Log database health for debugging
@@ -87,8 +89,12 @@ class ModuleSentinelMCPServer {
     this.priority2Tools = new Priority2Tools(this.db);
     this.unifiedSearch = new UnifiedSearch(this.db);
     const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
-    this.patternAwareIndexer = new PatternAwareIndexer(projectPath, this.dbPath, debugMode);
-    this.analyticsService = new AnalyticsService(this.db);
+    
+    // Only create PatternAwareIndexer if not skipping auto-index (to avoid conflicts with explicit rebuilds)
+    if (!skipAutoIndex) {
+      this.patternAwareIndexer = new PatternAwareIndexer(projectPath, this.dbPath, debugMode, true, this.db);
+    }
+    // this.analyticsService = new AnalyticsService(this.db); // Removed - functionality covered by PatternAwareIndexer
     
     // Initialize ThoughtSignaturePreserver with the shared database
     this.thoughtSignaturePreserver = new ThoughtSignaturePreserver(this.db);
@@ -104,27 +110,29 @@ class ModuleSentinelMCPServer {
       console.error(`[MCP Server] Config location: ${SecureConfigManager.getConfigPath()}`);
     }
     
-    // Initialize file watcher
-    this.fileWatcher = new FileWatcher({
-      paths: [projectPath],
-      filePatterns: ['*.cpp', '*.hpp', '*.h', '*.ixx', '*.cc', '*.cxx'],
-      indexer: this.patternAwareIndexer,
-      debounceMs: 1000,
-      batchUpdates: true
-    });
-    
-    // Set up file watcher event handlers
-    this.fileWatcher.on('indexed', (event) => {
-      console.error(`[FileWatcher] File ${event.action}: ${event.path}`);
-    });
-    
-    this.fileWatcher.on('batch:complete', (event) => {
-      console.error(`[FileWatcher] Batch indexed ${event.count} files`);
-    });
-    
-    this.fileWatcher.on('error', (event) => {
-      console.error(`[FileWatcher] Error watching ${event.path}:`, event.error);
-    });
+    // Initialize file watcher (only if we have a PatternAwareIndexer)
+    if (this.patternAwareIndexer) {
+      this.fileWatcher = new FileWatcher({
+        paths: [projectPath],
+        filePatterns: ['*.cpp', '*.hpp', '*.h', '*.ixx', '*.cc', '*.cxx'],
+        indexer: this.patternAwareIndexer,
+        debounceMs: 1000,
+        batchUpdates: true
+      });
+      
+      // Set up file watcher event handlers
+      this.fileWatcher.on('indexed', (event) => {
+        console.error(`[FileWatcher] File ${event.action}: ${event.path}`);
+      });
+      
+      this.fileWatcher.on('batch:complete', (event) => {
+        console.error(`[FileWatcher] Batch indexed ${event.count} files`);
+      });
+      
+      this.fileWatcher.on('error', (event) => {
+        console.error(`[FileWatcher] Error watching ${event.path}:`, event.error);
+      });
+    }
     
     this.server = new Server(
       {
@@ -141,8 +149,10 @@ class ModuleSentinelMCPServer {
 
     this.setupTools();
     
-    // Auto-index on startup, then start file watcher
-    this.autoIndex();
+    // Auto-index on startup, then start file watcher if enabled (unless explicitly skipped)
+    if (!skipAutoIndex) {
+      this.autoIndex();
+    }
 
     // Start the visualization server
     this.visualizationAPI = new VisualizationAPI(this.dbPath, 8081);
@@ -150,23 +160,175 @@ class ModuleSentinelMCPServer {
 
   private async autoIndex(): Promise<void> {
     try {
+      // Ensure database connection is valid
+      this.ensureDbConnection();
+      
       // Check if index exists and has content
       const symbolCount = this.db.prepare('SELECT COUNT(*) as count FROM enhanced_symbols').get() as any;
       
       if (symbolCount.count === 0) {
         console.error('Building initial index...');
-        await this.handleRebuildIndex({ projectPath: '/home/warxh/planet_procgen' });
+        await this.handleRebuildIndex({ projectPath: process.env.PROJECT_PATH || '/home/warxh/planet_procgen' });
         console.error('Index built successfully');
       } else {
         console.error(`Index already exists with ${symbolCount.count} symbols`);
       }
       
-      // Start file watcher after index is ready
-      console.error('Starting file watcher...');
-      await this.fileWatcher.start();
-      console.error('File watcher started - monitoring for changes');
+      // Start file watcher after index is ready if enabled
+      if (this.enableFileWatcher) {
+        console.error('Starting file watcher...');
+        await this.fileWatcher.start();
+        console.error('File watcher started - monitoring for changes');
+      }
     } catch (error) {
       console.error('Auto-indexing failed:', error);
+    }
+  }
+
+  // Ensure schema exists (safe to call multiple times)
+  private ensureSchemaExists(): void {
+    try {
+      const tables = this.db.prepare(`
+        SELECT name FROM sqlite_master 
+        WHERE type='table' AND name IN ('enhanced_symbols', 'symbol_relationships')
+      `).all();
+      
+      if (tables.length < 2) {
+        console.error('[MCP Server] Initializing database schema...');
+        this.schemaManager.initializeDatabase(this.db);
+        console.error('[MCP Server] Database schema initialized');
+      }
+    } catch (error) {
+      console.error('[MCP Server] Schema check failed, reinitializing:', error);
+      this.schemaManager.initializeDatabase(this.db);
+    }
+  }
+
+  // Sort files by parsing priority: .ixx first, then headers, then implementations
+  private sortFilesByPriority(filePaths: string[]): string[] {
+    const moduleFiles: string[] = [];
+    const headerFiles: string[] = [];
+    const implementationFiles: string[] = [];
+    
+    for (const filePath of filePaths) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (ext === '.ixx') {
+        moduleFiles.push(filePath);
+      } else if (ext === '.h' || ext === '.hpp') {
+        headerFiles.push(filePath);
+      } else {
+        implementationFiles.push(filePath);
+      }
+    }
+    
+    // Sort each category alphabetically for consistent ordering
+    moduleFiles.sort();
+    headerFiles.sort();
+    implementationFiles.sort();
+    
+    // Return in priority order: modules first, headers second, implementations last
+    return [...moduleFiles, ...headerFiles, ...implementationFiles];
+  }
+
+  // Ensure database connection is valid and reconnect if needed
+  private ensureDbConnection(): void {
+    try {
+      // Simple test query to check if connection is valid
+      this.db.prepare('SELECT 1').get();
+    } catch (error) {
+      console.error('[MCP Server] Database connection lost, reconnecting...');
+      this.db = new Database(this.dbPath);
+      this.ensureSchemaExists();
+    }
+  }
+
+  // Public method for testing tool calls
+  public async handleToolCall(request: { params: { name: string; arguments?: any } }): Promise<any> {
+    return await this.processToolRequest(request);
+  }
+
+  private async processToolRequest(request: { params: { name: string; arguments?: any } }): Promise<any> {
+    try {
+      switch (request.params.name) {
+        // Priority 1 Tools
+        case 'find_implementations':
+          return await this.handleFindImplementations(request.params.arguments);
+        case 'find_similar_code':
+          return await this.handleFindSimilarCode(request.params.arguments);
+        case 'analyze_cross_file_dependencies':
+          return await this.handleAnalyzeCrossFileDependencies(request.params.arguments);
+        
+        // Priority 2 Tools  
+        case 'get_api_surface':
+          return await this.handleGetApiSurface(request.params.arguments);
+        case 'analyze_impact':
+          return await this.handleAnalyzeImpact(request.params.arguments);
+        case 'validate_boundaries':
+          return await this.handleValidateBoundaries(request.params.arguments);
+        case 'suggest_module':
+          return await this.handleSuggestModule(request.params.arguments);
+        
+        // Unified Search
+        case 'find_module_for_symbol':
+          return await this.handleFindModuleForSymbol(request.params.arguments);
+        case 'semantic_search':
+          return await this.handleSemanticSearch(request.params.arguments);
+        
+        // Index Management
+        case 'rebuild_index':
+          return await this.handleRebuildIndex(request.params.arguments);
+        case 'index_status':
+          return await this.handleIndexStatus();
+        case 'clear_cache':
+          return await this.handleClearCache();
+        
+        // Namespace Tools
+        case 'find_in_namespace':
+          return await this.handleFindInNamespace(request.params.arguments);
+        case 'resolve_symbol':
+          return await this.handleResolveSymbol(request.params.arguments);
+        
+        case 'generate_visualization':
+          return await this.handleGenerateVisualization(request.params.arguments);
+        
+        // Claude Validation Tools
+        case 'validate_claude_code':
+          return await this.handleValidateClaudeCode(request.params.arguments);
+        case 'validate_code_snippet':
+          return await this.handleValidateCodeSnippet(request.params.arguments);
+        case 'get_validation_stats':
+          return await this.handleGetValidationStats(request.params.arguments);
+        
+        // Thought Signature Tools
+        case 'get_enhanced_context':
+          return await this.handleGetEnhancedContext(request.params.arguments);
+        case 'analyze_feedback_patterns':
+          return await this.handleAnalyzeFeedbackPatterns(request.params.arguments);
+        case 'get_feedback_stats':
+          return await this.handleGetFeedbackStats(request.params.arguments);
+        
+        // High-value refactoring tools
+        case 'find_callers':
+          return await this.handleFindCallers(request.params.arguments);
+        case 'check_inline_safety':
+          return await this.handleCheckInlineSafety(request.params.arguments);
+        case 'analyze_rename':
+          return await this.handleAnalyzeRename(request.params.arguments);
+          
+        default:
+          return {
+            content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
+            isError: true
+          };
+      }
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error executing ${request.params.name}: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
     }
   }
 
@@ -174,80 +336,7 @@ class ModuleSentinelMCPServer {
     // Handle tool calls
     this.server.setRequestHandler(
       CallToolRequestSchema,
-      async (request) => {
-        try {
-          switch (request.params.name) {
-            // Priority 1 Tools
-            case 'find_implementations':
-              return await this.handleFindImplementations(request.params.arguments);
-            case 'find_similar_code':
-              return await this.handleFindSimilarCode(request.params.arguments);
-            case 'analyze_cross_file_dependencies':
-              return await this.handleAnalyzeCrossFileDependencies(request.params.arguments);
-            
-            // Priority 2 Tools  
-            case 'get_api_surface':
-              return await this.handleGetApiSurface(request.params.arguments);
-            case 'analyze_impact':
-              return await this.handleAnalyzeImpact(request.params.arguments);
-            case 'validate_boundaries':
-              return await this.handleValidateBoundaries(request.params.arguments);
-            case 'suggest_module':
-              return await this.handleSuggestModule(request.params.arguments);
-            
-            // Unified Search
-            case 'find_module_for_symbol':
-              return await this.handleFindModuleForSymbol(request.params.arguments);
-            case 'semantic_search':
-              return await this.handleSemanticSearch(request.params.arguments);
-            
-            // Index Management
-            case 'rebuild_index':
-              return await this.handleRebuildIndex(request.params.arguments);
-            case 'index_status':
-              return await this.handleIndexStatus();
-            case 'clear_cache':
-              return await this.handleClearCache();
-            
-            case 'generate_visualization':
-              return await this.handleGenerateVisualization(request.params.arguments);
-            
-            // Claude Validation Tools
-            case 'validate_claude_code':
-              return await this.handleValidateClaudeCode(request.params.arguments);
-            case 'validate_code_snippet':
-              return await this.handleValidateCodeSnippet(request.params.arguments);
-            case 'get_validation_stats':
-              return await this.handleGetValidationStats(request.params.arguments);
-            
-            // Agent Feedback Tools
-            case 'record_agent_feedback':
-              return await this.handleRecordAgentFeedback(request.params.arguments);
-            case 'record_context_gap':
-              return await this.handleRecordContextGap(request.params.arguments);
-            case 'get_enhanced_context':
-              return await this.handleGetEnhancedContext(request.params.arguments);
-            case 'analyze_feedback_patterns':
-              return await this.handleAnalyzeFeedbackPatterns(request.params.arguments);
-            case 'get_feedback_stats':
-              return await this.handleGetFeedbackStats(request.params.arguments);
-              
-            default:
-              return {
-                content: [{ type: 'text', text: `Unknown tool: ${request.params.name}` }],
-                isError: true
-              };
-          }
-        } catch (error) {
-          return {
-            content: [{ 
-              type: 'text', 
-              text: `Error executing ${request.params.name}: ${error instanceof Error ? error.message : String(error)}` 
-            }],
-            isError: true
-          };
-        }
-      }
+      async (request) => this.processToolRequest(request)
     );
 
     // List available tools
@@ -412,13 +501,18 @@ class ModuleSentinelMCPServer {
           // Index Management
           {
             name: 'rebuild_index',
-            description: 'Rebuild the code index',
+            description: 'Rebuild the code index with optional clean schema rebuild',
             inputSchema: {
               type: 'object',
               properties: {
                 projectPath: {
                   type: 'string',
                   description: 'Path to the project to index'
+                },
+                cleanRebuild: {
+                  type: 'boolean',
+                  description: 'Force clean rebuild of schema and all data',
+                  default: false
                 }
               },
               required: ['projectPath']
@@ -438,6 +532,42 @@ class ModuleSentinelMCPServer {
             inputSchema: {
               type: 'object',
               properties: {}
+            }
+          },
+          {
+            name: 'find_in_namespace',
+            description: 'Find all symbols in a namespace or namespace pattern (e.g., "PlanetGen::Rendering" or "PlanetGen::*")',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                namespace: {
+                  type: 'string',
+                  description: 'Namespace or pattern to search (supports * wildcards)'
+                }
+              },
+              required: ['namespace']
+            }
+          },
+          {
+            name: 'resolve_symbol',
+            description: 'Resolve a symbol name from a given namespace context using C++ lookup rules',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                symbolName: {
+                  type: 'string',
+                  description: 'Symbol name to resolve'
+                },
+                fromNamespace: {
+                  type: 'string',
+                  description: 'Namespace context to resolve from'
+                },
+                fromFile: {
+                  type: 'string',
+                  description: 'File path to check for imports'
+                }
+              },
+              required: ['symbolName', 'fromNamespace', 'fromFile']
             }
           },
           {
@@ -653,6 +783,54 @@ class ModuleSentinelMCPServer {
                 }
               }
             }
+          },
+          
+          // High-value refactoring tools
+          {
+            name: 'find_callers',
+            description: 'Find all direct and indirect callers of a symbol with test coverage information',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                symbolName: {
+                  type: 'string',
+                  description: 'Name of the symbol (function/method/class) to find callers for'
+                }
+              },
+              required: ['symbolName']
+            }
+          },
+          {
+            name: 'check_inline_safety',
+            description: 'Check if a function can be safely inlined, analyzing side effects and usage patterns',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                symbolName: {
+                  type: 'string',
+                  description: 'Name of the function/method to check for inline safety'
+                }
+              },
+              required: ['symbolName']
+            }
+          },
+          {
+            name: 'analyze_rename',
+            description: 'Analyze the impact of renaming a symbol including conflicts and affected files',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                oldName: {
+                  type: 'string',
+                  description: 'Current name of the symbol'
+                },
+                newName: {
+                  type: 'string',
+                  description: 'Proposed new name for the symbol'
+                }
+              },
+              required: ['oldName', 'newName']
+            }
           }
         ]
       };
@@ -691,7 +869,7 @@ class ModuleSentinelMCPServer {
       try {
         switch (uri) {
           case 'module-sentinel://project-index':
-            const indexStats = await this.analyticsService.getIndexStats();
+            const indexStats = await this.getIndexStats();
             return {
               contents: [{
                 uri,
@@ -701,22 +879,22 @@ class ModuleSentinelMCPServer {
             };
             
           case 'module-sentinel://parser-metrics':
-            const parserMetrics = this.schemaManager.getParserQualityMetrics(this.db);
+            // TODO: Re-implement with CleanUnifiedSchemaManager when needed
             return {
               contents: [{
                 uri,
                 mimeType: 'application/json',
-                text: JSON.stringify(parserMetrics, null, 2)
+                text: JSON.stringify({ status: 'Not available - using clean schema' }, null, 2)
               }]
             };
             
           case 'module-sentinel://analytics-report':
-            const analyticsReport = this.schemaManager.getIntegrationHealthReport(this.db);
+            // TODO: Re-implement with CleanUnifiedSchemaManager when needed
             return {
               contents: [{
                 uri,
                 mimeType: 'application/json',
-                text: JSON.stringify(analyticsReport, null, 2)
+                text: JSON.stringify({ status: 'Not available - using clean schema' }, null, 2)
               }]
             };
             
@@ -961,8 +1139,26 @@ class ModuleSentinelMCPServer {
   // Index Management Handlers
   private async handleRebuildIndex(args: any) {
     const params = z.object({
-      projectPath: z.string()
+      projectPath: z.string(),
+      cleanRebuild: z.boolean().default(false)
     }).parse(args);
+    
+    let statusMessage = '';
+    
+    // If clean rebuild is requested, just clear the data
+    if (params.cleanRebuild) {
+      statusMessage += '🔄 Performing clean rebuild - clearing data...\n';
+      
+      // Drop all tables and recreate them
+      this.schemaManager.initializeDatabase(this.db);
+      statusMessage += '✅ Database cleared and schema reinitialized\n';
+    }
+    
+    // Create PatternAwareIndexer if it doesn't exist
+    if (!this.patternAwareIndexer) {
+      const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
+      this.patternAwareIndexer = new PatternAwareIndexer(params.projectPath, this.dbPath, debugMode, false, this.db);
+    }
     
     // Use PatternAwareIndexer which creates the enhanced_symbols table
     const { glob } = await import('glob');
@@ -977,44 +1173,124 @@ class ModuleSentinelMCPServer {
       allFiles.push(...files);
     }
     
-    const uniqueFiles = [...new Set(allFiles)].sort();
+    const uniqueFiles = [...new Set(allFiles)];
     const fullPaths = uniqueFiles.map(f => path.join(params.projectPath, f));
     
-    // Index in batches
+    // Split into three lists by priority
+    const ixxFiles = fullPaths.filter(f => f.endsWith('.ixx'));
+    const headerFiles = fullPaths.filter(f => f.endsWith('.h') || f.endsWith('.hpp'));
+    const cppFiles = fullPaths.filter(f => f.endsWith('.cpp') || f.endsWith('.cc') || f.endsWith('.cxx'));
+    
+    statusMessage += `🔍 Found ${uniqueFiles.length} files to index\n`;
+    statusMessage += `📁 Project path: ${params.projectPath}\n\n`;
+    
+    // Process each list in batches of 50
     const batchSize = 50;
     let totalIndexed = 0;
+    const startTime = Date.now();
     
-    for (let i = 0; i < fullPaths.length; i += batchSize) {
-      const batch = fullPaths.slice(i, i + batchSize);
-      const existingPaths = [];
+    const fileLists = [
+      { files: ixxFiles, name: 'Module interfaces (.ixx)' },
+      { files: headerFiles, name: 'Headers (.h/.hpp)' },
+      { files: cppFiles, name: 'Implementations' }
+    ];
+    
+    for (const fileList of fileLists) {
+      if (fileList.files.length === 0) continue;
       
-      for (const fullPath of batch) {
-        try {
-          await fs.access(fullPath);
-          existingPaths.push(fullPath);
-        } catch {
-          // File doesn't exist, skip
+      statusMessage += `🔄 Processing ${fileList.name}: ${fileList.files.length} files\n`;
+      
+      for (let i = 0; i < fileList.files.length; i += batchSize) {
+        const batch = fileList.files.slice(i, i + batchSize);
+        const existingPaths = [];
+        
+        for (const fullPath of batch) {
+          try {
+            await fs.access(fullPath);
+            existingPaths.push(fullPath);
+          } catch {
+            // File doesn't exist, skip
+          }
         }
-      }
-      
-      if (existingPaths.length > 0) {
-        await this.patternAwareIndexer.indexFiles(existingPaths);
-        totalIndexed += existingPaths.length;
+        
+        if (existingPaths.length > 0) {
+          statusMessage += `📦 Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(fileList.files.length / batchSize)}: ${existingPaths.length} files\n`;
+          try {
+            await this.patternAwareIndexer.indexFiles(existingPaths);
+          } catch (error) {
+            statusMessage += `⚠️ Batch indexing failed: ${(error as Error).message}\n`;
+            console.error('Batch indexing error:', error);
+          }
+          totalIndexed += existingPaths.length;
+        }
       }
     }
     
+    const elapsed = Date.now() - startTime;
+    
+    // Get final statistics
     const symbolCount = this.db.prepare('SELECT COUNT(*) as count FROM enhanced_symbols').get() as any;
+    const relationshipCount = this.db.prepare('SELECT COUNT(*) as count FROM symbol_relationships').get() as any;
+    const fileCount = this.db.prepare('SELECT COUNT(DISTINCT file_path) as count FROM enhanced_symbols').get() as any;
+    
+    statusMessage += `\n✨ Index rebuild complete!\n`;
+    statusMessage += `📊 Results:\n`;
+    statusMessage += `  - Files processed: ${totalIndexed}\n`;
+    statusMessage += `  - Symbols indexed: ${symbolCount.count}\n`;
+    statusMessage += `  - Relationships stored: ${relationshipCount.count}\n`;
+    statusMessage += `  - Unique files: ${fileCount.count}\n`;
+    statusMessage += `  - Time elapsed: ${elapsed}ms\n`;
+    
+    if (params.cleanRebuild) {
+      statusMessage += `\n🔄 Clean rebuild successfully completed with fresh schema\n`;
+    }
     
     return {
-      content: [{ type: 'text', text: `Index rebuilt: ${symbolCount.count} symbols from ${totalIndexed} files` }]
+      content: [{ type: 'text', text: statusMessage }]
     };
   }
 
   private async handleIndexStatus() {
-    const stats = await this.analyticsService.getIndexStats();
+    const stats = await this.getIndexStats();
     return {
       content: [{ type: 'text', text: JSON.stringify(stats, null, 2) }]
     };
+  }
+
+  private async getIndexStats() {
+    // Simple index statistics using database directly
+    try {
+      const overview = {
+        totalFiles: (this.db.prepare('SELECT COUNT(DISTINCT file_path) as count FROM enhanced_symbols').get() as any).count || 0,
+        totalSymbols: (this.db.prepare('SELECT COUNT(*) as count FROM enhanced_symbols').get() as any).count || 0,
+        totalRelationships: (this.db.prepare('SELECT COUNT(*) as count FROM symbol_relationships').get() as any).count || 0,
+        lastUpdated: new Date().toISOString()
+      };
+      
+      // Get parser statistics
+      const parserStats = this.db.prepare(`
+        SELECT parser_used, COUNT(*) as count, AVG(parser_confidence) as avg_confidence
+        FROM enhanced_symbols
+        GROUP BY parser_used
+      `).all() as any[];
+      
+      // Get stage statistics
+      const stageStats = this.db.prepare(`
+        SELECT pipeline_stage, COUNT(*) as count
+        FROM enhanced_symbols
+        WHERE pipeline_stage IS NOT NULL
+        GROUP BY pipeline_stage
+      `).all() as any[];
+      
+      return {
+        overview,
+        parserStats,
+        stageStats
+      };
+    } catch (error) {
+      console.error('Error getting index stats:', error);
+      return { error: 'Failed to get index statistics' };
+    }
   }
 
   private async handleClearCache() {
@@ -1026,6 +1302,101 @@ class ModuleSentinelMCPServer {
     } catch (error) {
       return {
         content: [{ type: 'text', text: `Error clearing cache: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleFindInNamespace(args: any) {
+    const params = z.object({
+      namespace: z.string()
+    }).parse(args);
+    
+    try {
+      const results = await this.priority1Tools.findInNamespace(params.namespace);
+      
+      if (results.length === 0) {
+        return {
+          content: [{ type: 'text', text: `No symbols found in namespace: ${params.namespace}` }]
+        };
+      }
+      
+      let output = `Found symbols in namespace pattern "${params.namespace}":\n\n`;
+      
+      for (const nsGroup of results) {
+        output += `📦 ${nsGroup.namespace} (${nsGroup.symbolCount} symbols)\n`;
+        output += '─'.repeat(50) + '\n';
+        
+        // Group by kind
+        const byKind = new Map<string, any[]>();
+        for (const symbol of nsGroup.symbols) {
+          if (!byKind.has(symbol.kind)) {
+            byKind.set(symbol.kind, []);
+          }
+          byKind.get(symbol.kind)!.push(symbol);
+        }
+        
+        for (const [kind, symbols] of byKind) {
+          output += `\n${kind}s:\n`;
+          for (const sym of symbols) {
+            output += `  • ${sym.name}`;
+            if (sym.return_type) output += ` → ${sym.return_type}`;
+            output += `\n    ${sym.file_path}:${sym.line}\n`;
+          }
+        }
+        output += '\n';
+      }
+      
+      return {
+        content: [{ type: 'text', text: output }]
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error searching namespace: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleResolveSymbol(args: any) {
+    const params = z.object({
+      symbolName: z.string(),
+      fromNamespace: z.string(),
+      fromFile: z.string()
+    }).parse(args);
+    
+    try {
+      const results = await this.priority1Tools.resolveSymbol(
+        params.symbolName,
+        params.fromNamespace,
+        params.fromFile
+      );
+      
+      if (results.length === 0) {
+        return {
+          content: [{ type: 'text', text: `Symbol "${params.symbolName}" not found from namespace "${params.fromNamespace}"` }]
+        };
+      }
+      
+      let output = `Symbol resolution for "${params.symbolName}" from namespace "${params.fromNamespace}":\n\n`;
+      
+      for (const result of results) {
+        output += `${result.priority === 1 ? '✅' : '📍'} ${result.qualified_name}\n`;
+        output += `  Namespace: ${result.namespace || 'global'}\n`;
+        output += `  Context: ${result.resolution_context}\n`;
+        output += `  Location: ${result.file_path}:${result.line}\n`;
+        if (result.signature) {
+          output += `  Signature: ${result.signature}\n`;
+        }
+        output += '\n';
+      }
+      
+      return {
+        content: [{ type: 'text', text: output }]
+      };
+    } catch (error) {
+      return {
+        content: [{ type: 'text', text: `Error resolving symbol: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true
       };
     }
@@ -1446,6 +1817,71 @@ class ModuleSentinelMCPServer {
     }
   }
 
+  // High-value refactoring tool handlers
+  private async handleFindCallers(args: any) {
+    const params = z.object({
+      symbolName: z.string()
+    }).parse(args);
+
+    try {
+      const results = await this.priority2Tools.findCallers(params.symbolName);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error finding callers: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleCheckInlineSafety(args: any) {
+    const params = z.object({
+      symbolName: z.string()
+    }).parse(args);
+
+    try {
+      const results = await this.priority2Tools.checkInlineSafety(params.symbolName);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error checking inline safety: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
+  private async handleAnalyzeRename(args: any) {
+    const params = z.object({
+      oldName: z.string(),
+      newName: z.string()
+    }).parse(args);
+
+    try {
+      const results = await this.priority2Tools.analyzeRename(params.oldName, params.newName);
+      return {
+        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+      };
+    } catch (error) {
+      return {
+        content: [{ 
+          type: 'text', 
+          text: `Error analyzing rename: ${error instanceof Error ? error.message : String(error)}` 
+        }],
+        isError: true
+      };
+    }
+  }
+
   async start(): Promise<void> {
     // Ensure database directory exists
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
@@ -1458,8 +1894,10 @@ class ModuleSentinelMCPServer {
 
   async shutdown(): Promise<void> {
     // Stop file watcher before shutting down
-    this.fileWatcher.stop();
-    console.error('File watcher stopped');
+    if (this.fileWatcher) {
+      this.fileWatcher.stop();
+      console.error('File watcher stopped');
+    }
 
     if (this.visualizationAPI) {
       await this.visualizationAPI.shutdown();
@@ -1474,6 +1912,24 @@ class ModuleSentinelMCPServer {
 
 // Main entry point
 async function main() {
+  // Check if running in test environment or script environment
+  const isTestEnvironment = process.env.NODE_ENV === 'test' || 
+                            process.argv.some(arg => arg.includes('test')) ||
+                            process.argv.some(arg => arg.includes('TestRunner')) ||
+                            process.argv.some(arg => arg.includes('run-tests'));
+  
+  const isScriptEnvironment = process.env.MODULE_SENTINEL_SCRIPT_MODE === 'true';
+  
+  if (isTestEnvironment) {
+    console.log('🧪 Test environment detected - MCP server will not auto-start');
+    return;
+  }
+  
+  if (isScriptEnvironment) {
+    console.log('📜 Script environment detected - MCP server will not auto-start');
+    return;
+  }
+  
   const server = new ModuleSentinelMCPServer();
   
   // Handle shutdown gracefully
@@ -1497,7 +1953,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// Only start if not in test environment
+if (!module.parent) {
+  main().catch((error) => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}

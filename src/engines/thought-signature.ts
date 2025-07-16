@@ -4,7 +4,7 @@ import * as fs from 'fs/promises';
 import * as crypto from 'crypto';
 import { ArchitecturalDecision, ThoughtPattern } from '../types/index.js';
 
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 
 export interface AgentFeedback {
   sessionId: string;
@@ -43,11 +43,11 @@ export interface LearningPattern {
 
 export class ThoughtSignaturePreserver {
   private db: Database.Database;
-  private schemaManager: UnifiedSchemaManager;
+  private schemaManager: CleanUnifiedSchemaManager;
 
   constructor(db: Database.Database) {
     this.db = db;
-    this.schemaManager = UnifiedSchemaManager.getInstance();
+    this.schemaManager = CleanUnifiedSchemaManager.getInstance();
     this.schemaManager.initializeDatabase(this.db);
     console.log('ThoughtSignaturePreserver initialized successfully with shared DB.');
   }

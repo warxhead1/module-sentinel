@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
 import * as path from 'path';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 
 /**
  * Enhanced Anti-Pattern Detector for C++ codebases
@@ -156,6 +156,23 @@ export class EnhancedAntiPatternDetector extends EventEmitter {
       severity: 'medium',
       description: 'GPU operation without error handling',
       suggestion: 'Add error checking and fallback mechanisms'
+    },
+    
+    // Code Duplication Anti-patterns (detected via bodyHash)
+    copyPasteCode: {
+      name: 'Copy-Paste Programming',
+      pattern: /\/\*.*(?:copy|copied|duplicate).*\*\/|\/\/.*(?:copy|copied|duplicate)/i,
+      severity: 'medium',
+      description: 'Code comments suggesting copy-paste programming',
+      suggestion: 'Extract common functionality into reusable functions or classes'
+    },
+    
+    shotgunSurgery: {
+      name: 'Shotgun Surgery Risk',
+      pattern: /\/\/\s*TODO:?\s*(?:fix|update|change|modify).*(?:everywhere|all\s+files|multiple\s+places)/i,
+      severity: 'high',
+      description: 'Comments indicating changes needed in multiple places',
+      suggestion: 'Consolidate related functionality to reduce coupling'
     }
   };
   
@@ -164,7 +181,7 @@ export class EnhancedAntiPatternDetector extends EventEmitter {
     this.db = new Database(dbPath);
     
     // Initialize database schema through unified manager
-    const schemaManager = UnifiedSchemaManager.getInstance();
+    const schemaManager = CleanUnifiedSchemaManager.getInstance();
     schemaManager.initializeDatabase(this.db);
     
     // Create service-specific tables
@@ -172,12 +189,21 @@ export class EnhancedAntiPatternDetector extends EventEmitter {
   }
   
   private initServiceSpecificTables(): void {
-    // All tables are now created by UnifiedSchemaManager
+    // All tables are now created by CleanUnifiedSchemaManager
     // Just initialize pattern statistics
     this.initializePatternStats();
   }
   
   private initializePatternStats(): void {
+    // Create antipattern_stats table if it doesn't exist
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS antipattern_stats (
+        pattern_name TEXT PRIMARY KEY,
+        detection_count INTEGER DEFAULT 0,
+        confidence_avg REAL DEFAULT 0.0
+      );
+    `);
+    
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO antipattern_stats (pattern_name)
       VALUES (?)
@@ -226,6 +252,10 @@ export class EnhancedAntiPatternDetector extends EventEmitter {
     // Skip AST-based detection for now to avoid hanging
     // const astBasedDetections = await this.detectAstPatterns(filePath);
     // detections.push(...astBasedDetections);
+    
+    // Add duplicate code detection using bodyHash
+    const duplicateDetections = await this.detectDuplicateCode(filePath);
+    detections.push(...duplicateDetections);
     
     // Store detections in a transaction
     try {
@@ -351,6 +381,108 @@ export class EnhancedAntiPatternDetector extends EventEmitter {
     }
     
     return detections;
+  }
+  
+  /**
+   * Detect duplicate code using stored bodyHash values
+   */
+  private async detectDuplicateCode(filePath: string): Promise<AntiPatternDetection[]> {
+    const detections: AntiPatternDetection[] = [];
+    
+    try {
+      // Get all methods from current file that have bodyHash
+      const methods = this.db.prepare(`
+        SELECT id, name, file_path, line, body_hash, kind, parent_class
+        FROM enhanced_symbols 
+        WHERE file_path = ? 
+        AND kind IN ('method', 'function') 
+        AND body_hash IS NOT NULL
+      `).all(filePath) as any[];
+
+      for (const method of methods) {
+        // Find other methods with same bodyHash (duplicates)
+        const duplicates = this.db.prepare(`
+          SELECT id, name, file_path, line, parent_class, kind
+          FROM enhanced_symbols 
+          WHERE body_hash = ? 
+          AND id != ?
+          AND kind IN ('method', 'function')
+        `).all(method.body_hash, method.id) as any[];
+
+        if (duplicates.length > 0) {
+          // Group duplicates by file for better reporting
+          const duplicatesByFile = new Map<string, any[]>();
+          duplicates.forEach(dup => {
+            if (!duplicatesByFile.has(dup.file_path)) {
+              duplicatesByFile.set(dup.file_path, []);
+            }
+            duplicatesByFile.get(dup.file_path)!.push(dup);
+          });
+
+          // Create detection for this duplicate group
+          const duplicateCount = duplicates.length;
+          const crossFile = duplicates.some(d => d.file_path !== filePath);
+          const severity = this.calculateDuplicateSeverity(duplicateCount, crossFile);
+          
+          let description = `Method '${method.name}' has ${duplicateCount} duplicate${duplicateCount > 1 ? 's' : ''}`;
+          if (crossFile) {
+            description += ` across ${duplicatesByFile.size + 1} files`;
+          }
+          
+          // List duplicate locations
+          const locations = duplicates.map(d => 
+            `${d.file_path}:${d.line} (${d.parent_class ? d.parent_class + '::' : ''}${d.name})`
+          ).slice(0, 3); // Limit to first 3 for readability
+          
+          if (duplicates.length > 3) {
+            locations.push(`... and ${duplicates.length - 3} more`);
+          }
+
+          detections.push({
+            patternName: crossFile ? 'Cross-File Code Duplication' : 'Code Duplication',
+            severity,
+            filePath,
+            lineNumber: method.line,
+            codeSnippet: `${method.parent_class ? method.parent_class + '::' : ''}${method.name}()`,
+            description: `${description}. Found in: ${locations.join(', ')}`,
+            suggestion: this.getDuplicationRefactoringSuggestion(duplicateCount, crossFile, method.kind),
+            confidence: 0.95 // High confidence since we're using exact hash matches
+          });
+        }
+      }
+    } catch (error) {
+      console.warn(`  ⚠️  Error detecting duplicate code: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
+    return detections;
+  }
+  
+  /**
+   * Calculate severity based on duplicate characteristics
+   */
+  private calculateDuplicateSeverity(duplicateCount: number, crossFile: boolean): 'low' | 'medium' | 'high' | 'critical' {
+    if (crossFile && duplicateCount >= 3) return 'high';
+    if (crossFile || duplicateCount >= 5) return 'medium';
+    return 'low';
+  }
+  
+  /**
+   * Generate appropriate refactoring suggestion for duplicates
+   */
+  private getDuplicationRefactoringSuggestion(duplicateCount: number, crossFile: boolean, kind: string): string {
+    if (crossFile) {
+      return 'Extract common functionality into a shared utility class or module to eliminate cross-file duplication';
+    }
+    
+    if (kind === 'method' && duplicateCount >= 3) {
+      return 'Extract common logic into a private helper method or consider template specialization';
+    }
+    
+    if (kind === 'function') {
+      return 'Consolidate duplicate functions by parameterizing differences or using function templates';
+    }
+    
+    return 'Refactor to eliminate code duplication using DRY principle';
   }
   
   /**

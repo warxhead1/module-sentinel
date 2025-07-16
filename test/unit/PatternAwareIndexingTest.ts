@@ -7,9 +7,9 @@ export class PatternAwareIndexingTest extends BaseTest {
   private indexer: PatternAwareIndexer | null = null;
   private sharedDbPath: string;
   private testFiles = [
-    'src/Generation/Heightmaps/GPUModularHeightmapGenerator.cpp',
-    'src/Rendering/Vulkan/Core/VulkanResourceManager.cpp',
-    'src/Generation/Orchestration/TerrainOrchestrator.cpp'
+    'cpp/TerrainOrchestrator.cpp',
+    'cpp/VulkanPipelineCreator.cpp',
+    'cpp/VulkanPipelineManager.cpp'
   ];
 
   constructor(sharedDbPath: string = '.test-db/main/pattern-aware.db') {
@@ -29,7 +29,6 @@ export class PatternAwareIndexingTest extends BaseTest {
   }
 
   async run(): Promise<void> {
-    console.log('\n📋 Test 1: Index Building');
     await this.testIndexBuilding();
     
     // Important: Only run database queries after indexing
@@ -37,10 +36,7 @@ export class PatternAwareIndexingTest extends BaseTest {
     const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='enhanced_symbols'").get();
     
     if (tableExists) {
-      console.log('\n📋 Test 2: Pattern Detection');
       await this.testPatternDetection();
-      
-      console.log('\n📋 Test 3: Semantic Tag Coverage');
       await this.testSemanticTagCoverage();
     } else {
       console.log('\n⚠️  Skipping pattern tests - enhanced_symbols table not created');
@@ -50,26 +46,23 @@ export class PatternAwareIndexingTest extends BaseTest {
   }
 
   private async testIndexBuilding(): Promise<void> {
-    console.log('Building pattern-aware index...');
-    
     let successCount = 0;
     for (const file of this.testFiles) {
       const fullPath = path.join(this.projectPath, file);
       try {
         await this.indexer!.indexFile(fullPath);
         successCount++;
-        console.log(`Indexed: ${path.basename(file)}`);
       } catch (error) {
         console.log(` Failed to index ${path.basename(file)}: ${(error as Error).message}`);
       }
     }
     
-    console.log(`\n📊 Indexed ${successCount}/${this.testFiles.length} files successfully`);
+    // ASSERTIONS: Verify indexing is working
+    this.assertGreaterThan(successCount, 0, "Should successfully index at least one file");
+    this.assertGreaterEqual(successCount, this.testFiles.length * 0.8, "Should index >80% of files successfully");
   }
 
   private async testPatternDetection(): Promise<void> {
-    console.log('\nTesting pattern detection capabilities...');
-    
     const db = new Database(this.sharedDbPath);
     
     // Test factory pattern detection
@@ -78,8 +71,6 @@ export class PatternAwareIndexingTest extends BaseTest {
       FROM enhanced_symbols 
       WHERE is_factory = 1
     `).get() as any;
-    
-    console.log(`Factory patterns detected: ${factoryPatterns.count}`);
     
     // Test GPU/CPU pattern detection
     const gpuPatterns = db.prepare(`
@@ -94,8 +85,9 @@ export class PatternAwareIndexingTest extends BaseTest {
       WHERE execution_mode = 'cpu'
     `).get() as any;
     
-    console.log(`GPU execution patterns: ${gpuPatterns.count}`);
-    console.log(`CPU execution patterns: ${cpuPatterns.count}`);
+    // ASSERTIONS: Verify pattern detection is working
+    this.assertGreaterThan(factoryPatterns.count, 0, "Should detect at least one factory pattern");
+    this.assertGreaterThan(gpuPatterns.count + cpuPatterns.count, 0, "Should detect GPU or CPU execution patterns");
     
     // Test anti-pattern detection
     const antiPatterns = db.prepare(`
@@ -111,11 +103,11 @@ export class PatternAwareIndexingTest extends BaseTest {
         console.log(`  - ${pattern.name} in ${path.basename(pattern.file_path)}`);
       });
     }
+    
+    db.close();
   }
 
   private async testSemanticTagCoverage(): Promise<void> {
-    console.log('\nAnalyzing semantic tag coverage...');
-    
     const db = new Database(this.sharedDbPath);
     
     const totalSymbols = (db.prepare('SELECT COUNT(*) as count FROM enhanced_symbols').get() as any).count;
@@ -127,16 +119,10 @@ export class PatternAwareIndexingTest extends BaseTest {
     
     const coverage = (symbolsWithTags / totalSymbols) * 100;
     
-    console.log(`\n📊 Semantic Tag Coverage:`);
-    console.log(`  - Total symbols: ${totalSymbols}`);
-    console.log(`  - Symbols with tags: ${symbolsWithTags}`);
-    console.log(`  - Coverage: ${coverage.toFixed(1)}%`);
-    
-    if (coverage < 70) {
-      console.log(`  - ⚠️  WARNING: Coverage below 70% threshold`);
-    } else {
-      console.log(`  - Good semantic coverage`);
-    }
+    // ASSERTIONS: Verify semantic tag coverage
+    this.assertGreaterThan(totalSymbols, 100, "Should have >100 symbols in database");
+    this.assertGreaterThan(symbolsWithTags, 50, "Should have >50 symbols with semantic tags");
+    this.assertGreaterEqual(coverage, 70, "Semantic tag coverage should be >=70%");
     
     // Analyze tag distribution
     const tagStats = db.prepare(`
@@ -155,9 +141,11 @@ export class PatternAwareIndexingTest extends BaseTest {
       GROUP BY tag_category
     `).all();
     
-    console.log('\n📊 Tag Distribution:');
-    tagStats.forEach((stat: any) => {
-      console.log(`  - ${stat.tag_category}: ${stat.count}`);
-    });
+    // ASSERTIONS: Verify tag distribution
+    this.assertGreaterThan(tagStats.length, 0, "Should have at least one tag category");
+    const totalTagged = tagStats.reduce((sum: number, stat: any) => sum + stat.count, 0);
+    this.assertGreaterThan(totalTagged, 20, "Should have >20 symbols with categorized tags");
+    
+    db.close();
   }
 }

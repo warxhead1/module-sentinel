@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import Database from 'better-sqlite3';
 import { EventEmitter } from 'events';
-import { StreamingCppParser } from '../parsers/streaming-cpp-parser.js';
+import { UnifiedCppParser } from '../parsers/unified-cpp-parser.js';
 import { PatternAwareIndexer } from '../indexing/pattern-aware-indexer.js';
 
 /**
@@ -12,18 +12,35 @@ import { PatternAwareIndexer } from '../indexing/pattern-aware-indexer.js';
 export class UnifiedIndexer extends EventEmitter {
   private db: Database.Database;
   private patternIndexer: PatternAwareIndexer;
-  private parser: StreamingCppParser;
+  private parser: UnifiedCppParser;
 
   constructor(private projectPath: string, private dbPath: string) {
     super();
     this.db = new Database(dbPath);
     const debugMode = process.env.MODULE_SENTINEL_DEBUG === 'true';
     this.patternIndexer = new PatternAwareIndexer(projectPath, dbPath, debugMode);
-    this.parser = new StreamingCppParser({ fastMode: false });
+    this.parser = new UnifiedCppParser({
+      enableModuleAnalysis: true,
+      enableSemanticAnalysis: true,
+      enableTypeAnalysis: true,
+      debugMode: debugMode,
+      projectPath: projectPath
+    });
     this.initUnifiedSchema();
   }
 
   private initUnifiedSchema(): void {
+    // Check if ANY symbol_relationships table already exists
+    const hasTable = this.db.prepare(`
+      SELECT COUNT(*) as count FROM sqlite_master 
+      WHERE type='table' AND name='symbol_relationships'
+    `).get() as { count: number };
+    
+    if (hasTable.count > 0) {
+      // Table already exists, don't create a new one
+      return;
+    }
+    
     // The PatternAwareIndexer already creates its advanced schema
     // Now we add compatibility tables for EnhancedIndexer queries
     this.db.exec(`
@@ -116,11 +133,11 @@ export class UnifiedIndexer extends EventEmitter {
       exports: Array.from(parseResult.exports),
       imports: Array.from(parseResult.imports),
       classes: Array.from(parseResult.classes),
-      functions: Array.from(parseResult.functions),
-      namespaces: Array.from(parseResult.namespaces),
-      includes: Array.from(parseResult.includes),
+      functions: Array.from(parseResult.functions || []),
+      namespaces: Array.from(parseResult.namespaces || []),
+      includes: Array.from(parseResult.includes || []),
       stage,
-      symbolCount: parseResult.functions.size + parseResult.classes.size
+      symbolCount: (parseResult.functions?.length || 0) + (parseResult.classes?.length || 0)
     };
 
     const insertStmt = this.db.prepare(`

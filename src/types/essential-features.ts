@@ -62,16 +62,34 @@ export interface MethodInfo {
   params: string[];
   returns: string;
   description?: string;
+  usage_count?: number;
+}
+
+export interface ExportInfo {
+  name: string;
+  qualified_name: string;
+  kind: string;
+  usage_count: number;
+  imported_by: string[];
+  import_count: number;
+}
+
+export interface ApiMemberInfo {
+  name: string;
+  parent_class: string;
+  qualified_name: string;
+  usage_count: number;
 }
 
 export interface ApiSurfaceResponse {
   public_methods: MethodInfo[];
-  public_members: any[];
+  public_members: ApiMemberInfo[];
   interfaces: string[];
   dependencies: {
     required: string[];
     optional: string[];
   };
+  exports?: ExportInfo[];
 }
 
 export interface UsageExampleRequest {
@@ -147,14 +165,50 @@ export interface EnhancedModuleInfo {
   interfaces: InterfaceInfo[];
   relationships: SymbolRelationship[];
   patterns: CodePattern[];
+  functions?: any[];
+  namespaces?: any[];
+  includes?: any[];
   imports: DetailedImport[];
   exports: DetailedExport[];
+  
+  // Unified parser metadata
+  confidence?: {
+    overall: number;
+    symbolDetection: number;
+    typeResolution: number;
+    relationshipAccuracy: number;
+    modernCppSupport: number;
+    moduleAnalysis: number;
+  };
+  parseTime?: number;
+  fileCharacteristics?: {
+    isModuleFile: boolean;
+    isHeaderFile: boolean;
+    isImplementationFile: boolean;
+    hasVulkanCode: boolean;
+    hasModernCpp: boolean;
+    lineCount: number;
+    sizeBytes: number;
+    isLarge: boolean;
+    pipelineStage: string;
+  };
+  parserVersion?: string;
   // Enhanced: C++20/23 Module information
   moduleInfo?: {
     isModule: boolean;
     moduleName?: string | null;
     importedModules: string[];
     exportNamespaces: string[];
+    
+    // Enhanced: Module Analysis
+    pipelineStage?: string;
+    exports?: string[];
+    imports?: string[];
+    cohesionScore?: number;
+    couplingScore?: number;
+    complexityScore?: number;
+    parseSuccess?: boolean;
+    parseErrors?: string[];
   };
 }
 
@@ -163,7 +217,7 @@ export interface MethodSignature {
   className?: string;
   parameters: ParameterInfo[];
   returnType: string;
-  visibility: 'public' | 'private' | 'protected';
+  visibility: 'public' | 'private' | 'protected' | string;
   isVirtual: boolean;
   isStatic: boolean;
   isConst: boolean;
@@ -174,9 +228,55 @@ export interface MethodSignature {
   isExported?: boolean;
   location: { line: number; column: number };
   // Enhanced: Detailed type analysis
+  
+  // Enhanced: Unified parser semantic features
+  semanticTags?: string[];
+  isTemplate?: boolean;
+  complexity?: number;
+  callsOtherMethods?: Array<{object: string; method: string}>;
+  usesMembers?: Array<{object: string; member: string}>;
+  returnTypeInfo?: any; // Enhanced type information
   enhancedSignature?: any; // EnhancedMethodSignature from enhanced-type-analyzer
-  returnTypeInfo?: any; // DetailedTypeInfo from enhanced-type-analyzer
   enhancedParameters?: any[]; // EnhancedParameterInfo[] from enhanced-type-analyzer
+  annotations?: any[];
+  bodyHash?: string;
+  
+  // Enhanced: Method Information
+  isConstructor?: boolean;
+  isDestructor?: boolean;
+  isOperator?: boolean;
+  operatorType?: string;
+  isOverride?: boolean;
+  isFinal?: boolean;
+  isNoexcept?: boolean;
+  exportNamespace?: string;
+  
+  // Enhanced: Semantic analysis data
+  enhancedSemantics?: {
+    cyclomaticComplexity?: number;
+    cognitiveComplexity?: number;
+    nestingDepth?: number;
+    memoryPatterns?: any[];
+    vulkanPatterns?: any[];
+    modernCppFeatures?: any;
+    callChains?: any[];
+    functionCalls?: any[];
+    typeResolution?: any;
+    confidence?: number; // Method-specific confidence
+  };
+  
+  // Enhanced: Pattern Analysis
+  executionMode?: string;
+  isAsync?: boolean;
+  isFactory?: boolean;
+  isGenerator?: boolean;
+  pipelineStage?: string;
+  returnsVectorFloat?: boolean;
+  usesGpuCompute?: boolean;
+  hasCpuFallback?: boolean;
+  
+  // Enhanced: Semantic Analysis
+  relatedSymbols?: string[];
 }
 
 export interface ParameterInfo {
@@ -186,6 +286,15 @@ export interface ParameterInfo {
   isConst: boolean;
   isReference: boolean;
   isPointer: boolean;
+  
+  // Enhanced: Type Information
+  qualifiedType?: string;
+  baseType?: string;
+  isVolatile?: boolean;
+  isTemplate?: boolean;
+  templateArguments?: string[];
+  isVariadic?: boolean;
+  typeCategory?: string;
 }
 
 export interface ClassInfo {
@@ -204,6 +313,31 @@ export interface ClassInfo {
   location: { line: number; column: number };
   // Enhanced: Detailed type analysis
   enhancedMembers?: any[]; // EnhancedMemberInfo[] from enhanced-type-analyzer
+  
+  // Enhanced: C++20/23 Module Information
+  isExported?: boolean;
+  exportNamespace?: string;
+  
+  // Enhanced: Unified parser semantic features
+  semanticTags?: string[];
+  isAbstract?: boolean;
+  isFinal?: boolean;
+  constructors?: any[];
+  destructor?: any;
+  
+  // Enhanced: Type Information for Database Storage
+  baseType?: string;
+  isPointer?: boolean;
+  isReference?: boolean;
+  isConst?: boolean;
+  isVolatile?: boolean;
+  isBuiltin?: boolean;
+  isStdType?: boolean;
+  isVulkanType?: boolean;
+  isPlanetgenType?: boolean;
+  templateArguments?: string[];
+  typeModifiers?: string[];
+  arrayDimensions?: number[];
 }
 
 export interface InterfaceInfo {
@@ -239,6 +373,24 @@ export interface DetailedExport {
   isNamespaceExport?: boolean;
   moduleContext?: string;
   originalType?: string; // For using aliases
+}
+
+export interface ModuleSymbols {
+  exports: Set<string>;
+  imports: Set<string>;
+  functions: Set<string>;
+  classes: Set<string>;
+  namespaces: Set<string>;
+  filePath: string;
+  confidence: number;
+  dependencies?: Set<string>;
+  includes?: Set<string>;
+  relationships?: Array<{from: string; to: string; type: string}>;
+  moduleInfo?: {
+    isModule: boolean;
+    moduleName?: string;
+    importedModules?: string[];
+  };
 }
 
 export interface CodeContext {

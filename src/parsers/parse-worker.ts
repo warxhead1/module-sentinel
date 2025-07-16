@@ -1,6 +1,5 @@
 import { parentPort, workerData } from 'worker_threads';
-import { GrammarAwareParser } from './grammar-aware-parser.js';
-import { EnhancedTreeSitterParser } from './enhanced-tree-sitter-parser.js';
+import { UnifiedCppParser } from './unified-cpp-parser.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -8,17 +7,16 @@ interface WorkerData {
   filePath: string;
   useGrammarAware: boolean;
   projectPath: string;
+  fastTrack?: boolean; // OPTIMIZATION: Skip expensive analysis for simple files
 }
 
-// Initialize parsers once per worker
-const grammarParser = new GrammarAwareParser(false);
-const treeParser = new EnhancedTreeSitterParser();
+// Initialize unified parser once per worker
+const unifiedParser = new UnifiedCppParser();
 let initialized = false;
 
 async function initializeParsers() {
   if (!initialized) {
-    await grammarParser.initialize();
-    await treeParser.initialize();
+    await unifiedParser.initialize();
     initialized = true;
   }
 }
@@ -27,14 +25,43 @@ async function parseFile(data: WorkerData) {
   try {
     await initializeParsers();
     
-    const parser = data.useGrammarAware ? grammarParser : treeParser;
-    const result = await parser.parseFile(data.filePath);
+    // OPTIMIZATION: Read file once and reuse content for all analyses
+    const content = await fs.promises.readFile(data.filePath, 'utf-8');
+    const contentLines = content.split('\n'); // Split once and reuse
     
-    // CRITICAL FIX: Apply enhanced relationship extraction to worker results
-    // The basic parsers don't have relationship extraction, so we need to add it here
-    if (result && (!result.relationships || result.relationships.length === 0)) {
-      const content = await fs.promises.readFile(data.filePath, 'utf-8');
-      result.relationships = extractEnhancedRelationships(result, content);
+    const parser = unifiedParser;
+    
+    // Try to use parseContent method if available, otherwise fallback to parseFile
+    let result;
+    if (typeof parser.parseContent === 'function') {
+      result = await parser.parseContent(content, data.filePath);
+    } else {
+      result = await parser.parseFile(data.filePath);
+    }
+    
+    // OPTIMIZATION: Skip expensive analysis for fast-tracked files
+    if (data.fastTrack) {
+      // For fast-tracked files, skip relationship and pattern extraction to save time
+      result.relationships = result.relationships || [];
+      result.patterns = result.patterns || [];
+    } else {
+      // OPTIMIZED: Check if backup extraction is needed, but reuse content
+      let needsBackupExtraction = false;
+      const hasRelationships = result?.relationships && result.relationships.length > 0;
+      const hasPatterns = result?.patterns && result.patterns.length > 0;
+      
+      if (!hasRelationships || !hasPatterns) {
+        needsBackupExtraction = true;
+        
+        // OPTIMIZED: Single-pass backup extraction using pre-read content
+        if (!hasRelationships) {
+          result.relationships = extractEnhancedRelationshipsOptimized(result, content, contentLines);
+        }
+        
+        if (!hasPatterns) {
+          result.patterns = extractPatternsFromWorkerOptimized(result, content, contentLines, data.filePath);
+        }
+      }
     }
     
     // Add file size for performance tracking
@@ -171,10 +198,300 @@ if (parentPort) {
 }
 
 /**
+ * Extract patterns from parse results in worker
+ */
+function extractPatternsFromWorker(parseResult: any, content: string, filePath: string): any[] {
+  const patterns: any[] = [];
+  const methods = parseResult.methods || [];
+  const classes = parseResult.classes || [];
+  
+  // Factory pattern detection
+  for (const method of methods) {
+    if (method.name && isFactoryPattern(method.name, method.returnType)) {
+      patterns.push({
+        type: 'factory',
+        name: method.name,
+        location: method.location || { line: 0, column: 0 },
+        confidence: 0.8,
+        hash: `factory:${method.name}:${method.location?.line || 0}`
+      });
+    }
+  }
+  
+  // GPU execution pattern detection
+  for (const method of methods) {
+    if (method.name && detectGPUPatternInMethod(method.name, method.signature)) {
+      patterns.push({
+        type: 'gpu_execution',
+        name: method.name,
+        location: method.location || { line: 0, column: 0 },
+        confidence: 0.7,
+        hash: `gpu_execution:${method.name}:${method.location?.line || 0}`
+      });
+    }
+  }
+  
+  // Singleton pattern detection
+  for (const cls of classes) {
+    if (cls.name && detectSingletonPatternInClass(cls.name, cls.methods)) {
+      patterns.push({
+        type: 'singleton',
+        name: cls.name,
+        location: cls.location || { line: 0, column: 0 },
+        confidence: 0.9,
+        hash: `singleton:${cls.name}:${cls.location?.line || 0}`
+      });
+    }
+  }
+  
+  // Anti-pattern detection
+  patterns.push(...detectAntiPatternsInWorker(methods, classes));
+  
+  return patterns;
+}
+
+function isFactoryPattern(methodName: string, returnType?: string): boolean {
+  const lowerName = methodName.toLowerCase();
+  const factoryIndicators = ['create', 'make', 'build', 'factory', 'construct'];
+  
+  if (factoryIndicators.some(indicator => lowerName.includes(indicator))) {
+    // Check return type for pointer/smart pointer indicators
+    if (returnType) {
+      return returnType.includes('*') || returnType.includes('unique_ptr') || returnType.includes('shared_ptr');
+    }
+    return true;
+  }
+  return false;
+}
+
+function detectGPUPatternInMethod(methodName: string, signature?: string): boolean {
+  const gpuKeywords = ['vulkan', 'gpu', 'compute', 'shader', 'dispatch', 'buffer', 'pipeline'];
+  const lowerName = methodName.toLowerCase();
+  const lowerSig = (signature || '').toLowerCase();
+  
+  return gpuKeywords.some(keyword => lowerName.includes(keyword) || lowerSig.includes(keyword));
+}
+
+function detectSingletonPatternInClass(className: string, methods?: any[]): boolean {
+  if (!methods) return false;
+  
+  const hasGetInstance = methods.some(m => m.name && m.name.toLowerCase().includes('getinstance'));
+  const hasPrivateConstructor = methods.some(m => m.name === className && m.visibility === 'private');
+  
+  return hasGetInstance && (hasPrivateConstructor || className.toLowerCase().includes('singleton'));
+}
+
+function detectAntiPatternsInWorker(methods: any[], classes: any[]): any[] {
+  const antiPatterns: any[] = [];
+  
+  // God class detection
+  for (const cls of classes) {
+    if (cls.methods && cls.methods.length > 20) {
+      antiPatterns.push({
+        type: 'anti_pattern_god_class',
+        name: cls.name,
+        location: cls.location || { line: 0, column: 0 },
+        severity: cls.methods.length > 30 ? 'high' : 'medium',
+        confidence: 0.8,
+        hash: `anti_pattern_god_class:${cls.name}:${cls.location?.line || 0}`
+      });
+    }
+  }
+  
+  // Long method detection
+  for (const method of methods) {
+    if (method.location && method.endLocation) {
+      const lineCount = method.endLocation.line - method.location.line;
+      if (lineCount > 50) {
+        antiPatterns.push({
+          type: 'anti_pattern_long_method',
+          name: method.name,
+          location: method.location,
+          severity: lineCount > 100 ? 'high' : 'medium',
+          confidence: 0.7,
+          hash: `anti_pattern_long_method:${method.name}:${method.location.line}`
+        });
+      }
+    }
+  }
+  
+  return antiPatterns;
+}
+
+/**
+ * OPTIMIZED: Enhanced relationship extraction that reuses pre-split content
+ */
+function extractEnhancedRelationshipsOptimized(parseResult: any, content: string, contentLines: string[]): any[] {
+  const relationships: any[] = [];
+  const methods = parseResult.methods || [];
+  const classes = parseResult.classes || [];
+  
+  // Add inheritance relationships from classes
+  for (const cls of classes) {
+    for (const baseClass of cls.baseClasses || []) {
+      relationships.push({
+        from: cls.name,
+        to: baseClass,
+        type: 'inherits',
+        confidence: 0.95
+      });
+    }
+  }
+  
+  // Extract method call relationships by analyzing method bodies
+  for (const method of methods) {
+    if (!method.location) continue;
+    
+    // Find the method's body in the source code
+    const methodRelationships = extractMethodCallRelationshipsOptimized(
+      method, contentLines, methods, classes
+    );
+    relationships.push(...methodRelationships);
+  }
+  
+  return relationships;
+}
+
+/**
+ * OPTIMIZED: Pattern extraction that reuses pre-split content and combines analyses
+ */
+function extractPatternsFromWorkerOptimized(parseResult: any, content: string, contentLines: string[], filePath: string): any[] {
+  const patterns: any[] = [];
+  const methods = parseResult.methods || [];
+  const classes = parseResult.classes || [];
+  
+  // Combined analysis - do all pattern detection in one pass through methods/classes
+  for (const method of methods) {
+    if (!method.name) continue;
+    
+    // Factory pattern detection
+    if (isFactoryPattern(method.name, method.returnType)) {
+      patterns.push({
+        type: 'factory',
+        name: method.name,
+        location: method.location || { line: 0, column: 0 },
+        confidence: 0.8,
+        hash: `factory:${method.name}:${method.location?.line || 0}`
+      });
+    }
+    
+    // GPU execution pattern detection
+    if (detectGPUPatternInMethod(method.name, method.signature)) {
+      patterns.push({
+        type: 'gpu_execution',
+        name: method.name,
+        location: method.location || { line: 0, column: 0 },
+        confidence: 0.7,
+        hash: `gpu_execution:${method.name}:${method.location?.line || 0}`
+      });
+    }
+    
+    // Long method anti-pattern (if we have line info)
+    if (method.location && method.endLocation) {
+      const lineCount = method.endLocation.line - method.location.line;
+      if (lineCount > 50) {
+        patterns.push({
+          type: 'anti_pattern_long_method',
+          name: method.name,
+          location: method.location,
+          severity: lineCount > 100 ? 'high' : 'medium',
+          confidence: 0.7,
+          hash: `anti_pattern_long_method:${method.name}:${method.location.line}`
+        });
+      }
+    }
+  }
+  
+  // Combined class analysis
+  for (const cls of classes) {
+    if (!cls.name) continue;
+    
+    // Singleton pattern detection
+    if (detectSingletonPatternInClass(cls.name, cls.methods)) {
+      patterns.push({
+        type: 'singleton',
+        name: cls.name,
+        location: cls.location || { line: 0, column: 0 },
+        confidence: 0.9,
+        hash: `singleton:${cls.name}:${cls.location?.line || 0}`
+      });
+    }
+    
+    // God class anti-pattern
+    if (cls.methods && cls.methods.length > 20) {
+      patterns.push({
+        type: 'anti_pattern_god_class',
+        name: cls.name,
+        location: cls.location || { line: 0, column: 0 },
+        severity: cls.methods.length > 30 ? 'high' : 'medium',
+        confidence: 0.8,
+        hash: `anti_pattern_god_class:${cls.name}:${cls.location?.line || 0}`
+      });
+    }
+  }
+  
+  return patterns;
+}
+
+/**
+ * Legacy function - kept for backwards compatibility but not used in optimized flow
+ */
+function extractEnhancedRelationships(parseResult: any, content: string): any[] {
+  const contentLines = content.split('\n');
+  return extractEnhancedRelationshipsOptimized(parseResult, content, contentLines);
+}
+
+/**
+ * OPTIMIZED: Method call extraction that reuses pre-split content
+ */
+function extractMethodCallRelationshipsOptimized(
+  sourceMethod: any,
+  contentLines: string[],
+  allMethods: any[],
+  allClasses: any[]
+): any[] {
+  const relationships: any[] = [];
+  
+  // Find method body boundaries (crude but effective for C++)
+  const startLine = sourceMethod.location.line;
+  const methodBodyStart = findMethodBodyStart(contentLines, startLine);
+  const methodBodyEnd = findMethodBodyEnd(contentLines, methodBodyStart);
+  
+  if (methodBodyStart === -1 || methodBodyEnd === -1) return relationships;
+  
+  // OPTIMIZED: Batch process lines instead of one-by-one analysis
+  const methodBodyLines = contentLines.slice(methodBodyStart, methodBodyEnd + 1);
+  const allCalls: any[] = [];
+  
+  // Extract all calls from all lines in one pass
+  methodBodyLines.forEach((line, index) => {
+    const lineNum = methodBodyStart + index;
+    const calls = extractCallsFromLine(line, lineNum + 1);
+    allCalls.push(...calls);
+  });
+  
+  // Process all calls and find targets
+  for (const call of allCalls) {
+    const targets = findMatchingMethods(call, allMethods, sourceMethod.className || '');
+    
+    for (const target of targets) {
+      relationships.push({
+        from: sourceMethod.name,
+        to: target.name,
+        type: 'calls',
+        confidence: target.confidence
+      });
+    }
+  }
+  
+  return relationships;
+}
+
+/**
  * Enhanced relationship extraction for worker parsers
  * This applies the same logic as the enhanced tree-sitter parser to worker results
  */
-function extractEnhancedRelationships(parseResult: any, content: string): any[] {
+function extractEnhancedRelationshipsLegacy(parseResult: any, content: string): any[] {
   const relationships: any[] = [];
   const contentLines = content.split('\n');
   const methods = parseResult.methods || [];

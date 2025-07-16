@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import { UnifiedSchemaManager } from '../database/unified-schema-manager.js';
+import { CleanUnifiedSchemaManager } from '../database/clean-unified-schema.js';
 
 interface GraphNode {
   id: string;
@@ -74,12 +74,12 @@ interface ArchitectureVisualization {
 
 export class SymbolGraphService {
   private db: Database.Database;
-  private schemaManager: UnifiedSchemaManager;
+  private schemaManager: CleanUnifiedSchemaManager;
   private readonly MIN_CONFIDENCE = 0.7;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
-    this.schemaManager = UnifiedSchemaManager.getInstance();
+    this.schemaManager = CleanUnifiedSchemaManager.getInstance();
     this.schemaManager.initializeDatabase(this.db);
   }
 

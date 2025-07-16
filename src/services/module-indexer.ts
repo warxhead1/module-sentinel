@@ -2,7 +2,8 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import { glob } from 'glob';
 import Database from 'better-sqlite3';
-import { StreamingCppParser, ModuleSymbols } from '../parsers/streaming-cpp-parser';
+import { UnifiedCppParser } from '../parsers/unified-cpp-parser';
+import { ModuleSymbols } from '../types/essential-features';
 import { PipelineStage } from '../types/index';
 import { EventEmitter } from 'events';
 
@@ -28,14 +29,20 @@ export interface ModuleIndex {
 export class ModuleIndexer extends EventEmitter {
   private db: Database.Database | null = null;
   private dbPath: string;
-  private parser: StreamingCppParser;
+  private parser: UnifiedCppParser;
   private options: IndexOptions;
   private indexCache: Map<string, ModuleIndex> = new Map();
 
   constructor(options: IndexOptions) {
     super();
     this.options = options;
-    this.parser = new StreamingCppParser({ fastMode: true });
+    this.parser = new UnifiedCppParser({
+      enableModuleAnalysis: true,
+      enableSemanticAnalysis: true,
+      enableTypeAnalysis: true,
+      debugMode: false,
+      projectPath: options.projectPath
+    });
     this.dbPath = options.dbPath || path.join(process.cwd(), '.module-sentinel', 'index.db');
     
     // Don't create database connection in constructor - use lazy initialization
@@ -206,7 +213,21 @@ export class ModuleIndexer extends EventEmitter {
       path: filePath,
       relativePath,
       stage,
-      symbols,
+      symbols: {
+        filePath: filePath,
+        exports: new Set(symbols.exports?.map(e => typeof e === 'string' ? e : e.symbol) || []),
+        imports: new Set(symbols.imports?.map(i => typeof i === 'string' ? i : i.module) || []),
+        functions: new Set(symbols.functions?.map(f => typeof f === 'string' ? f : f.name) || []),
+        classes: new Set(symbols.classes?.map(c => typeof c === 'string' ? c : c.name) || []),
+        namespaces: new Set(symbols.namespaces?.map(n => typeof n === 'string' ? n : n.name) || []),
+        includes: new Set(symbols.includes || []),
+        confidence: typeof symbols.confidence === 'number' ? symbols.confidence : symbols.confidence?.overall || 0.8,
+        moduleInfo: symbols.moduleInfo ? {
+          isModule: symbols.moduleInfo.isModule,
+          moduleName: symbols.moduleInfo.moduleName || undefined,
+          importedModules: symbols.moduleInfo.importedModules || []
+        } : undefined
+      },
       fileSize: stats.size,
       lastModified: stats.mtimeMs,
       hash: await this.calculateFileHash(filePath)
@@ -231,11 +252,11 @@ export class ModuleIndexer extends EventEmitter {
       index.stage,
       JSON.stringify(Array.from(index.symbols.exports)),
       JSON.stringify(Array.from(index.symbols.imports)),
-      JSON.stringify(Array.from(index.symbols.dependencies)),
+      JSON.stringify(Array.from(index.symbols.relationships?.map(r => r.to) || [])),
       JSON.stringify(Array.from(index.symbols.namespaces)),
       JSON.stringify(Array.from(index.symbols.classes)),
       JSON.stringify(Array.from(index.symbols.functions)),
-      JSON.stringify(Array.from(index.symbols.includes)),
+      JSON.stringify(Array.from(index.symbols.includes || [])),
       index.fileSize,
       index.lastModified,
       index.hash,
@@ -383,7 +404,9 @@ export class ModuleIndexer extends EventEmitter {
         namespaces: new Set(JSON.parse(row.namespaces)),
         classes: new Set(JSON.parse(row.classes)),
         functions: new Set(JSON.parse(row.functions)),
-        includes: new Set(JSON.parse(row.includes))
+        includes: new Set(JSON.parse(row.includes)),
+        filePath: row.path,
+        confidence: 0.8
       },
       fileSize: row.file_size,
       lastModified: row.last_modified,
