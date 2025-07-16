@@ -126,6 +126,9 @@ export class VisualizationAPI {
         case pathname === '/api/rebuild-index':
           await this.serveRebuildIndexAPI(req, res);
           break;
+        case pathname === '/api/code-flow':
+          await this.serveCodeFlowAPI(res, parsedUrl.query);
+          break;
 
         case pathname.startsWith('/api/table/'):
           const tableName = pathname.replace('/api/table/', '');
@@ -656,18 +659,40 @@ export class VisualizationAPI {
           // Create indexer and rebuild
           const indexer = new PatternAwareIndexer(projectPath, this.dbPath, true, false);
           
-          // Find all C++ files to index
+          // Load config to get scan paths and file patterns
+          let scanPaths = [`${projectPath}/src`, `${projectPath}/include`];
+          let filePatterns = {
+            source: ['**/*.cpp', '**/*.cc', '**/*.cxx'],
+            header: ['**/*.hpp', '**/*.h', '**/*.ixx']
+          };
+          
+          try {
+            const configPath = require('path').join(projectPath, 'module-sentinel.config.json');
+            if (require('fs').existsSync(configPath)) {
+              const config = JSON.parse(require('fs').readFileSync(configPath, 'utf-8'));
+              if (config.scanPaths) {
+                scanPaths = config.scanPaths;
+              }
+              if (config.filePatterns) {
+                filePatterns = config.filePatterns;
+              }
+              console.log(`📋 Using config from: ${configPath}`);
+              console.log(`📁 Scan paths: ${scanPaths.join(', ')}`);
+            }
+          } catch (error) {
+            console.log(`⚠️  Could not load config, using defaults: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          
+          // Find all C++ files to index using configured paths and patterns
           const { glob } = await import('glob');
-          const patterns = [
-            'src/**/*.cpp', 'src/**/*.cxx', 'src/**/*.cc',
-            'include/**/*.ixx', 'include/**/*.hpp', 'include/**/*.h',
-            '**/*.ixx', '**/*.cpp', '**/*.hpp', '**/*.h'
-          ];
+          const allPatterns = [...filePatterns.source, ...filePatterns.header];
           
           const allFiles: string[] = [];
-          for (const pattern of patterns) {
-            const files = await glob(pattern, { cwd: projectPath, absolute: true });
-            allFiles.push(...files.filter(f => !f.includes('node_modules') && !f.includes('.git')));
+          for (const scanPath of scanPaths) {
+            for (const pattern of allPatterns) {
+              const files = await glob(pattern, { cwd: scanPath, absolute: true });
+              allFiles.push(...files.filter(f => !f.includes('node_modules') && !f.includes('.git')));
+            }
           }
           
           // Remove duplicates
@@ -714,6 +739,164 @@ export class VisualizationAPI {
         message: `API error: ${error instanceof Error ? error.message : String(error)}` 
       }));
     }
+  }
+
+  private async serveCodeFlowAPI(res: http.ServerResponse, query: any) {
+    try {
+      const db = await this.databaseManager.getDatabase();
+      const startSymbol = query.start as string;
+      const maxDepth = parseInt(query.depth as string) || 3;
+      
+      if (!startSymbol) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'start parameter is required' }));
+        return;
+      }
+
+      // Find the starting symbol
+      const startNode = db.prepare(`
+        SELECT id, name, qualified_name, kind, file_path, line
+        FROM enhanced_symbols
+        WHERE (name = ? OR qualified_name = ? OR qualified_name LIKE ?)
+          AND kind IN ('function', 'method', 'class', 'module')
+        ORDER BY 
+          CASE 
+            WHEN qualified_name = ? THEN 1
+            WHEN name = ? THEN 2
+            ELSE 3
+          END
+        LIMIT 1
+      `).get(startSymbol, startSymbol, `%::${startSymbol}`, startSymbol, startSymbol) as any;
+
+      if (!startNode) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Symbol '${startSymbol}' not found` }));
+        return;
+      }
+
+      // Build code flow tree with depth limiting
+      const codeFlow = await this.buildCodeFlowTree(db, startNode, maxDepth);
+
+      res.writeHead(200, { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.end(JSON.stringify({
+        start_symbol: {
+          name: startNode.qualified_name || startNode.name,
+          kind: startNode.kind,
+          location: `${startNode.file_path}:${startNode.line}`,
+          file_path: startNode.file_path
+        },
+        flow: codeFlow,
+        metadata: {
+          max_depth: maxDepth,
+          total_nodes: this.countNodes(codeFlow),
+          flow_summary: this.generateFlowSummary(codeFlow)
+        }
+      }));
+    } catch (error) {
+      console.error('Error serving code flow API:', error);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to generate code flow' }));
+    }
+  }
+
+  private async buildCodeFlowTree(db: any, startNode: any, maxDepth: number, currentDepth: number = 0, visited: Set<string> = new Set()): Promise<any> {
+    // Prevent infinite recursion
+    const nodeKey = `${startNode.id}:${currentDepth}`;
+    if (visited.has(nodeKey) || currentDepth >= maxDepth) {
+      return {
+        ...this.formatFlowNode(startNode),
+        children: [],
+        truncated: currentDepth >= maxDepth
+      };
+    }
+    visited.add(nodeKey);
+
+    // Get meaningful relationships (exclude includes, focus on actual code flow)
+    const children = db.prepare(`
+      SELECT DISTINCT
+        to_s.id,
+        to_s.name,
+        to_s.qualified_name,
+        to_s.kind,
+        to_s.file_path,
+        to_s.line,
+        sr.relationship_type,
+        COUNT(*) as call_count
+      FROM symbol_relationships sr
+      JOIN enhanced_symbols to_s ON sr.to_symbol_id = to_s.id
+      WHERE sr.from_symbol_id = ?
+        AND sr.relationship_type IN ('calls', 'uses', 'instantiates', 'inherits')
+        AND to_s.kind IN ('function', 'method', 'class', 'struct')
+        AND to_s.file_path NOT LIKE '%/include/%'
+        AND to_s.name NOT LIKE 'std::%'
+        AND to_s.name NOT LIKE '%::%::%'
+      GROUP BY to_s.id, sr.relationship_type
+      ORDER BY 
+        CASE sr.relationship_type
+          WHEN 'calls' THEN 1
+          WHEN 'instantiates' THEN 2
+          WHEN 'uses' THEN 3
+          WHEN 'inherits' THEN 4
+        END,
+        call_count DESC,
+        to_s.name
+      LIMIT 10
+    `).all(startNode.id) as any[];
+
+    // Recursively build children
+    const childNodes = [];
+    for (const child of children) {
+      const childFlow = await this.buildCodeFlowTree(db, child, maxDepth, currentDepth + 1, new Set(visited));
+      childNodes.push({
+        ...childFlow,
+        relationship: child.relationship_type,
+        call_count: child.call_count
+      });
+    }
+
+    return {
+      ...this.formatFlowNode(startNode),
+      children: childNodes,
+      child_count: children.length
+    };
+  }
+
+  private formatFlowNode(node: any) {
+    return {
+      id: node.id,
+      name: node.name,
+      qualified_name: node.qualified_name || node.name,
+      kind: node.kind,
+      location: `${node.file_path}:${node.line || 0}`,
+      file_path: node.file_path,
+      module: this.extractModuleName(node.file_path)
+    };
+  }
+
+  private extractModuleName(filePath: string): string {
+    if (!filePath) return 'unknown';
+    const parts = filePath.split('/');
+    const fileName = parts[parts.length - 1];
+    return fileName.replace(/\.(cpp|hpp|h|ixx)$/, '');
+  }
+
+  private countNodes(flow: any): number {
+    if (!flow || !flow.children) return 1;
+    return 1 + flow.children.reduce((sum: number, child: any) => sum + this.countNodes(child), 0);
+  }
+
+  private generateFlowSummary(flow: any): string {
+    const nodeCount = this.countNodes(flow);
+    const depth = this.getMaxDepth(flow);
+    return `${nodeCount} nodes across ${depth} levels of call depth`;
+  }
+
+  private getMaxDepth(flow: any, currentDepth: number = 1): number {
+    if (!flow || !flow.children || flow.children.length === 0) return currentDepth;
+    return Math.max(...flow.children.map((child: any) => this.getMaxDepth(child, currentDepth + 1)));
   }
 
   private async buildSPADashboard(res: http.ServerResponse) {

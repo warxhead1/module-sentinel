@@ -83,86 +83,69 @@ export class TypeResolutionTest extends BaseTest {
       await this.parseTypeExportFile(file);
     }
     
-    // ASSERTIONS: Verify type registry is built correctly
-    this.assertGreaterThan(this.typeRegistry.types.size, 20, "Should register >20 exported types");
+    // ASSERTIONS: Verify type registry is built correctly - parser should now detect all exported types
+    this.assertGreaterThan(this.typeRegistry.types.size, 50, "Should register >50 exported types from export namespaces");
     this.assertGreaterThan(this.typeRegistry.moduleExports.size, 1, "Should find >1 module with exports");
   }
   
   private async parseTypeExportFile(filePath: string): Promise<void> {
-    const content = await fs.readFile(filePath, 'utf-8');
     const result = await this.parser.parseFile(filePath);
     const fileName = path.basename(filePath);
     
     // Extract module name from parser result
     const moduleName = result.moduleInfo?.moduleName || 'unknown';
     
-    // Check if there's an export namespace
-    const namespaceMatch = content.match(/export\s+namespace\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s*\{/);
-    const exportNamespace = namespaceMatch ? namespaceMatch[1] : null;
-    
     let exportCount = 0;
     
-    // Use the parser's class extraction which now includes members
+    // Use the parser's class extraction which should now include export namespace types
     for (const classInfo of result.classes) {
-      // Check if this class is exported (either directly or in export namespace)
-      const isExported = exportNamespace || result.exports.includes(classInfo.name);
+      // Check if this class is exported using the parser's export detection
+      const isExported = result.exports.includes(classInfo.name) || 
+                        result.exports.includes(`${classInfo.namespace}::${classInfo.name}`) ||
+                        classInfo.semanticTags.includes('exported');
       
       if (isExported) {
+        // Use fully qualified name if the class has a namespace
+        const typeName = classInfo.namespace && classInfo.namespace !== 'global' 
+          ? `${classInfo.namespace}::${classInfo.name}` 
+          : classInfo.name;
+        
         const exportedType: ExportedType = {
-          name: classInfo.name,
+          name: typeName,
           file: filePath,
           module: moduleName,
-          category: 'class', // Parser doesn't distinguish struct vs class yet
+          category: classInfo.semanticTags.includes('enum') ? 'enum' : 
+                   classInfo.semanticTags.includes('struct') ? 'struct' : 'class',
           members: classInfo.members.map(m => ({
             name: m.name,
             type: m.type
           }))
         };
         
+        // Register with both simple name and fully qualified name for flexibility
         this.typeRegistry.types.set(classInfo.name, exportedType);
+        if (typeName !== classInfo.name) {
+          this.typeRegistry.types.set(typeName, exportedType);
+        }
         
         if (!this.typeRegistry.moduleExports.has(moduleName)) {
           this.typeRegistry.moduleExports.set(moduleName, new Set());
         }
-        this.typeRegistry.moduleExports.get(moduleName)!.add(classInfo.name);
+        this.typeRegistry.moduleExports.get(moduleName)!.add(typeName);
         
         exportCount++;
-      }
-    }
-    
-    // Also handle enums which parser might not extract yet
-    if (exportNamespace) {
-      const namespaceStart = content.indexOf(`export namespace ${exportNamespace}`);
-      if (namespaceStart !== -1) {
-        const afterNamespace = content.substring(namespaceStart);
-        
-        // Find enums within namespace
-        const enumPattern = /enum\s+(?:class\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:\{|:)/g;
-        let match;
-        while ((match = enumPattern.exec(afterNamespace)) !== null) {
-          const enumName = match[1];
-          this.typeRegistry.types.set(enumName, {
-            name: enumName,
-            file: filePath,
-            module: moduleName,
-            category: 'enum'
-          });
-          
-          if (!this.typeRegistry.moduleExports.has(moduleName)) {
-            this.typeRegistry.moduleExports.set(moduleName, new Set());
-          }
-          this.typeRegistry.moduleExports.get(moduleName)!.add(enumName);
-          exportCount++;
-        }
       }
     }
     
     console.log(`    Exported types: ${exportCount}`);
     console.log(`    Module: ${moduleName}`);
     console.log(`    Classes found by parser: ${result.classes.length}`);
-    if (exportNamespace) {
-      console.log(`    Export namespace: ${exportNamespace}`);
-    }
+    console.log(`    Exports found by parser: ${result.exports.length}`);
+    
+    // Debug: List first few registered types and exports
+    const registeredTypes = Array.from(this.typeRegistry.types.keys()).slice(0, 5);
+    console.log(`    First few registered types: [${registeredTypes.join(', ')}]`);
+    console.log(`    First few exports: [${result.exports.slice(0, 5).join(', ')}]`);
   }
   
   
@@ -193,6 +176,7 @@ export class TypeResolutionTest extends BaseTest {
       
       // Analyze each method's parameters
       for (const method of result.methods) {
+        console.log(`    Method: ${method.name} (${method.parameters.length} params)`);
         for (const param of method.parameters) {
           totalParams++;
           
@@ -201,9 +185,12 @@ export class TypeResolutionTest extends BaseTest {
             
             // Check if this type is from our registry
             const baseType = this.extractBaseType(param.type);
+            console.log(`      Param: ${param.name}: ${param.type} -> baseType: ${baseType}`);
+            
             if (this.typeRegistry.types.has(baseType)) {
               exportedTypeParams++;
               const typeInfo = this.typeRegistry.types.get(baseType)!;
+              console.log(`        ✓ MATCH! Found exported type: ${baseType}`);
               
               // Store this relationship
               if (!this.typeImports.has(file)) {
@@ -211,6 +198,8 @@ export class TypeResolutionTest extends BaseTest {
               }
               this.typeImports.get(file)!.add(baseType);
             }
+          } else {
+            console.log(`      Param: ${param.name}: [no type]`);
           }
         }
       }
@@ -224,11 +213,20 @@ export class TypeResolutionTest extends BaseTest {
   
   private extractBaseType(type: string): string {
     // Remove qualifiers and extract base type
-    return type
-      .replace(/^(?:const\s+)?/, '')
-      .replace(/[*&\s]+$/, '')
-      .replace(/^(?:std::|PlanetGen::|Rendering::)*/, '')
-      .split('<')[0]; // Remove template args
+    let cleanType = type
+      .replace(/^(?:const\s+)?/, '')  // Remove const
+      .replace(/[*&\s]+$/, '')        // Remove pointers/references and trailing spaces
+      .replace(/^(?:std::|PlanetGen::|Rendering::)*/, '')  // Remove common namespaces
+      .split('<')[0]  // Remove template args
+      .trim();
+    
+    // Also try removing more namespace qualifiers
+    const parts = cleanType.split('::');
+    if (parts.length > 1) {
+      cleanType = parts[parts.length - 1]; // Take the last part
+    }
+    
+    return cleanType;
   }
   
   private async analyzeCrossFileTypeRelationships(): Promise<void> {

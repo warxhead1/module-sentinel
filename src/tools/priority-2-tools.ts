@@ -636,7 +636,13 @@ export class Priority2Tools {
         found: false,
         direct_callers: [],
         indirect_callers: [],
-        test_coverage: []
+        test_coverage: [],
+        summary: {
+          total_direct_callers: 0,
+          total_indirect_callers: 0,
+          test_count: 0,
+          is_tested: false
+        }
       };
     }
     

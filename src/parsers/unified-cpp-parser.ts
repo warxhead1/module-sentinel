@@ -262,9 +262,34 @@ export class UnifiedCppParser {
 
       // Extract export declarations (simplified)
       if (line.startsWith('export ')) {
-        const exportMatch = line.match(/export\s+(?:class|struct|namespace|function)?\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
-        if (exportMatch) {
-          exports.push(exportMatch[1]);
+        // Handle export namespace - extract all types within it
+        const exportNamespaceMatch = line.match(/export\s+namespace\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s*\{/);
+        if (exportNamespaceMatch) {
+          const namespaceName = exportNamespaceMatch[1];
+          exports.push(namespaceName); // Add the namespace itself
+          
+          // Find the end of this namespace block and extract all types within
+          const namespaceEnd = this.findMatchingBrace(lines, i);
+          if (namespaceEnd !== -1) {
+            for (let j = i + 1; j < namespaceEnd; j++) {
+              const nsLine = lines[j].trim();
+              const typeMatch = nsLine.match(/^(?:class|struct|enum(?:\s+class)?)\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+              if (typeMatch) {
+                const typeName = typeMatch[1];
+                // Add both the simple name and fully qualified name
+                exports.push(typeName);
+                exports.push(`${namespaceName}::${typeName}`);
+              }
+            }
+            // Skip to the end of the namespace
+            i = namespaceEnd;
+          }
+        } else {
+          // Handle regular export declarations
+          const exportMatch = line.match(/export\s+(?:class|struct|enum|function)?\s*([a-zA-Z_][a-zA-Z0-9_]*)/);
+          if (exportMatch) {
+            exports.push(exportMatch[1]);
+          }
         }
       }
     }
@@ -274,8 +299,17 @@ export class UnifiedCppParser {
    * Extract classes using line-based regex patterns
    */
   private extractClassesFromLines(lines: string[], classes: ClassInfo[], filePath: string, relationships: any[]): void {
+    // First pass: Handle export namespaces
+    this.extractTypesFromExportNamespaces(lines, classes, filePath, relationships);
+    
+    // Second pass: Handle regular class/struct/enum declarations
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
+      
+      // Skip if we're inside an export namespace (already handled)
+      if (this.isInsideExportNamespace(lines, i)) {
+        continue;
+      }
       
       // Match class/struct/enum declarations
       const classMatch = line.match(/^(?:export\s+)?(?:class|struct|enum(?:\s+class)?)\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
@@ -283,6 +317,7 @@ export class UnifiedCppParser {
         const className = classMatch[1];
         const isStruct = line.includes('struct');
         const isEnum = line.includes('enum');
+        const isExported = line.includes('export');
         
         // Extract inheritance (simplified) - not applicable to enums
         const inheritanceMatch = !isEnum ? line.match(/:\s*(?:public|private|protected)?\s*([a-zA-Z_][a-zA-Z0-9_:]*)/): null;
@@ -292,6 +327,11 @@ export class UnifiedCppParser {
         const members = this.extractClassMembers(lines, i, className, isStruct);
 
         const kind = isEnum ? 'enum' : (isStruct ? 'struct' : 'class');
+        const semanticTags = [...this.generateClassSemanticTagsFromName(className), kind];
+        if (isExported) {
+          semanticTags.push('exported');
+        }
+        
         classes.push({
           name: className,
           namespace: this.extractNamespaceFromContext(lines, i),
@@ -302,7 +342,7 @@ export class UnifiedCppParser {
           location: { line: i + 1, column: line.indexOf(className) + 1 },
           isTemplate: line.includes('template'),
           templateParams: [],
-          semanticTags: [...this.generateClassSemanticTagsFromName(className), kind],
+          semanticTags: semanticTags,
           // accessModifiers: { public: [], private: [], protected: [] },
           isAbstract: false,
           isFinal: line.includes('final'),
@@ -323,6 +363,128 @@ export class UnifiedCppParser {
         }
       }
     }
+  }
+
+  /**
+   * Extract types (classes, structs, enums) from export namespace blocks
+   */
+  private extractTypesFromExportNamespaces(lines: string[], classes: ClassInfo[], filePath: string, relationships: any[]): void {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Look for export namespace declarations
+      const exportNamespaceMatch = line.match(/^export\s+namespace\s+([a-zA-Z_][a-zA-Z0-9_:]*)\s*\{/);
+      if (exportNamespaceMatch) {
+        const namespaceName = exportNamespaceMatch[1];
+        
+        // Find the end of this namespace block
+        const namespaceEnd = this.findMatchingBrace(lines, i);
+        if (namespaceEnd === -1) continue;
+        
+        // Extract all types within this namespace
+        for (let j = i + 1; j < namespaceEnd; j++) {
+          const nsLine = lines[j].trim();
+          
+          // Match class/struct/enum declarations within the namespace
+          const typeMatch = nsLine.match(/^(?:class|struct|enum(?:\s+class)?)\s+([a-zA-Z_][a-zA-Z0-9_]*)/);
+          if (typeMatch) {
+            const typeName = typeMatch[1];
+            const isStruct = nsLine.includes('struct');
+            const isEnum = nsLine.includes('enum');
+            
+            // Extract inheritance (simplified) - not applicable to enums
+            const inheritanceMatch = !isEnum ? nsLine.match(/:\s*(?:public|private|protected)?\s*([a-zA-Z_][a-zA-Z0-9_:]*)/): null;
+            const baseClasses = inheritanceMatch ? [inheritanceMatch[1]] : [];
+
+            // Extract class body and members
+            const members = this.extractClassMembers(lines, j, typeName, isStruct);
+
+            const kind = isEnum ? 'enum' : (isStruct ? 'struct' : 'class');
+            const semanticTags = [...this.generateClassSemanticTagsFromName(typeName), kind, 'exported', 'namespace_export'];
+            
+            classes.push({
+              name: typeName,
+              namespace: namespaceName, // Use the export namespace as the full namespace
+              baseClasses: baseClasses,
+              interfaces: [],
+              methods: [],
+              members: isEnum ? [] : members,
+              location: { line: j + 1, column: nsLine.indexOf(typeName) + 1 },
+              isTemplate: nsLine.includes('template'),
+              templateParams: [],
+              semanticTags: semanticTags,
+              isAbstract: false,
+              isFinal: nsLine.includes('final'),
+              constructors: [],
+              destructor: null
+            });
+            
+            // Add inheritance relationships
+            for (const baseClass of baseClasses) {
+              relationships.push({
+                from: `${namespaceName}::${typeName}`,
+                to: baseClass,
+                type: 'inherits',
+                confidence: 0.90,
+                filePath: filePath,
+                location: { line: j + 1, column: 0 }
+              });
+            }
+          }
+        }
+        
+        // Skip to the end of the namespace to avoid processing its contents again
+        i = namespaceEnd;
+      }
+    }
+  }
+
+  /**
+   * Check if a line is inside an export namespace block
+   */
+  private isInsideExportNamespace(lines: string[], lineIndex: number): boolean {
+    // Look backwards for an export namespace declaration
+    for (let i = lineIndex - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      
+      // Found export namespace
+      if (line.match(/^export\s+namespace\s+[a-zA-Z_][a-zA-Z0-9_:]*\s*\{/)) {
+        // Check if we're before the closing brace
+        const namespaceEnd = this.findMatchingBrace(lines, i);
+        return lineIndex < namespaceEnd;
+      }
+      
+      // Stop at module declaration or other major boundaries
+      if (line.match(/^(?:module|import)/)) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Find the matching closing brace for a block starting at the given line
+   */
+  private findMatchingBrace(lines: string[], startLine: number): number {
+    let braceCount = 0;
+    let foundOpenBrace = false;
+    
+    for (let i = startLine; i < lines.length; i++) {
+      const line = lines[i];
+      
+      for (const char of line) {
+        if (char === '{') {
+          braceCount++;
+          foundOpenBrace = true;
+        } else if (char === '}') {
+          braceCount--;
+          if (foundOpenBrace && braceCount === 0) {
+            return i;
+          }
+        }
+      }
+    }
+    return -1; // No matching brace found
   }
 
   /**
