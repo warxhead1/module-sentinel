@@ -36,6 +36,11 @@ jobs:
       run: npm test
       env:
         CI: true
+        NODE_ENV: development
+        PROJECT_PATH: ${{ github.workspace }}/test/complex-files
+        TEST_COMPLEX_FILES_SOURCE: ${{ github.workspace }}/test/complex-files
+        DATABASE_PATH: ${{ github.workspace }}/.test-db/module-sentinel.db
+        TEST_DATABASE_PATH: ${{ github.workspace }}/.test-db/test-module-sentinel.db
     
     - name: Run type checks
       run: npm run typecheck
@@ -48,12 +53,21 @@ jobs:
       run: npx tsx test/mcp-server-integration-test.ts
       env:
         CI: true
+        NODE_ENV: development
+        PROJECT_PATH: ${{ github.workspace }}/test/complex-files
+        TEST_COMPLEX_FILES_SOURCE: ${{ github.workspace }}/test/complex-files
+        DATABASE_PATH: ${{ github.workspace }}/.test-db/module-sentinel.db
+        TEST_DATABASE_PATH: ${{ github.workspace }}/.test-db/test-module-sentinel.db
     
     - name: Test API Endpoints
       run: npx tsx test/integration/api-endpoints-test.ts
       env:
         CI: true
         NODE_ENV: development
+        PROJECT_PATH: ${{ github.workspace }}/test/complex-files
+        TEST_COMPLEX_FILES_SOURCE: ${{ github.workspace }}/test/complex-files
+        DATABASE_PATH: ${{ github.workspace }}/.test-db/module-sentinel.db
+        TEST_DATABASE_PATH: ${{ github.workspace }}/.test-db/test-module-sentinel.db
     
     - name: Validate Test Coverage and Assertions
       run: |

@@ -1,18 +1,43 @@
 #!/usr/bin/env tsx
 
 import * as dotenv from 'dotenv';
-// Load environment variables before anything else
+import * as path from 'path';
+
+// Load environment variables (gracefully handle missing .env in CI)
 const result = dotenv.config();
-if (result.error) {
+if (result.error && !process.env.CI) {
   console.error('Error loading .env file:', result.error);
-} else {
+} else if (!result.error) {
   console.log('✅ Environment variables loaded from .env');
-  // Debug: check if API key is loaded (don't log the actual key)
-  if (process.env.GEMINI_API_KEY) {
-    console.log('✅ GEMINI_API_KEY is set');
-  } else {
-    console.log('❌ GEMINI_API_KEY is not set');
-  }
+}
+
+// Set up default environment variables for testing
+if (!process.env.PROJECT_PATH) {
+  // In CI or when .env is missing, use the test complex-files directory
+  process.env.PROJECT_PATH = path.join(process.cwd(), 'test', 'complex-files');
+}
+
+if (!process.env.TEST_COMPLEX_FILES_SOURCE) {
+  process.env.TEST_COMPLEX_FILES_SOURCE = path.join(process.cwd(), 'test', 'complex-files');
+}
+
+if (!process.env.DATABASE_PATH) {
+  process.env.DATABASE_PATH = path.join(process.cwd(), '.test-db', 'module-sentinel.db');
+}
+
+if (!process.env.TEST_DATABASE_PATH) {
+  process.env.TEST_DATABASE_PATH = path.join(process.cwd(), '.test-db', 'test-module-sentinel.db');
+}
+
+if (!process.env.NODE_ENV) {
+  process.env.NODE_ENV = 'development';
+}
+
+// Debug: check if API key is loaded (don't log the actual key)
+if (process.env.GEMINI_API_KEY) {
+  console.log('✅ GEMINI_API_KEY is set');
+} else {
+  console.log('⚠️ GEMINI_API_KEY is not set (some features may be limited)');
 }
 
 import { TestRunner } from './test/TestRunner';
