@@ -15,7 +15,7 @@ export class UnifiedParserTest extends BaseTest {
       enableSemanticAnalysis: true,
       enableTypeAnalysis: true,
       debugMode: false,
-      projectPath: '/workspace'
+      projectPath: process.cwd()
     });
   }
 
@@ -33,10 +33,10 @@ export class UnifiedParserTest extends BaseTest {
     
     // Test files from the complex-files directory
     const testFiles = [
-      '/workspace/test/complex-files/ixx/VulkanTypes.ixx',
-      '/workspace/test/complex-files/ixx/RenderingTypes.ixx',
-      '/workspace/test/complex-files/cpp/VulkanPipelineCreator.cpp',
-      '/workspace/test/complex-files/cpp/VulkanPipelineManager.cpp'
+      path.join(process.cwd(), 'test/complex-files/ixx/VulkanTypes.ixx'),
+      path.join(process.cwd(), 'test/complex-files/ixx/RenderingTypes.ixx'),
+      path.join(process.cwd(), 'test/complex-files/cpp/VulkanPipelineCreator.cpp'),
+      path.join(process.cwd(), 'test/complex-files/cpp/VulkanPipelineManager.cpp')
     ];
 
     let totalParsed = 0;

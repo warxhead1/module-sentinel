@@ -19,7 +19,7 @@ import { JUnitReporter, TestResult } from './helpers/JUnitReporter';
 import { APIEndpointsTest } from './integration/APIEndpointsTest';
 
 export class TestRunner extends EventEmitter {
-  private projectPath = '/workspace'; // Use workspace as base for complex-files tests
+  private projectPath = process.cwd(); // Use current working directory (handles CI and local)
   private dbPath = process.env.TEST_DATABASE_PATH || '.test-db/test-index.db'; // Use env variable for test database
   private forceRebuild: boolean;
   private testFilter?: string;

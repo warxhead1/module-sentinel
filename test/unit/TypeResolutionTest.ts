@@ -75,8 +75,8 @@ export class TypeResolutionTest extends BaseTest {
   
   private async buildTypeRegistry(): Promise<void> {
     const typeFiles = [
-      path.join(this.projectPath, 'test/complex-files/ixx/VulkanTypes.ixx'),
-      path.join(this.projectPath, 'test/complex-files/ixx/RenderingTypes.ixx')
+      path.join(process.cwd(), 'test/complex-files/ixx/VulkanTypes.ixx'),
+      path.join(process.cwd(), 'test/complex-files/ixx/RenderingTypes.ixx')
     ];
     
     for (const file of typeFiles) {
@@ -168,8 +168,8 @@ export class TypeResolutionTest extends BaseTest {
   
   private async analyzeParameterResolution(): Promise<void> {
     const testFiles = [
-      path.join(this.projectPath, 'test/complex-files/cpp/VulkanPipelineCreator.cpp'),
-      path.join(this.projectPath, 'test/complex-files/cpp/VulkanPipelineManager.cpp')
+      path.join(process.cwd(), 'test/complex-files/cpp/VulkanPipelineCreator.cpp'),
+      path.join(process.cwd(), 'test/complex-files/cpp/VulkanPipelineManager.cpp')
     ];
     
     let totalParams = 0;
