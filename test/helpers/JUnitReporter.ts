@@ -3,13 +3,10 @@ import * as path from 'path';
 
 export interface TestResult {
   name: string;
-  className: string;
+  className?: string;
   time: number;
   status: 'passed' | 'failed' | 'skipped';
-  error?: {
-    message: string;
-    stack?: string;
-  };
+  error?: Error;
 }
 
 export class JUnitReporter {

@@ -11,15 +11,33 @@ Module Sentinel is an MCP (Model Context Protocol) server that provides intellig
 ### Building and Running
 
 ```bash
-#  Organized into subdirectories:
+# Core build commands:
+  npm run build         # Build TypeScript sources
+  npm run clean         # Clean build artifacts
 
+# Test runner (automatically builds first):
   npm run test          # Run all tests
-  npm run test:rebuild  # Force rebuild before tests
-  npm run test:filter   # Run specific tests
-  npm run build:test    # Build and test in one command
+  npm run test:filter <pattern>  # Run tests matching pattern (fuzzy)
+  npm run test:comparison  # Run parser comparison test specifically
+  
+# Test runner with tsx directly (for more control):
+  tsx run-tests.ts               # Build and run all tests
+  tsx run-tests.ts --filter parser  # Fuzzy match: runs ParserComparisonTest
+  tsx run-tests.ts --filter semantic # Fuzzy match: runs SemanticSearchTest, RichSemanticAnalysisTest
+  tsx run-tests.ts --rebuild     # Force rebuild database before tests
+  tsx run-tests.ts --include-new-parsers  # Include experimental parser tests
+
+# Dashboard:
   npm run dashboard     # Start the visualization dashboard
-  npm run clean        # Clean build artifacts
 ```
+
+### Test Filtering Examples
+
+The test runner uses case-insensitive partial matching:
+- `--filter parser` matches: ParserComparisonTest, ParserSupremacyTest
+- `--filter semantic` matches: SemanticSearchTest, RichSemanticAnalysisTest
+- `--filter api` matches: APIEndpointsTest
+- `--filter tool` matches: ToolsIntegrationTest
 
 ## Architecture Overview
 
@@ -131,3 +149,18 @@ The system uses `module-sentinel.config.json` to specify:
 - SQLite indices on key columns for fast queries
 - Cache hit rate target: >95%
 - Module analysis target: <50ms per module
+
+## Build Process & File Guidelines
+
+### NEVER EDIT THESE GENERATED FILES:
+- `/workspace/dashboard/dist/**/*` - Auto-generated from TypeScript sources
+- Files with build timestamps in headers
+
+### EDIT THESE SOURCE FILES INSTEAD:
+- `/workspace/src/dashboard/components/*.ts` - TypeScript component sources  
+- `/workspace/dashboard/spa/index.html` - HTML template source
+- `/workspace/src/api/visualization-api.ts` - API endpoint definitions
+
+### Build Commands:
+- `npm run build:dashboard` - Rebuilds dashboard from TypeScript sources
+- Generated files get automatically overwritten on build

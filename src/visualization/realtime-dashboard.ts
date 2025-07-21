@@ -862,10 +862,10 @@ export class RealtimeDashboard {
             }
         });
         
-        // Auto-refresh every 30 seconds
-        setInterval(() => {
-            location.reload();
-        }, 30000);
+        // Auto-refresh disabled - was causing spam requests
+        // setInterval(() => {
+        //     location.reload();
+        // }, 30000);
         
         // Smooth animations on load
         document.addEventListener('DOMContentLoaded', () => {

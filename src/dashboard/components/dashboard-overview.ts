@@ -1,4 +1,6 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import { dataService } from '../services/data.service.js';
+import { stateService } from '../services/state.service.js';
 
 /**
  * Dashboard overview component
@@ -6,24 +8,96 @@ import { DashboardComponent, defineComponent } from './base-component.js';
 export class DashboardOverview extends DashboardComponent {
   private stats: any = null;
   private namespaceData: any[] = [];
+  private unsubscribers: Array<() => void> = [];
+
+  connectedCallback() {
+    // Subscribe to state changes for project/language counts
+    this.unsubscribers.push(
+      stateService.subscribe('projects', () => {
+        this.render();
+      }),
+      stateService.subscribe('languages', () => {
+        this.render();
+      })
+    );
+    
+    // Initialize rendering
+    this.render();
+    
+    // Load data
+    this.loadData().catch(error => {
+      console.error(`Error loading data for ${this.tagName}:`, error);
+      this._error = error instanceof Error ? error.message : String(error);
+      this.render();
+    });
+  }
+
+  disconnectedCallback() {
+    // Clean up subscriptions
+    this.unsubscribers.forEach(unsubscribe => unsubscribe());
+    this.unsubscribers = [];
+    
+    // Call parent implementation
+    super.disconnectedCallback();
+  }
 
   async loadData(): Promise<void> {
     try {
-      // Load stats
-      this.stats = await this.fetchAPI('/api/stats');
+      this._loading = true;
+      this.render();
       
-      // Load top namespaces
-      const nsResponse = await this.fetchAPI('/api/namespaces');
-      if (nsResponse.tree) {
-        // Flatten tree for display
-        this.namespaceData = this.flattenNamespaceTree(nsResponse.tree)
-          .sort((a, b) => b.count - a.count)
+      // First ensure projects and languages are loaded
+      const [projects, languages] = await Promise.all([
+        dataService.getProjects(),
+        dataService.getLanguages()
+      ]);
+      
+      // Update state if not already set
+      if (!stateService.getState('projects')) {
+        stateService.setState('projects', projects || []);
+      }
+      if (!stateService.getState('languages')) {
+        stateService.setState('languages', languages || []);
+      }
+      
+      // Get current filters from state service
+      const projectId = stateService.getState<number>('selectedProjectId');
+      const languageId = stateService.getState<number>('selectedLanguageId');
+      const visibleProjectIds = stateService.getState<number[]>('visibleProjectIds') || [];
+      
+      // Build query parameters for namespace filtering
+      const params: { projectIds?: number[]; languageId?: number } = {};
+      
+      // Use visible project IDs if available, otherwise fall back to selected project
+      if (visibleProjectIds.length > 0) {
+        params.projectIds = visibleProjectIds;
+      } else if (projectId) {
+        params.projectIds = [projectId];
+      }
+      
+      if (languageId) {
+        params.languageId = languageId;
+      }
+      
+      // Load stats and namespaces using shared data service
+      const [stats, nsResponse] = await Promise.all([
+        dataService.getStats(),
+        dataService.getNamespaces(params)
+      ]);
+      
+      this.stats = stats;
+      if (nsResponse && Array.isArray(nsResponse)) {
+        // Use the array response directly
+        this.namespaceData = nsResponse
+          .sort((a: any, b: any) => b.symbol_count - a.symbol_count)
           .slice(0, 10);
       }
       
+      this._loading = false;
       this.render();
     } catch (error) {
       this._error = error instanceof Error ? error.message : String(error);
+      this._loading = false;
       this.render();
     }
   }
@@ -107,10 +181,10 @@ export class DashboardOverview extends DashboardComponent {
         }
         
         .metric-card {
-          background: var(--card-bg);
+          background: rgba(35, 35, 65, 0.9);
           border-radius: var(--border-radius);
           padding: 32px 24px;
-          border: 1px solid var(--card-border);
+          border: 1px solid rgba(147, 112, 219, 0.3);
           backdrop-filter: blur(20px);
           transition: var(--transition-smooth);
           position: relative;
@@ -352,20 +426,20 @@ export class DashboardOverview extends DashboardComponent {
       
       <div class="metrics-grid">
         <div class="metric-card">
-          <div class="metric-value">${this.stats?.totalSymbols?.toLocaleString() || '0'}</div>
+          <div class="metric-value">${this.stats?.symbolCount?.toLocaleString() || '0'}</div>
           <div class="metric-label">Total Symbols</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value">${this.stats?.totalFiles?.toLocaleString() || '0'}</div>
-          <div class="metric-label">Files Analyzed</div>
+          <div class="metric-value">${this.stats?.namespaceCount?.toLocaleString() || '0'}</div>
+          <div class="metric-label">Namespaces</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value">${this.stats?.totalRelationships?.toLocaleString() || '0'}</div>
-          <div class="metric-label">Relationships</div>
+          <div class="metric-value">${this.getProjectCount()}</div>
+          <div class="metric-label">Active Projects</div>
         </div>
         <div class="metric-card">
-          <div class="metric-value">${this.stats?.semanticCoverage || '0%'}</div>
-          <div class="metric-label">Semantic Coverage</div>
+          <div class="metric-value">${this.getLanguageCount()}</div>
+          <div class="metric-label">Languages</div>
         </div>
       </div>
       
@@ -378,15 +452,12 @@ export class DashboardOverview extends DashboardComponent {
         </div>
         
         <div class="card">
-          <h2>Top Namespaces</h2>
-          <div class="namespace-list">
-            ${this.namespaceData.map(ns => `
-              <div class="namespace-item">
-                <span class="namespace-name" data-namespace="${ns.namespace}">${ns.namespace}</span>
-                <span class="namespace-count">${ns.count} symbols</span>
-              </div>
-            `).join('')}
-          </div>
+          <h2>Module Browser</h2>
+          <module-browser compact></module-browser>
+        </div>
+        
+        <div class="card" style="grid-column: span 2;">
+          <file-structure-widget></file-structure-widget>
         </div>
         
         <div class="card">
@@ -544,6 +615,16 @@ export class DashboardOverview extends DashboardComponent {
   private initializeCharts() {
     // TODO: Initialize Chart.js charts
     // This would be done after the component is rendered
+  }
+
+  private getProjectCount(): string {
+    const projects = stateService.getState<any[]>('projects') || [];
+    return projects.length.toString();
+  }
+
+  private getLanguageCount(): string {
+    const languages = stateService.getState<any[]>('languages') || [];
+    return languages.length.toString();
   }
 }
 

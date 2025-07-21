@@ -7,11 +7,14 @@ export abstract class DashboardComponent extends HTMLElement {
   protected _data: any = null;
   protected _loading: boolean = false;
   protected _error: string | null = null;
+  private boundHandleSelectionChange: () => Promise<void>;
 
   constructor() {
     super();
     this.shadow = this.attachShadow({ mode: 'open' });
     this.addBaseStyles();
+    // Store bound function reference for proper cleanup
+    this.boundHandleSelectionChange = this.handleSelectionChange.bind(this);
   }
 
   connectedCallback() {
@@ -21,10 +24,41 @@ export abstract class DashboardComponent extends HTMLElement {
       this._error = error instanceof Error ? error.message : String(error);
       this.render();
     });
+    
+    // Listen for project selection changes (but not for project-selector or nav-sidebar to avoid loops)
+    const tagName = this.tagName.toLowerCase();
+    if (tagName !== 'project-selector' && tagName !== 'nav-sidebar') {
+      document.addEventListener('selection-changed', this.boundHandleSelectionChange);
+    }
+  }
+  
+  private async handleSelectionChange() {
+    // Debounce rapid selection changes
+    if (this._loading) return;
+    
+    // Prevent recursive calls from project-selector
+    if (this.tagName.toLowerCase() === 'project-selector') return;
+    
+    this._loading = true;
+    this.render();
+    
+    try {
+      await this.loadData();
+    } catch (error) {
+      console.error(`Error reloading data for ${this.tagName}:`, error);
+      this._error = error instanceof Error ? error.message : String(error);
+    } finally {
+      this._loading = false;
+      this.render();
+    }
   }
 
   disconnectedCallback() {
-    // Cleanup any event listeners or timers
+    // Cleanup event listeners using the same bound function reference
+    const tagName = this.tagName.toLowerCase();
+    if (tagName !== 'project-selector' && tagName !== 'nav-sidebar') {
+      document.removeEventListener('selection-changed', this.boundHandleSelectionChange);
+    }
   }
 
   /**
@@ -208,19 +242,23 @@ export abstract class DashboardComponent extends HTMLElement {
    * Helper to fetch data from API
    */
   protected async fetchAPI(endpoint: string): Promise<any> {
-    this._loading = true;
-    this.render();
-
     try {
       const response = await fetch(endpoint);
       if (!response.ok) {
         throw new Error(`API request failed: ${response.statusText}`);
       }
-      const data = await response.json();
-      this._loading = false;
-      return data;
+      const result = await response.json();
+      
+      // Handle API response format
+      if (result.success && result.data !== undefined) {
+        return result.data;
+      } else if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      // Fallback for legacy endpoints
+      return result;
     } catch (error) {
-      this._loading = false;
       throw error;
     }
   }

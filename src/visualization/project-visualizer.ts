@@ -1,674 +1,272 @@
 import Database from 'better-sqlite3';
-import * as fs from 'fs/promises';
-import * as path from 'path';
 
-interface Node {
-  id: string;
-  name: string;
-  type: 'file' | 'class' | 'function' | 'namespace' | 'module';
-  size: number;
-  stage?: string;
-  children?: Node[];
-  rect?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
-  metrics?: {
-    symbols: number;
-    dependencies: number;
-    complexity?: number;
-    antipatterns?: string[];
-  };
-}
-
-interface Edge {
-  source: string;
-  target: string;
-  type: 'uses' | 'inherits' | 'calls' | 'implements';
-  weight: number;
-}
-
+/**
+ * Project visualizer for universal schema
+ * Generates treemaps and dependency visualizations
+ */
 export class ProjectVisualizer {
-  private db: Database.Database;
-
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-  }
+  constructor(private db: Database.Database) {}
 
   /**
-   * Generate a hierarchical tree structure of the project
+   * Generate a treemap visualization showing project structure
    */
-  async generateProjectTree(): Promise<Node> {
-    // Get all files grouped by directory
-    const files = this.db.prepare(`
-      SELECT DISTINCT 
-        file_path,
-        pipeline_stage,
-        COUNT(*) as symbol_count
-      FROM enhanced_symbols
-      GROUP BY file_path
-      ORDER BY file_path
-    `).all() as any[];
-
-    // Build directory tree
-    const root: Node = {
-      id: 'root',
-      name: 'planet_procgen',
-      type: 'module',
-      size: 0,
-      children: []
-    };
-
-    const dirMap = new Map<string, Node>();
-    dirMap.set('', root);
-
-    for (const file of files) {
-      const parts = file.file_path.split('/');
-      const fileName = parts.pop()!;
-      let currentPath = '';
-      let parent = root;
-
-      // Build directory nodes
-      for (let i = 0; i < parts.length; i++) {
-        if (i < 3) continue; // Skip /home/warxh/planet_procgen
-        
-        const dirName = parts[i];
-        currentPath = currentPath ? `${currentPath}/${dirName}` : dirName;
-        
-        if (!dirMap.has(currentPath)) {
-          const dirNode: Node = {
-            id: currentPath,
-            name: dirName,
-            type: 'module',
-            size: 0,
-            children: []
-          };
-          parent.children!.push(dirNode);
-          dirMap.set(currentPath, dirNode);
-        }
-        parent = dirMap.get(currentPath)!;
-      }
-
-      // Add file node
-      const fileNode: Node = {
-        id: file.file_path,
-        name: fileName,
-        type: 'file',
-        size: file.symbol_count,
-        stage: file.pipeline_stage,
-        metrics: {
-          symbols: file.symbol_count,
-          dependencies: 0
-        }
-      };
-      parent.children!.push(fileNode);
-    }
-
-    // Calculate sizes recursively
-    this.calculateNodeSizes(root);
+  async generateTreemapSVG(width: number = 1400, height: number = 900): Promise<string> {
+    // Get hierarchical data
+    const data = this.getHierarchicalData();
     
-    return root;
-  }
-
-  /**
-   * Generate a dependency graph for cross-file relationships
-   */
-  async generateDependencyGraph(): Promise<{ nodes: Node[], edges: Edge[] }> {
-    // Get all files with metrics
-    const files = this.db.prepare(`
-      SELECT 
-        file_path,
-        pipeline_stage,
-        COUNT(*) as symbol_count,
-        AVG(parser_confidence) as avg_confidence
-      FROM enhanced_symbols
-      GROUP BY file_path
-    `).all() as any[];
-
-    // Get cross-file dependencies
-    const dependencies = this.db.prepare(`
-      SELECT 
-        s1.file_path as source_file,
-        s2.file_path as target_file,
-        sr.relationship_type,
-        COUNT(*) as connection_count
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
-      WHERE s1.file_path != s2.file_path
-        AND sr.detected_by = 'cross-file-analyzer'
-      GROUP BY s1.file_path, s2.file_path, sr.relationship_type
-    `).all() as any[];
-
-    // Create nodes
-    const nodes: Node[] = files.map(file => ({
-      id: file.file_path,
-      name: path.basename(file.file_path),
-      type: 'file',
-      size: file.symbol_count,
-      stage: file.pipeline_stage,
-      metrics: {
-        symbols: file.symbol_count,
-        dependencies: 0,
-        complexity: file.avg_confidence
-      }
-    }));
-
-    // Create edges
-    const edges: Edge[] = dependencies.map(dep => ({
-      source: dep.source_file,
-      target: dep.target_file,
-      type: dep.relationship_type as any,
-      weight: dep.connection_count
-    }));
-
-    // Update dependency counts
-    const depCounts = new Map<string, number>();
-    edges.forEach(edge => {
-      depCounts.set(edge.source, (depCounts.get(edge.source) || 0) + 1);
-      depCounts.set(edge.target, (depCounts.get(edge.target) || 0) + 1);
-    });
-
-    nodes.forEach(node => {
-      node.metrics!.dependencies = depCounts.get(node.id) || 0;
-    });
-
-    return { nodes, edges };
-  }
-
-  /**
-   * Generate SVG visualization of the project structure
-   */
-  async generateTreemapSVG(width: number = 1200, height: number = 800): Promise<string> {
-    const tree = await this.generateProjectTree();
-    
-    // Use D3.js-style treemap algorithm (simplified)
+    // Simple SVG treemap
     let svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
   <style>
-    .node { stroke: #333; stroke-width: 1px; cursor: pointer; }
-    .node:hover { stroke-width: 2px; opacity: 0.8; }
-    .label { font-family: Arial, sans-serif; font-size: 12px; fill: #333; }
-    .rendering { fill: #4CAF50; }
-    .terrain_formation { fill: #2196F3; }
-    .physics_processing { fill: #FF9800; }
-    .gui { fill: #9C27B0; }
-    .orchestration { fill: #F44336; }
-    .unknown { fill: #9E9E9E; }
-    .tooltip { font-size: 10px; fill: white; }
+    .cell { stroke: #fff; stroke-width: 1px; }
+    .label { font-family: Arial, sans-serif; font-size: 12px; fill: white; }
+    .namespace { fill: #4a9eff; }
+    .class { fill: #66cc66; }
+    .function { fill: #ff9944; }
+    .module { fill: #cc66cc; }
   </style>
-  <defs>
-    <filter id="shadow">
-      <feDropShadow dx="2" dy="2" stdDeviation="2" flood-opacity="0.3"/>
-    </filter>
-  </defs>
+  <rect width="${width}" height="${height}" fill="#f0f0f0"/>
 `;
 
-    const nodes = this.layoutTreemap(tree, 10, 10, width - 20, height - 20);
+    // Simple grid layout for visualization
+    const margin = 10;
+    const cellWidth = (width - margin * 2) / 10;
+    const cellHeight = (height - margin * 2) / 10;
     
-    for (const node of nodes) {
-      if (node.type === 'file' && node.rect) {
-        const color = this.getStageColor(node.stage);
-        const { x, y, width: w, height: h } = node.rect;
-        
-        svg += `  <g>
-    <rect class="node ${node.stage || 'unknown'}" 
-          x="${x}" y="${y}" width="${w}" height="${h}"
-          fill="${color}" filter="url(#shadow)">
-      <title>${node.name}
-Symbols: ${node.metrics?.symbols || 0}
-Stage: ${node.stage || 'unknown'}</title>
-    </rect>`;
-        
-        if (w > 50 && h > 20) {
-          svg += `
-    <text class="label" x="${x + w/2}" y="${y + h/2}" 
-          text-anchor="middle" dominant-baseline="middle">
-      ${node.name.length > 20 ? node.name.substring(0, 20) + '...' : node.name}
-    </text>`;
-        }
-        
-        svg += `
-  </g>
-`;
+    let x = margin;
+    let y = margin;
+    let row = 0;
+    
+    for (const item of data.slice(0, 100)) { // Limit to 100 items for simplicity
+      if (x + cellWidth > width - margin) {
+        x = margin;
+        y += cellHeight + 5;
+        row++;
+        if (row > 9) break; // Max 10 rows
       }
+      
+      const color = this.getColorForKind(item.kind);
+      svg += `  <g>
+    <rect class="cell ${item.kind}" x="${x}" y="${y}" width="${cellWidth}" height="${cellHeight}" fill="${color}" opacity="0.8"/>
+    <text class="label" x="${x + 5}" y="${y + 20}">${this.truncate(item.name, 15)}</text>
+    <text class="label" x="${x + 5}" y="${y + 35}" font-size="10" opacity="0.7">${item.count} symbols</text>
+  </g>\n`;
+      
+      x += cellWidth + 5;
     }
-
+    
     svg += '</svg>';
     return svg;
   }
 
   /**
-   * Generate interactive HTML visualization
+   * Generate an interactive HTML visualization
    */
   async generateInteractiveHTML(): Promise<string> {
-    const { nodes, edges } = await this.generateDependencyGraph();
+    const stats = this.getProjectStats();
+    const topSymbols = this.getTopSymbols();
     
-    // Get statistics
-    const stats = this.db.prepare(`
-      SELECT 
-        COUNT(DISTINCT file_path) as total_files,
-        COUNT(*) as total_symbols,
-        COUNT(DISTINCT pipeline_stage) as total_stages
-      FROM enhanced_symbols
-    `).get() as any;
-
-    const stageStats = this.db.prepare(`
-      SELECT 
-        pipeline_stage,
-        COUNT(DISTINCT file_path) as file_count,
-        COUNT(*) as symbol_count
-      FROM enhanced_symbols
-      WHERE pipeline_stage IS NOT NULL
-      GROUP BY pipeline_stage
-      ORDER BY symbol_count DESC
-    `).all() as any[];
-
-    const html = `<!DOCTYPE html>
-<html lang="en">
+    return `<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Planet ProcGen - Project Architecture</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://unpkg.com/force-graph"></script>
+    <title>Project Architecture - Module Sentinel</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             margin: 0;
-            padding: 0;
+            padding: 20px;
             background: #f5f5f5;
         }
-        .header {
-            background: #333;
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
         .container {
-            display: flex;
-            height: calc(100vh - 80px);
+            max-width: 1200px;
+            margin: 0 auto;
         }
-        .sidebar {
-            width: 300px;
-            background: white;
-            padding: 20px;
-            overflow-y: auto;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-        }
-        .main {
-            flex: 1;
-            position: relative;
-        }
+        h1 { color: #333; }
         .stats {
-            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
         }
         .stat-card {
-            background: #f0f0f0;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 5px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .stat-value {
-            font-size: 24px;
+            font-size: 36px;
             font-weight: bold;
-            color: #333;
+            color: #4a9eff;
         }
         .stat-label {
+            color: #666;
+            margin-top: 5px;
+        }
+        .symbol-list {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-top: 20px;
+        }
+        .symbol-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .symbol-name {
+            font-weight: 500;
+            color: #333;
+        }
+        .symbol-meta {
             font-size: 14px;
             color: #666;
-        }
-        .stage-list {
-            list-style: none;
-            padding: 0;
-        }
-        .stage-item {
-            padding: 10px;
-            margin-bottom: 5px;
-            background: #f9f9f9;
-            border-left: 4px solid;
-            cursor: pointer;
-        }
-        .stage-item:hover {
-            background: #e9e9e9;
-        }
-        .controls {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        #graph {
-            width: 100%;
-            height: 100%;
-        }
-        .tooltip {
-            position: absolute;
-            padding: 10px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            border-radius: 5px;
-            pointer-events: none;
-            font-size: 12px;
-            z-index: 1000;
+            margin-top: 2px;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Planet ProcGen - Architecture Visualization</h1>
-        <p>Interactive dependency graph and project structure analysis</p>
-    </div>
-    
     <div class="container">
-        <div class="sidebar">
-            <div class="stats">
-                <div class="stat-card">
-                    <div class="stat-value">${stats.total_files}</div>
-                    <div class="stat-label">Total Files</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${stats.total_symbols.toLocaleString()}</div>
-                    <div class="stat-label">Total Symbols</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-value">${edges.length.toLocaleString()}</div>
-                    <div class="stat-label">Cross-file Dependencies</div>
-                </div>
+        <h1>📊 Project Architecture Overview</h1>
+        
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalProjects}</div>
+                <div class="stat-label">Projects</div>
             </div>
-            
-            <h3>Pipeline Stages</h3>
-            <ul class="stage-list">
-                ${stageStats.map(stage => `
-                <li class="stage-item" style="border-color: ${this.getStageColor(stage.pipeline_stage)}">
-                    <strong>${stage.pipeline_stage}</strong><br>
-                    ${stage.file_count} files, ${stage.symbol_count.toLocaleString()} symbols
-                </li>
-                `).join('')}
-            </ul>
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalSymbols}</div>
+                <div class="stat-label">Total Symbols</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalFiles}</div>
+                <div class="stat-label">Files Indexed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">${stats.totalRelationships}</div>
+                <div class="stat-label">Relationships</div>
+            </div>
         </div>
         
-        <div class="main">
-            <div class="controls">
-                <label>
-                    <input type="checkbox" id="showLabels" checked> Show Labels
-                </label>
-                <br>
-                <label>
-                    Link Distance: <input type="range" id="linkDistance" min="50" max="300" value="150">
-                </label>
-                <br>
-                <label>
-                    Charge Force: <input type="range" id="chargeForce" min="-500" max="-50" value="-200">
-                </label>
-            </div>
-            <div id="graph"></div>
+        <div class="symbol-list">
+            <h2>Top Symbols by Relationships</h2>
+            ${topSymbols.map(s => `
+                <div class="symbol-item">
+                    <div class="symbol-name">${s.qualified_name || s.name}</div>
+                    <div class="symbol-meta">
+                        ${s.kind} • ${s.project_name} • ${s.relationship_count} relationships
+                    </div>
+                </div>
+            `).join('')}
         </div>
     </div>
-    
-    <div class="tooltip" style="display: none;"></div>
-    
-    <script>
-        const graphData = {
-            nodes: ${JSON.stringify(nodes.map(n => ({
-                id: n.id,
-                name: n.name,
-                size: Math.sqrt(n.size) * 2,
-                stage: n.stage,
-                symbols: n.metrics?.symbols || 0,
-                dependencies: n.metrics?.dependencies || 0
-            })))},
-            links: ${JSON.stringify(edges.map(e => ({
-                source: e.source,
-                target: e.target,
-                type: e.type,
-                value: e.weight
-            })))}
-        };
-        
-        const stageColors = {
-            rendering: '#4CAF50',
-            terrain_formation: '#2196F3',
-            physics_processing: '#FF9800',
-            gui: '#9C27B0',
-            orchestration: '#F44336',
-            atmospheric_dynamics: '#00BCD4',
-            geological_processes: '#795548',
-            ecosystem_simulation: '#8BC34A',
-            weather_systems: '#3F51B5',
-            feature_placement: '#CDDC39',
-            unknown: '#9E9E9E'
-        };
-        
-        // Create force-directed graph
-        const Graph = ForceGraph()
-            (document.getElementById('graph'))
-            .graphData(graphData)
-            .nodeId('id')
-            .nodeLabel(node => \`\${node.name}\\nSymbols: \${node.symbols}\\nDependencies: \${node.dependencies}\`)
-            .nodeColor(node => stageColors[node.stage] || stageColors.unknown)
-            .nodeRelSize(4)
-            .linkColor(() => 'rgba(0,0,0,0.2)')
-            .linkWidth(link => Math.sqrt(link.value))
-            .linkDirectionalArrowLength(3.5)
-            .linkDirectionalArrowRelPos(1)
-            .onNodeClick(node => {
-                console.log('Clicked node:', node);
-                // Could open file or show detailed view
-            })
-            .onNodeHover(node => {
-                const tooltip = document.querySelector('.tooltip');
-                if (node) {
-                    tooltip.innerHTML = \`
-                        <strong>\${node.name}</strong><br>
-                        Stage: \${node.stage || 'unknown'}<br>
-                        Symbols: \${node.symbols}<br>
-                        Dependencies: \${node.dependencies}
-                    \`;
-                    tooltip.style.display = 'block';
-                } else {
-                    tooltip.style.display = 'none';
-                }
-            });
-        
-        // Update graph on control changes
-        document.getElementById('linkDistance').addEventListener('input', e => {
-            Graph.d3Force('link').distance(e.target.value);
-            Graph.d3ReheatSimulation();
-        });
-        
-        document.getElementById('chargeForce').addEventListener('input', e => {
-            Graph.d3Force('charge').strength(e.target.value);
-            Graph.d3ReheatSimulation();
-        });
-        
-        document.getElementById('showLabels').addEventListener('change', e => {
-            Graph.nodeLabel(e.target.checked ? node => node.name : '');
-        });
-        
-        // Move tooltip with mouse
-        document.addEventListener('mousemove', e => {
-            const tooltip = document.querySelector('.tooltip');
-            tooltip.style.left = (e.pageX + 10) + 'px';
-            tooltip.style.top = (e.pageY - 10) + 'px';
-        });
-        
-        // Stage filtering
-        document.querySelectorAll('.stage-item').forEach(item => {
-            item.addEventListener('click', function() {
-                const stageName = this.querySelector('strong').textContent;
-                const filteredNodes = graphData.nodes.filter(n => n.stage === stageName);
-                const filteredNodeIds = new Set(filteredNodes.map(n => n.id));
-                const filteredLinks = graphData.links.filter(l => 
-                    filteredNodeIds.has(l.source.id || l.source) && 
-                    filteredNodeIds.has(l.target.id || l.target)
-                );
-                
-                Graph.graphData({
-                    nodes: filteredNodes,
-                    links: filteredLinks
-                });
-            });
-        });
-    </script>
 </body>
 </html>`;
-
-    return html;
   }
 
   /**
-   * Generate a module-level dependency matrix
+   * Generate a dependency matrix visualization
    */
   async generateDependencyMatrix(): Promise<string> {
-    // Get unique modules by extracting directory names
-    const allFiles = this.db.prepare(`
-      SELECT DISTINCT file_path 
-      FROM enhanced_symbols
-    `).all() as any[];
-    
-    // Extract module names from file paths
-    const moduleSet = new Set<string>();
-    for (const file of allFiles) {
-      const match = file.file_path.match(/planet_procgen\/(src|include)\/([^\/]+)/);
-      if (match) {
-        moduleSet.add(match[2]);
-      }
-    }
-    const moduleNames = Array.from(moduleSet).sort();
-    
-    // Get dependencies between modules
+    // Get namespace dependencies
     const dependencies = this.db.prepare(`
       SELECT 
-        s1.file_path as source_file,
-        s2.file_path as target_file,
+        s1.namespace as from_namespace,
+        s2.namespace as to_namespace,
         COUNT(*) as dependency_count
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
-      WHERE s1.file_path != s2.file_path
-      GROUP BY s1.file_path, s2.file_path
+      FROM universal_relationships r
+      JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
+      WHERE s1.namespace IS NOT NULL 
+        AND s2.namespace IS NOT NULL 
+        AND s1.namespace != s2.namespace
+      GROUP BY s1.namespace, s2.namespace
+      ORDER BY dependency_count DESC
+      LIMIT 100
     `).all() as any[];
 
-    // Build dependency matrix
-    const matrix: number[][] = [];
-    const moduleIndex = new Map(moduleNames.map((name, i) => [name, i]));
+    // Get unique namespaces
+    const namespaces = new Set<string>();
+    dependencies.forEach(d => {
+      namespaces.add(d.from_namespace);
+      namespaces.add(d.to_namespace);
+    });
+    const namespaceList = Array.from(namespaces).sort();
 
-    // Initialize matrix
-    for (let i = 0; i < moduleNames.length; i++) {
-      matrix[i] = new Array(moduleNames.length).fill(0);
-    }
+    // Build matrix
+    let html = `<table style="border-collapse: collapse;">
+<tr><th></th>${namespaceList.map(ns => `<th style="writing-mode: vertical-lr; padding: 5px;">${ns}</th>`).join('')}</tr>`;
 
-    // Fill matrix with dependency counts
-    for (const dep of dependencies) {
-      const sourceMatch = dep.source_file.match(/planet_procgen\/(src|include)\/([^\/]+)/);
-      const targetMatch = dep.target_file.match(/planet_procgen\/(src|include)\/([^\/]+)/);
-      
-      if (sourceMatch && targetMatch) {
-        const sourceModule = sourceMatch[2];
-        const targetModule = targetMatch[2];
-        
-        if (sourceModule !== targetModule) {
-          const sourceIdx = moduleIndex.get(sourceModule);
-          const targetIdx = moduleIndex.get(targetModule);
-          
-          if (sourceIdx !== undefined && targetIdx !== undefined) {
-            matrix[sourceIdx][targetIdx] += dep.dependency_count;
-          }
-        }
-      }
-    }
-
-    // Generate HTML table
-    let html = '<table style="border-collapse: collapse; font-family: monospace;">';
-    html += '<tr><th></th>';
-    for (const name of moduleNames) {
-      html += `<th style="writing-mode: vertical-lr; padding: 5px;">${name}</th>`;
-    }
-    html += '</tr>';
-
-    for (let i = 0; i < moduleNames.length; i++) {
-      html += `<tr><th style="text-align: right; padding: 5px;">${moduleNames[i]}</th>`;
-      for (let j = 0; j < moduleNames.length; j++) {
-        const value = matrix[i][j];
-        const color = value > 0 ? `rgba(255, 0, 0, ${Math.min(value / 100, 1)})` : 'white';
-        html += `<td style="background-color: ${color}; width: 20px; height: 20px; text-align: center; border: 1px solid #ccc;">${value || ''}</td>`;
+    for (const fromNs of namespaceList) {
+      html += `<tr><th style="text-align: right; padding: 5px;">${fromNs}</th>`;
+      for (const toNs of namespaceList) {
+        const dep = dependencies.find(d => d.from_namespace === fromNs && d.to_namespace === toNs);
+        const count = dep ? dep.dependency_count : 0;
+        const opacity = count > 0 ? Math.min(count / 10, 1) : 0;
+        html += `<td style="background: rgba(255,0,0,${opacity}); width: 20px; height: 20px; text-align: center;">${count || ''}</td>`;
       }
       html += '</tr>';
     }
+    
     html += '</table>';
-
     return html;
   }
 
   // Helper methods
-  private calculateNodeSizes(node: Node): number {
-    if (!node.children || node.children.length === 0) {
-      return node.size;
-    }
-    
-    let totalSize = 0;
-    for (const child of node.children) {
-      totalSize += this.calculateNodeSizes(child);
-    }
-    node.size = totalSize;
-    return totalSize;
+  private getHierarchicalData(): any[] {
+    return this.db.prepare(`
+      SELECT 
+        COALESCE(namespace, 'global') as namespace,
+        kind,
+        COUNT(*) as count,
+        MIN(name) as name
+      FROM universal_symbols
+      GROUP BY namespace, kind
+      ORDER BY count DESC
+    `).all();
   }
 
-  private layoutTreemap(node: Node, x: number, y: number, width: number, height: number): Node[] {
-    const nodes: Node[] = [];
-    
-    if (!node.children || node.children.length === 0) {
-      node.rect = { x, y, width, height };
-      nodes.push(node);
-      return nodes;
-    }
-
-    // Simple slice-and-dice layout
-    const totalSize = node.size || 1;
-    let currentX = x;
-    let currentY = y;
-    
-    const isHorizontal = width > height;
-    
-    for (const child of node.children) {
-      const ratio = (child.size || 1) / totalSize;
-      
-      if (isHorizontal) {
-        const childWidth = width * ratio;
-        nodes.push(...this.layoutTreemap(child, currentX, y, childWidth, height));
-        currentX += childWidth;
-      } else {
-        const childHeight = height * ratio;
-        nodes.push(...this.layoutTreemap(child, x, currentY, width, childHeight));
-        currentY += childHeight;
-      }
-    }
-    
-    return nodes;
+  private getProjectStats(): any {
+    return this.db.prepare(`
+      SELECT 
+        (SELECT COUNT(*) FROM projects WHERE is_active = 1) as totalProjects,
+        (SELECT COUNT(*) FROM universal_symbols) as totalSymbols,
+        (SELECT COUNT(DISTINCT file_path) FROM universal_symbols) as totalFiles,
+        (SELECT COUNT(*) FROM universal_relationships) as totalRelationships
+    `).get() as any;
   }
 
-  private getStageColor(stage?: string): string {
+  private getTopSymbols(): any[] {
+    return this.db.prepare(`
+      SELECT 
+        s.name,
+        s.qualified_name,
+        s.kind,
+        p.name as project_name,
+        COUNT(r.id) as relationship_count
+      FROM universal_symbols s
+      JOIN projects p ON s.project_id = p.id
+      LEFT JOIN universal_relationships r ON s.id = r.from_symbol_id OR s.id = r.to_symbol_id
+      GROUP BY s.id
+      ORDER BY relationship_count DESC
+      LIMIT 20
+    `).all();
+  }
+
+  private getColorForKind(kind: string): string {
     const colors: Record<string, string> = {
-      rendering: '#4CAF50',
-      terrain_formation: '#2196F3',
-      physics_processing: '#FF9800',
-      gui: '#9C27B0',
-      orchestration: '#F44336',
-      atmospheric_dynamics: '#00BCD4',
-      geological_processes: '#795548',
-      ecosystem_simulation: '#8BC34A',
-      weather_systems: '#3F51B5',
-      feature_placement: '#CDDC39'
+      namespace: '#4a9eff',
+      class: '#66cc66',
+      function: '#ff9944',
+      method: '#ff9944',
+      module: '#cc66cc',
+      variable: '#ffcc66',
+      type: '#9966ff'
     };
-    return colors[stage || ''] || '#9E9E9E';
+    return colors[kind] || '#999999';
   }
 
-  close() {
-    this.db.close();
+  private truncate(str: string, length: number): string {
+    return str.length > length ? str.substring(0, length - 3) + '...' : str;
   }
 }

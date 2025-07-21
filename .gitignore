@@ -60,3 +60,35 @@ visualizations/*.svg
 
 # Test database directory
 .test-db/
+
+# Claude and AI assistant directories
+.claude/
+.bmad-core/
+.gemini/
+
+# Tree-sitter grammar builds
+tree-sitter-cpp/
+
+# Temporary scripts and files
+cockpit.md
+quick-rebuild.ts
+run-migrations.ts
+*.tmp
+*.temp
+
+# Server logs
+server.log
+
+# Dev container scripts
+.devcontainer/init-firewall.sh
+
+# Zone identifier files (Windows)
+*:Zone.Identifier
+
+# Generated or temporary TypeScript files in scripts/
+scripts/analyze-*.ts
+scripts/check-*.ts
+scripts/debug-*.ts
+scripts/namespace-*.ts
+scripts/query-*.ts
+scripts/verify-*.ts

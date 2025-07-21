@@ -1,21 +1,33 @@
 {
   "name": "Module Sentinel Development",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "args": {
+      "TZ": "${localEnv:TZ:America/Los_Angeles}"
+    }
   },
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW"
+  ],
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
       "installZsh": true,
       "configureZshAsDefaultShell": true,
       "installOhMyZsh": true,
       "upgradePackages": true,
-      "username": "automatic",
-      "userUid": "automatic",
-      "userGid": "automatic"
+      "username": "node",
+      "userUid": "1000",
+      "userGid": "1000"
     },
     "ghcr.io/devcontainers/features/git:1": {
       "ppa": true,
       "version": "os-provided"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "version": "latest",
+      "moby": true,
+      "dockerDashComposeVersion": "v2"
     }
   },
   "customizations": {
@@ -30,28 +42,44 @@
         "twxs.cmake",
         "jeff-hykin.better-cpp-syntax",
         "ms-python.python",
-        "ms-toolsai.jupyter"
+        "ms-toolsai.jupyter",
+        "dbaeumer.vscode-eslint",
+        "eamodio.gitlens"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
         "typescript.preferences.quoteStyle": "single",
         "editor.formatOnSave": true,
         "editor.codeActionsOnSave": {
-          "source.fixAll": "explicit"
-        }
+          "source.fixAll": "explicit",
+          "source.fixAll.eslint": "explicit"
+        },
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
       }
     }
   },
-  "postCreateCommand": "npm install",
-  "remoteUser": "devuser",
+  "postCreateCommand": "sudo /usr/local/bin/init-firewall.sh && mkdir -p ~/.claude ~/.claude-code ~/.config/claude-code ~/.gemini ~/.local/share/claude ~/.local/state/claude ~/.cache/claude ~/.local/bin ~/.npm-global && sudo chown -R node:node ~/.claude ~/.claude-code ~/.config/claude-code ~/.gemini ~/.local ~/.npm-global && npm config set prefix ~/.npm-global && echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> ~/.zshrc && echo 'export PATH=$HOME/.npm-global/bin:$PATH' >> ~/.bashrc && npm install -g @google/gemini-cli && curl -fsSL claude.ai/install.sh | bash && npm install",
+  "remoteUser": "node",
   "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=delegated",
   "mounts": [
-    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-    "source=${localEnv:HOME}/planet_procgen,target=/home/warxh/planet_procgen,type=bind,consistency=cached",
-    "source=${localEnv:HOME}/.zshrc,target=/home/devuser/.zshrc,type=bind,consistency=cached",
-    "source=${localEnv:HOME}/.oh-my-zsh,target=/home/devuser/.oh-my-zsh,type=bind,consistency=cached"
+    "source=/home/warxh/planet_procgen,target=/home/node/planet_procgen,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.zshrc,target=/home/node/.zshrc,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.oh-my-zsh,target=/home/node/.oh-my-zsh,type=bind,consistency=cached",
+    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached"
   ],
-  "forwardPorts": [3000, 8080, 9229],
+  "remoteEnv": {
+    "NODE_OPTIONS": "--max-old-space-size=4096",
+    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+  },
+  "forwardPorts": [
+    3000,
+    8080,
+    9229
+  ],
   "portsAttributes": {
     "3000": {
       "label": "Development Server",

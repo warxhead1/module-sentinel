@@ -80,10 +80,10 @@ export class DatabaseManager {
       // Test with a simple query to ensure the database is working
       const result = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1").get();
       
-      // Check if we have the expected tables
+      // Check if we have the expected tables for universal schema
       const tables = this.db.prepare(`
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('enhanced_symbols', 'symbol_relationships', 'antipatterns')
+        WHERE type='table' AND name IN ('universal_symbols', 'file_index', 'projects', 'languages', 'universal_relationships')
       `).all();
 
       if (tables.length === 0) {

@@ -1,20 +1,25 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 
 interface FlowNode {
-  id: string;
+  id: string | number;
   name: string;
   type: 'function' | 'class' | 'file' | 'module';
   file: string;
   line: number;
   namespace?: string;
   callCount?: number;
+  complexity?: number;
+  isBranch?: boolean;
+  isUnused?: boolean;
 }
 
 interface FlowEdge {
-  source: string;
-  target: string;
-  type: 'calls' | 'inherits' | 'uses' | 'includes';
+  source: string | number;
+  target: string | number;
+  type: 'calls' | 'inherits' | 'uses' | 'includes' | 'conditional';
   weight: number;
+  condition?: string;
+  isConditional?: boolean;
 }
 
 interface CallStack {
@@ -24,12 +29,36 @@ interface CallStack {
   line: number;
 }
 
+interface ExecutionPath {
+  id: number;
+  nodes: number[];
+  conditions: string[];
+  isComplete: boolean;
+  isCyclic: boolean;
+  coverage: number;
+}
+
+interface BranchInfo {
+  condition: string;
+  targets: Array<{
+    target_id: number;
+    target_name: string;
+    line_number: number;
+  }>;
+  coverage: number;
+}
+
 export class CodeFlowExplorer extends DashboardComponent {
   private flowData: { nodes: FlowNode[], edges: FlowEdge[] } | null = null;
-  private selectedNode: string | null = null;
+  private selectedNode: string | number | null = null;
+  private selectedSymbol: any = null;
   private traceMode: 'incoming' | 'outgoing' | 'both' = 'both';
   private maxDepth: number = 3;
   private callStack: CallStack[] = [];
+  private executionPaths: ExecutionPath[] = [];
+  private branchAnalysis: any = null;
+  private unusedPaths: any[] = [];
+  private viewMode: 'graph' | 'paths' | 'branches' | 'unused' = 'graph';
 
   async loadData(): Promise<void> {
     // Check if there's a starting point in the URL
@@ -43,36 +72,78 @@ export class CodeFlowExplorer extends DashboardComponent {
     }
   }
 
-  private async loadFlowData(nodeId: string) {
+  private async loadFlowData(nodeId: string | number) {
     try {
       this._loading = true;
-      this.render();
+      this.updateLoadingState();
 
-      const params = new URLSearchParams({
-        node: nodeId,
-        mode: this.traceMode,
-        depth: this.maxDepth.toString()
-      });
+      // Load multiple data sources in parallel
+      const [callGraphResponse, branchResponse, pathsResponse] = await Promise.all([
+        this.fetchAPI(`/api/code-flow/call-graph/${nodeId}?depth=${this.maxDepth}&direction=${this.traceMode}`),
+        this.fetchAPI(`/api/code-flow/branches/${nodeId}`).catch(() => null),
+        this.fetchAPI(`/api/code-flow/execution-paths?startId=${nodeId}&maxPaths=20`).catch(() => null)
+      ]);
 
-      const response = await this.fetchAPI(`/api/flow?${params}`);
-      this.flowData = {
-        nodes: response.nodes || [],
-        edges: response.edges || []
-      };
+      if (!callGraphResponse.success) {
+        throw new Error(callGraphResponse.error || 'Failed to load call graph');
+      }
+
+      // Store all the data
+      this.selectedSymbol = callGraphResponse.data.target;
+      this.branchAnalysis = branchResponse?.data;
+      this.executionPaths = pathsResponse?.data?.paths || [];
+      
+      // Convert API response to graph nodes and edges
+      const { nodes, edges } = this.convertAPIResponseToGraph(callGraphResponse.data);
+      
+      this.flowData = { nodes, edges };
       this.selectedNode = nodeId;
       
-      // Load call stack if available
-      if (response.callStack) {
-        this.callStack = response.callStack;
+      // Load unused paths for the project
+      if (this.selectedSymbol?.project_id) {
+        this.loadUnusedPaths(this.selectedSymbol.project_id);
       }
       
       this._loading = false;
       this.render();
-      this.initializeFlowGraph();
+      // Wait for DOM to be ready before initializing graph
+      setTimeout(() => {
+        if (this.viewMode === 'graph') {
+          this.initializeFlowGraph();
+        } else if (this.viewMode === 'paths') {
+          this.initializePathsView();
+        }
+      }, 0);
     } catch (error) {
       this._error = error instanceof Error ? error.message : String(error);
       this._loading = false;
       this.render();
+    }
+  }
+
+  private async loadUnusedPaths(projectId: number) {
+    try {
+      const response = await this.fetchAPI(`/api/code-flow/unused-paths?projectId=${projectId}`);
+      if (response.success) {
+        this.unusedPaths = response.data.unused_symbols || [];
+      }
+    } catch (error) {
+      console.error('Failed to load unused paths:', error);
+    }
+  }
+  
+  private updateLoadingState() {
+    // Update only the flow canvas area to show loading state
+    const flowCanvas = this.shadow.querySelector('.flow-canvas');
+    if (flowCanvas) {
+      flowCanvas.innerHTML = `
+        <div class="empty-state">
+          <div>
+            <h2>Loading...</h2>
+            <p>Analyzing code flow relationships</p>
+          </div>
+        </div>
+      `;
     }
   }
 
@@ -342,11 +413,324 @@ export class CodeFlowExplorer extends DashboardComponent {
           text-align: center;
           color: #888;
         }
+
+        /* Execution Paths View */
+        .paths-view {
+          padding: 20px;
+          height: 100%;
+          overflow-y: auto;
+        }
+
+        .paths-header {
+          margin-bottom: 20px;
+          padding-bottom: 15px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .paths-header h3 {
+          margin: 0 0 5px 0;
+          color: #e0e0e0;
+        }
+
+        .paths-list {
+          display: flex;
+          flex-direction: column;
+          gap: 15px;
+        }
+
+        .path-item {
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 8px;
+          padding: 15px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .path-item.cyclic {
+          border-color: #feca57;
+        }
+
+        .path-item.incomplete {
+          border-color: #ff6b6b;
+        }
+
+        .path-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 15px;
+        }
+
+        .path-number {
+          font-weight: 600;
+          color: #4ecdc4;
+        }
+
+        .path-badges {
+          display: flex;
+          gap: 8px;
+        }
+
+        .badge {
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 0.75rem;
+          font-weight: 600;
+        }
+
+        .badge.cyclic {
+          background: rgba(254, 202, 87, 0.2);
+          color: #feca57;
+        }
+
+        .badge.incomplete {
+          background: rgba(255, 107, 107, 0.2);
+          color: #ff6b6b;
+        }
+
+        .badge.coverage {
+          background: rgba(6, 255, 165, 0.2);
+          color: #06ffa5;
+        }
+
+        .path-flow {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .path-node {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          cursor: pointer;
+          transition: transform 0.2s ease;
+        }
+
+        .path-node:hover {
+          transform: translateX(5px);
+        }
+
+        .node-id {
+          background: rgba(78, 205, 196, 0.2);
+          border: 1px solid #4ecdc4;
+          padding: 8px 16px;
+          border-radius: 6px;
+          font-family: 'Fira Code', monospace;
+          color: #4ecdc4;
+        }
+
+        .path-condition {
+          margin-top: 5px;
+          padding: 5px 10px;
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 4px;
+          font-size: 0.85rem;
+        }
+
+        .condition-label {
+          color: #feca57;
+          font-weight: 600;
+          margin-right: 5px;
+        }
+
+        .condition-text {
+          color: #e0e0e0;
+          font-family: 'Fira Code', monospace;
+        }
+
+        .path-arrow {
+          color: #666;
+          font-size: 1.2rem;
+          margin: 5px 0;
+        }
+
+        /* Branch Analysis View */
+        .branches-view {
+          padding: 20px;
+          height: 100%;
+          overflow-y: auto;
+        }
+
+        .branches-header {
+          margin-bottom: 20px;
+          padding-bottom: 15px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .branch-stats {
+          display: flex;
+          gap: 30px;
+          margin-top: 15px;
+        }
+
+        .branches-list {
+          display: flex;
+          flex-direction: column;
+          gap: 15px;
+        }
+
+        .branch-item {
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 8px;
+          padding: 15px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .branch-item.unused {
+          border-color: #ff6b6b;
+          background: rgba(255, 107, 107, 0.05);
+        }
+
+        .branch-condition {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+
+        .condition-icon {
+          font-size: 1.2rem;
+        }
+
+        .branch-condition code {
+          background: rgba(0, 0, 0, 0.3);
+          padding: 4px 8px;
+          border-radius: 4px;
+          color: #e0e0e0;
+        }
+
+        .branch-targets {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          margin-left: 30px;
+          margin-bottom: 10px;
+        }
+
+        .branch-target {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-size: 0.9rem;
+        }
+
+        .target-arrow {
+          color: #4ecdc4;
+        }
+
+        .target-name {
+          color: #e0e0e0;
+          font-weight: 500;
+        }
+
+        .target-line {
+          color: #888;
+          font-size: 0.85rem;
+        }
+
+        .branch-coverage {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .coverage-bar {
+          flex: 1;
+          height: 6px;
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 3px;
+          overflow: hidden;
+        }
+
+        .coverage-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #06ffa5, #4ecdc4);
+          transition: width 0.3s ease;
+        }
+
+        .coverage-text {
+          font-size: 0.85rem;
+          color: #888;
+          min-width: 80px;
+        }
+
+        /* Unused Code View */
+        .unused-view {
+          padding: 20px;
+          height: 100%;
+          overflow-y: auto;
+        }
+
+        .unused-header {
+          margin-bottom: 20px;
+          padding-bottom: 15px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .unused-list {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .unused-item {
+          background: rgba(255, 107, 107, 0.05);
+          border: 1px solid rgba(255, 107, 107, 0.2);
+          border-radius: 8px;
+          padding: 12px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          transition: all 0.2s ease;
+        }
+
+        .unused-item:hover {
+          background: rgba(255, 107, 107, 0.1);
+          transform: translateX(5px);
+        }
+
+        .unused-name {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .function-icon {
+          color: #ff6b6b;
+          font-size: 1.2rem;
+        }
+
+        .unused-location {
+          flex: 1;
+          text-align: center;
+        }
+
+        .unused-location code {
+          background: rgba(0, 0, 0, 0.3);
+          padding: 2px 6px;
+          border-radius: 4px;
+          font-size: 0.85rem;
+          color: #aaa;
+        }
+
+        .action-btn {
+          background: rgba(78, 205, 196, 0.2);
+          border: 1px solid #4ecdc4;
+          color: #4ecdc4;
+          padding: 5px 15px;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .action-btn:hover {
+          background: rgba(78, 205, 196, 0.3);
+        }
       </style>
       
       <div class="page-header">
         <h1>Code Flow Explorer</h1>
-        <p class="subtitle">Trace function calls and dependencies through your codebase</p>
+        <p class="subtitle">Analyze execution paths, branches, and code flow through your codebase</p>
       </div>
       
       <div class="flow-container">
@@ -368,16 +752,32 @@ export class CodeFlowExplorer extends DashboardComponent {
           ${this.flowData ? `
             <div class="flow-controls">
               <div class="control-group">
-                <div class="control-label">Trace Mode</div>
+                <div class="control-label">View Mode</div>
                 <div class="control-buttons">
-                  <button class="control-btn ${this.traceMode === 'incoming' ? 'active' : ''}" 
-                          data-mode="incoming">Incoming</button>
-                  <button class="control-btn ${this.traceMode === 'outgoing' ? 'active' : ''}" 
-                          data-mode="outgoing">Outgoing</button>
-                  <button class="control-btn ${this.traceMode === 'both' ? 'active' : ''}" 
-                          data-mode="both">Both</button>
+                  <button class="control-btn ${this.viewMode === 'graph' ? 'active' : ''}" 
+                          data-view="graph">Call Graph</button>
+                  <button class="control-btn ${this.viewMode === 'paths' ? 'active' : ''}" 
+                          data-view="paths">Execution Paths</button>
+                  <button class="control-btn ${this.viewMode === 'branches' ? 'active' : ''}" 
+                          data-view="branches">Branches</button>
+                  <button class="control-btn ${this.viewMode === 'unused' ? 'active' : ''}" 
+                          data-view="unused">Unused Code</button>
                 </div>
               </div>
+              
+              ${this.viewMode === 'graph' ? `
+                <div class="control-group">
+                  <div class="control-label">Trace Mode</div>
+                  <div class="control-buttons">
+                    <button class="control-btn ${this.traceMode === 'incoming' ? 'active' : ''}" 
+                            data-mode="incoming">Incoming</button>
+                    <button class="control-btn ${this.traceMode === 'outgoing' ? 'active' : ''}" 
+                            data-mode="outgoing">Outgoing</button>
+                    <button class="control-btn ${this.traceMode === 'both' ? 'active' : ''}" 
+                            data-mode="both">Both</button>
+                  </div>
+                </div>
+              ` : ''}
               
               <div class="control-group">
                 <div class="control-label">Max Depth: ${this.maxDepth}</div>
@@ -397,7 +797,7 @@ export class CodeFlowExplorer extends DashboardComponent {
               </div>
             </div>
             
-            <svg id="flowGraph"></svg>
+            ${this.renderViewContent()}
           ` : `
             <div class="empty-state">
               <div>
@@ -574,6 +974,264 @@ export class CodeFlowExplorer extends DashboardComponent {
     return colors[type] || '#888';
   }
 
+  private renderViewContent(): string {
+    switch (this.viewMode) {
+      case 'graph':
+        return '<svg id="flowGraph"></svg>';
+      
+      case 'paths':
+        return this.renderExecutionPaths();
+      
+      case 'branches':
+        return this.renderBranchAnalysis();
+      
+      case 'unused':
+        return this.renderUnusedCode();
+      
+      default:
+        return '<div class="empty-state">Select a view mode</div>';
+    }
+  }
+
+  private renderExecutionPaths(): string {
+    if (!this.executionPaths.length) {
+      return `
+        <div class="paths-view">
+          <div class="empty-state">
+            <h3>No execution paths found</h3>
+            <p>Select a function to analyze its execution paths</p>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="paths-view">
+        <div class="paths-header">
+          <h3>Execution Paths from ${this.selectedSymbol?.name || 'Unknown'}</h3>
+          <p>${this.executionPaths.length} paths found</p>
+        </div>
+        <div class="paths-list">
+          ${this.executionPaths.map((path, index) => `
+            <div class="path-item ${path.isCyclic ? 'cyclic' : ''} ${!path.isComplete ? 'incomplete' : ''}">
+              <div class="path-header">
+                <span class="path-number">Path ${index + 1}</span>
+                <div class="path-badges">
+                  ${path.isCyclic ? '<span class="badge cyclic">Cyclic</span>' : ''}
+                  ${!path.isComplete ? '<span class="badge incomplete">Incomplete</span>' : ''}
+                  ${path.coverage > 0 ? `<span class="badge coverage">Coverage: ${path.coverage}%</span>` : ''}
+                </div>
+              </div>
+              <div class="path-flow">
+                ${this.renderPathNodes(path.nodes, path.conditions)}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderPathNodes(nodeIds: number[], conditions: string[]): string {
+    // This would ideally fetch node details, but for now show IDs
+    return nodeIds.map((nodeId, index) => `
+      <div class="path-node">
+        <div class="node-id">${nodeId}</div>
+        ${conditions[index] ? `
+          <div class="path-condition">
+            <span class="condition-label">if</span>
+            <span class="condition-text">${conditions[index]}</span>
+          </div>
+        ` : ''}
+        ${index < nodeIds.length - 1 ? '<div class="path-arrow">↓</div>' : ''}
+      </div>
+    `).join('');
+  }
+
+  private renderBranchAnalysis(): string {
+    if (!this.branchAnalysis) {
+      return `
+        <div class="branches-view">
+          <div class="empty-state">
+            <h3>No branch analysis available</h3>
+            <p>Select a function to analyze its conditional branches</p>
+          </div>
+        </div>
+      `;
+    }
+
+    const { branches, total_branches, covered_branches, unused_branches } = this.branchAnalysis;
+
+    return `
+      <div class="branches-view">
+        <div class="branches-header">
+          <h3>Branch Analysis for ${this.selectedSymbol?.name || 'Unknown'}</h3>
+          <div class="branch-stats">
+            <div class="stat">
+              <span class="stat-value">${total_branches}</span>
+              <span class="stat-label">Total Branches</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">${covered_branches}</span>
+              <span class="stat-label">Covered</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">${unused_branches.length}</span>
+              <span class="stat-label">Unused</span>
+            </div>
+          </div>
+        </div>
+        <div class="branches-list">
+          ${branches.map((branch: any) => `
+            <div class="branch-item ${branch.coverage === 0 ? 'unused' : ''}">
+              <div class="branch-condition">
+                <span class="condition-icon">🔀</span>
+                <code>${branch.condition}</code>
+              </div>
+              <div class="branch-targets">
+                ${branch.targets.map((target: any) => `
+                  <div class="branch-target">
+                    <span class="target-arrow">→</span>
+                    <span class="target-name">${target.target_name}</span>
+                    <span class="target-line">line ${target.line_number}</span>
+                  </div>
+                `).join('')}
+              </div>
+              <div class="branch-coverage">
+                <div class="coverage-bar">
+                  <div class="coverage-fill" style="width: ${branch.coverage}%"></div>
+                </div>
+                <span class="coverage-text">${branch.coverage.toFixed(1)}% coverage</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  private renderUnusedCode(): string {
+    if (!this.unusedPaths.length) {
+      return `
+        <div class="unused-view">
+          <div class="empty-state">
+            <h3>No unused code detected</h3>
+            <p>All functions appear to be referenced in the codebase</p>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="unused-view">
+        <div class="unused-header">
+          <h3>Unused Code Detection</h3>
+          <p>${this.unusedPaths.length} potentially unused functions found</p>
+        </div>
+        <div class="unused-list">
+          ${this.unusedPaths.map(symbol => `
+            <div class="unused-item" data-symbol-id="${symbol.id}">
+              <div class="unused-name">
+                <span class="function-icon">ƒ</span>
+                <strong>${symbol.name}</strong>
+              </div>
+              <div class="unused-location">
+                <code>${symbol.file_path}:${symbol.line_start}</code>
+              </div>
+              <div class="unused-actions">
+                <button class="action-btn" onclick="this.getRootNode().host.analyzeUnused(${symbol.id})">
+                  Analyze
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  private initializePathsView() {
+    // Add interactivity to paths view
+    this.shadow.querySelectorAll('.path-node').forEach(node => {
+      node.addEventListener('click', (e) => {
+        const nodeId = (e.currentTarget as HTMLElement).querySelector('.node-id')?.textContent;
+        if (nodeId) {
+          this.loadFlowData(parseInt(nodeId));
+        }
+      });
+    });
+  }
+
+  private convertAPIResponseToGraph(data: any): { nodes: FlowNode[], edges: FlowEdge[] } {
+    const nodes: FlowNode[] = [];
+    const edges: FlowEdge[] = [];
+    const nodeMap = new Map<number, FlowNode>();
+
+    // Add target node
+    const targetNode: FlowNode = {
+      id: data.target.id,
+      name: data.target.name,
+      type: data.target.kind as any,
+      file: data.target.file_path,
+      line: data.target.line_start,
+      callCount: data.metrics?.incoming_calls || 0
+    };
+    nodes.push(targetNode);
+    nodeMap.set(data.target.id, targetNode);
+
+    // Add callers
+    data.callers?.forEach((caller: any) => {
+      const node: FlowNode = {
+        id: caller.id,
+        name: caller.name,
+        type: caller.kind as any,
+        file: caller.file_path,
+        line: caller.line_start
+      };
+      nodes.push(node);
+      nodeMap.set(caller.id, node);
+
+      edges.push({
+        source: caller.id,
+        target: data.target.id,
+        type: caller.call_info.call_type as any,
+        weight: 1,
+        condition: caller.call_info.condition,
+        isConditional: caller.call_info.is_conditional
+      });
+    });
+
+    // Add callees
+    data.callees?.forEach((callee: any) => {
+      const node: FlowNode = {
+        id: callee.id,
+        name: callee.name,
+        type: callee.kind as any,
+        file: callee.file_path,
+        line: callee.line_start,
+        isBranch: callee.call_info.is_conditional
+      };
+      nodes.push(node);
+      nodeMap.set(callee.id, node);
+
+      edges.push({
+        source: data.target.id,
+        target: callee.id,
+        type: callee.call_info.call_type as any,
+        weight: 1,
+        condition: callee.call_info.condition,
+        isConditional: callee.call_info.is_conditional
+      });
+    });
+
+    return { nodes, edges };
+  }
+
+  private async analyzeUnused(symbolId: number) {
+    // Navigate to the symbol or show detailed analysis
+    await this.loadFlowData(symbolId);
+  }
+
   private attachEventListeners() {
     // Search input for functions
     const searchInput = this.shadow.getElementById('nodeSearch') as HTMLInputElement;
@@ -585,6 +1243,26 @@ export class CodeFlowExplorer extends DashboardComponent {
         }
       });
     }
+
+    // View mode buttons
+    this.shadow.querySelectorAll('[data-view]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const view = (e.target as HTMLElement).getAttribute('data-view');
+        if (view) {
+          this.viewMode = view as any;
+          this.render();
+          
+          // Initialize view-specific features
+          setTimeout(() => {
+            if (this.viewMode === 'graph' && this.flowData) {
+              this.initializeFlowGraph();
+            } else if (this.viewMode === 'paths') {
+              this.initializePathsView();
+            }
+          }, 0);
+        }
+      });
+    });
 
     // Trace mode buttons
     this.shadow.querySelectorAll('[data-mode]').forEach(btn => {
@@ -625,25 +1303,45 @@ export class CodeFlowExplorer extends DashboardComponent {
       
       const nodeList = this.shadow.getElementById('nodeList');
       if (nodeList) {
+        if (functions.length === 0) {
+          nodeList.innerHTML = `
+            <div style="color: #888; text-align: center; padding: 20px;">
+              No functions found matching "${query}"
+            </div>
+          `;
+          return;
+        }
+        
         nodeList.innerHTML = functions.map((func: any) => `
-          <div class="node-item" data-node="${func.id}">
-            <div class="node-name">${func.name}</div>
+          <div class="node-item" data-node="${func.id}" data-name="${func.name || func.qualified_name}">
+            <div class="node-name">${func.name || func.qualified_name}</div>
             <div class="node-file">${func.file}:${func.line}</div>
           </div>
         `).join('');
         
         // Add click handlers to new items
         nodeList.querySelectorAll('.node-item').forEach(item => {
-          item.addEventListener('click', (e) => {
+          item.addEventListener('click', async (e) => {
+            e.preventDefault();
             const nodeId = (e.currentTarget as HTMLElement).getAttribute('data-node');
-            if (nodeId) {
-              this.loadFlowData(nodeId);
+            const nodeName = (e.currentTarget as HTMLElement).getAttribute('data-name');
+            if (nodeId || nodeName) {
+              // Use name if ID fails
+              await this.loadFlowData(nodeId || nodeName || '');
             }
           });
         });
       }
     } catch (error) {
       console.error('Failed to load function list:', error);
+      const nodeList = this.shadow.getElementById('nodeList');
+      if (nodeList) {
+        nodeList.innerHTML = `
+          <div style="color: #ff6b6b; text-align: center; padding: 20px;">
+            Error loading functions: ${error instanceof Error ? error.message : 'Unknown error'}
+          </div>
+        `;
+      }
     }
   }
 
@@ -679,6 +1377,81 @@ export class CodeFlowExplorer extends DashboardComponent {
         .call((this as any)._zoom.transform, 
           d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale));
     }
+  }
+
+  private convertTreeToGraph(flowTree: any, startSymbol: any): { nodes: FlowNode[], edges: FlowEdge[] } {
+    const nodes: FlowNode[] = [];
+    const edges: FlowEdge[] = [];
+    const visited = new Set<string>();
+    
+    // Recursively process the tree structure
+    const processNode = (node: any, depth: number = 0) => {
+      if (!node || !node.id) {
+        return;
+      }
+      
+      const nodeId = String(node.id);
+      if (visited.has(nodeId)) {
+        return;
+      }
+      
+      // Extract line number from location string if not provided
+      let lineNumber = node.line || 0;
+      if (!lineNumber && node.location) {
+        const match = node.location.match(/:(\d+)$/);
+        if (match) {
+          lineNumber = parseInt(match[1]);
+        }
+      }
+      
+      // Add node
+      nodes.push({
+        id: nodeId,
+        name: node.name || 'unknown',
+        type: node.kind || 'function',
+        file: node.file_path || '',
+        line: lineNumber,
+        callCount: node.call_count || 1
+      });
+      visited.add(nodeId);
+      
+      // Process children and create edges
+      if (node.children && Array.isArray(node.children)) {
+        node.children.forEach((child: any) => {
+          if (child && child.id) {
+            // Add edge from current node to child
+            edges.push({
+              source: nodeId,
+              target: String(child.id),
+              type: child.relationship_type || 'calls',
+              weight: child.call_count || 1
+            });
+            
+            // Recursively process child
+            processNode(child, depth + 1);
+          }
+        });
+      }
+    };
+    
+    // Process the flow tree starting from the root
+    if (flowTree) {
+      processNode(flowTree);
+    }
+    
+    // If no nodes were added, create at least the root node
+    if (nodes.length === 0 && flowTree) {
+      nodes.push({
+        id: String(flowTree.id || '0'),
+        name: flowTree.name || 'Unknown',
+        type: flowTree.kind || 'function',
+        file: flowTree.file_path || '',
+        line: 0,
+        callCount: 1
+      });
+    }
+    
+    return { nodes, edges };
   }
 }
 

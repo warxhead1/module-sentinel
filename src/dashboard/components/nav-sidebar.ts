@@ -1,4 +1,5 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import './project-selector.js';
 
 /**
  * Sidebar navigation component
@@ -6,9 +7,13 @@ import { DashboardComponent, defineComponent } from './base-component.js';
 export class NavSidebar extends DashboardComponent {
   private navItems = [
     { path: '/', icon: '📊', title: 'Overview' },
+    { path: '/projects', icon: '🏗️', title: 'Projects' },
+    { path: '/modules', icon: '🗂️', title: 'Modules' },
     { path: '/code-flow', icon: '🌊', title: 'Code Flow' },
-    { path: '/relationships', icon: '🕸️', title: 'Relationships' },
-    { path: '/patterns', icon: '🏗️', title: 'Patterns' },
+    { path: '/enhanced-flow', icon: '🎯', title: 'Enhanced Flow' },
+    { path: '/analytics', icon: '🧠', title: 'Analytics Hub' },
+    { path: '/insights', icon: '💡', title: 'Insights' },
+    { path: '/patterns', icon: '🧩', title: 'Patterns' },
     { path: '/performance', icon: '🔥', title: 'Performance' },
     { path: '/namespaces', icon: '📦', title: 'Namespaces' },
     { path: '/search', icon: '🔍', title: 'Search' }
@@ -16,6 +21,29 @@ export class NavSidebar extends DashboardComponent {
 
   async loadData(): Promise<void> {
     // No data to load for navigation
+  }
+
+  connectedCallback() {
+    // Don't call super.connectedCallback() to avoid listening to selection-changed events
+    this.render();
+    this.setupEventListeners();
+  }
+
+  private setupEventListeners() {
+    // Handle navigation clicks
+    this.shadow.addEventListener('click', (e) => {
+      const link = (e.target as HTMLElement).closest('.nav-link');
+      if (link && link instanceof HTMLAnchorElement) {
+        e.preventDefault();
+        const path = link.getAttribute('href');
+        if (path) {
+          // Dispatch navigation event
+          window.dispatchEvent(new CustomEvent('navigate', {
+            detail: { path }
+          }));
+        }
+      }
+    });
   }
 
   render() {
@@ -66,12 +94,13 @@ export class NavSidebar extends DashboardComponent {
         .logo h1 {
           font-size: 2rem;
           font-weight: 700;
-          background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+          background: linear-gradient(to right, #e6e6fa, #dda0dd, #ba55d3);
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
           background-clip: text;
           margin: 0 0 12px 0;
           letter-spacing: -0.5px;
+          animation: glow 3s ease-in-out infinite alternate;
         }
         
         .subtitle {
@@ -204,6 +233,8 @@ export class NavSidebar extends DashboardComponent {
         <h1>Module Sentinel</h1>
         <div class="subtitle">Code Intelligence</div>
       </div>
+      
+      <project-selector></project-selector>
       
       <ul class="nav-menu">
         ${this.navItems.map(item => `

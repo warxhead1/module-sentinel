@@ -60,7 +60,7 @@ jobs:
         TEST_DATABASE_PATH: ${{ github.workspace }}/.test-db/test-module-sentinel.db
     
     - name: Test API Endpoints
-      run: npx tsx test/integration/api-endpoints-test.ts
+      run: npx tsx test/integration/APIEndpointsTest.ts
       env:
         CI: true
         NODE_ENV: development

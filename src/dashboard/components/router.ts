@@ -9,17 +9,27 @@ export class DashboardRouter {
   constructor() {
     // Define routes
     this.routes.set('/', 'dashboard-overview');
+    this.routes.set('/projects', 'project-manager');
+    this.routes.set('/modules', 'modules-page');
     this.routes.set('/namespaces', 'namespace-explorer');
-    this.routes.set('/relationships', 'relationship-graph');
+    this.routes.set('/analytics', 'analytics-hub');
+    this.routes.set('/insights', 'insights-dashboard');
     this.routes.set('/patterns', 'pattern-analyzer');
     this.routes.set('/performance', 'performance-hotspots');
     this.routes.set('/search', 'search-interface');
     this.routes.set('/code-flow', 'code-flow-explorer');
+    this.routes.set('/enhanced-flow', 'enhanced-code-flow');
 
     // Listen for browser navigation
     window.addEventListener('popstate', () => this.handleRoute());
     
-    // Intercept link clicks
+    // Listen for custom navigation events (from shadow DOM components)
+    window.addEventListener('navigate', (e: any) => {
+      const path = e.detail?.path;
+      if (path) this.navigate(path);
+    });
+    
+    // Intercept link clicks (for non-shadow DOM links)
     document.addEventListener('click', (e) => {
       const link = (e.target as HTMLElement).closest('a[href^="/"]');
       if (link && link instanceof HTMLAnchorElement) {
