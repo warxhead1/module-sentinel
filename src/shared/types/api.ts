@@ -97,6 +97,8 @@ export interface GraphNode {
   y?: number;
   vx?: number;
   vy?: number;
+  fx?: number | null;
+  fy?: number | null;
   isExpanded?: boolean; // New: To track expansion state of group nodes
 }
 
