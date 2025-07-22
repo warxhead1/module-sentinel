@@ -1,77 +1,51 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import * as d3 from 'd3';
+import { ControlFlowEngine, ControlFlowAnalysis, ControlFlowNode, ControlFlowEdge } from '../utils/control-flow-engine.js';
+import { ComplexityAnalyzer } from '../utils/complexity-analyzer.js';
+import { NavigationTreeBuilder, NavigationContext, BreadcrumbItem } from '../utils/navigation-tree-builder.js';
+import { HotspotDetector } from '../utils/hotspot-detector.js';
+import { DataFlowTracker } from '../utils/data-flow-tracker.js';
+import { SymbolSelectorModal } from './symbol-selector-modal.js';
 
-interface FlowMetrics {
-  cyclomaticComplexity: number;
-  cognitiveComplexity: number;
-  nestingDepth: number;
-  paramCount: number;
-  localVariables: number;
-  returnPoints: number;
-}
-
-interface DataFlowEdge {
-  variable: string;
-  from: number;
-  to: number;
-  type: 'read' | 'write' | 'modify';
-  value?: string;
-}
-
-interface ControlFlowNode {
-  id: string;
-  type: 'entry' | 'exit' | 'statement' | 'condition' | 'loop' | 'return' | 'exception';
-  line: number;
-  code: string;
-  metrics?: {
-    executionTime?: number;
-    callCount?: number;
-    memoryUsage?: number;
-  };
-}
-
-interface ControlFlowEdge {
-  from: string;
-  to: string;
-  type: 'normal' | 'true' | 'false' | 'exception' | 'loop-back';
-  probability?: number;
-  label?: string;
-}
-
-interface EnhancedControlFlow {
-  nodes: ControlFlowNode[];
-  edges: ControlFlowEdge[];
-  metrics: FlowMetrics;
-  dataFlows: DataFlowEdge[];
-  hotPaths: string[][];
-  deadCode: number[];
-  symbol: any; // Store the symbol information for navigation
-  functionCalls: any[]; // Store the function call edges from API
-  blocks: any[]; // Store the control flow blocks from API
-  callers: any[]; // Functions that call this function
-  callees: any[]; // Functions called by this function
-}
-
-interface NavigationContext {
-  symbolId: number;
-  symbolName: string;
-  controlFlow: EnhancedControlFlow;
-  position?: { x: number; y: number; scale: number };
-}
+// Types are now imported from the engine modules
 
 export class EnhancedCodeFlow extends DashboardComponent {
   private symbolId: number | null = null;
-  private controlFlow: EnhancedControlFlow | null = null;
+  private controlFlow: ControlFlowAnalysis | null = null;
   private viewMode: 'control' | 'data' | 'metrics' | 'hotspots' = 'control';
   private highlightedPath: string[] = [];
   private selectedVariable: string | null = null;
   private searchQuery: string = '';
   private searchResults: any[] = [];
-  
-  // Navigation state for multi-level function exploration
-  private navigationStack: NavigationContext[] = [];
-  private currentContext: NavigationContext | null = null;
   private isNavigating: boolean = false;
+  
+  // Engine instances
+  private flowEngine: ControlFlowEngine;
+  private complexityAnalyzer: ComplexityAnalyzer;
+  private navigationBuilder: NavigationTreeBuilder;
+  
+  // Symbol selector modal
+  private symbolSelector: SymbolSelectorModal;
+  
+  constructor() {
+    super();
+    
+    // Initialize engines
+    this.flowEngine = new ControlFlowEngine();
+    this.complexityAnalyzer = new ComplexityAnalyzer();
+    this.navigationBuilder = new NavigationTreeBuilder();
+    
+    // Get symbol selector instance
+    this.symbolSelector = SymbolSelectorModal.getInstance();
+  }
+  
+  get navigationStack(): NavigationContext[] {
+    return this.navigationBuilder.getNavigationState().stack;
+  }
+  
+  get currentContext(): NavigationContext | null {
+    return this.navigationBuilder.getNavigationState().current;
+  }
 
   async loadData(): Promise<void> {
     const params = new URLSearchParams(window.location.search);
@@ -120,7 +94,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
       }
 
       // Transform the response into our enhanced format
-      this.controlFlow = this.transformControlFlow(data);
+      this.controlFlow = await this.transformControlFlow(data);
       
       // Load caller/callee information
       await this.loadCallGraph();
@@ -145,283 +119,48 @@ export class EnhancedCodeFlow extends DashboardComponent {
     }
   }
 
-  private transformControlFlow(data: any): EnhancedControlFlow {
+  private async transformControlFlow(data: any): Promise<ControlFlowAnalysis> {
     console.log('Transforming control flow data:', data);
     
     try {
-      // Calculate complexity metrics
-      console.log('Calculating metrics...');
-      const metrics: FlowMetrics = {
-        cyclomaticComplexity: this.calculateCyclomaticComplexity(data),
-        cognitiveComplexity: this.calculateCognitiveComplexity(data),
-        nestingDepth: this.calculateNestingDepth(data),
-        paramCount: data.symbol.signature?.match(/\(/g)?.length || 0,
-        localVariables: this.countLocalVariables(data),
-        returnPoints: data.exit_points?.length || 1
-      };
-      console.log('Calculated metrics:', metrics);
-
-      // Build control flow nodes and edges
-      console.log('Building nodes and edges...');
-      const nodes: ControlFlowNode[] = [];
-      const edges: ControlFlowEdge[] = [];
-    
-    // Entry node
-    nodes.push({
-      id: 'entry',
-      type: 'entry',
-      line: data.entry_point,
-      code: `${data.symbol.name}(${this.extractParameters(data.symbol.signature)})`
-    });
-
-    // Process blocks
-    data.blocks?.forEach((block: any) => {
-      const nodeId = `block_${block.id}`;
-      nodes.push({
-        id: nodeId,
-        type: this.mapBlockType(block.block_type),
-        line: block.start_line,
-        code: block.condition || `Lines ${block.start_line}-${block.end_line}`
+      // Use the engine to analyze the symbol
+      const analysis = await this.flowEngine.analyzeSymbol(data, {
+        includeDataFlow: true,
+        detectHotspots: true,
+        language: 'cpp'
       });
 
-      // Add edges based on block relationships
-      if (block.parent_block_id) {
-        edges.push({
-          from: `block_${block.parent_block_id}`,
-          to: nodeId,
-          type: 'normal'
-        });
-      } else {
-        edges.push({
-          from: 'entry',
-          to: nodeId,
-          type: 'normal'
-        });
-      }
-    });
-
-    // If no blocks, create a simple flow from entry to exit
-    if (!data.blocks || data.blocks.length === 0) {
-      // Add a statement node representing the function body
-      nodes.push({
-        id: 'function_body',
-        type: 'statement',
-        line: data.entry_point,
-        code: `Function body (${data.symbol.name})`
-      });
+      // Store additional data from API
+      analysis.callers = [];
+      analysis.callees = [];
       
-      edges.push({
-        from: 'entry',
-        to: 'function_body',
-        type: 'normal'
-      });
-    }
-
-      // Exit nodes
-      console.log('Adding exit nodes...');
-      data.exit_points?.forEach((exitLine: number, index: number) => {
-        const exitId = `exit_${index}`;
-        nodes.push({
-          id: exitId,
-          type: 'exit',
-          line: exitLine,
-          code: 'return'
-        });
-        
-        // Connect function body to exit if no blocks
-        if (!data.blocks || data.blocks.length === 0) {
-          edges.push({
-            from: 'function_body',
-            to: exitId,
-            type: 'normal'
-          });
-        }
-      });
-
-      // Analyze hot paths and dead code
-      console.log('Analyzing paths...');
-      const hotPaths = this.findHotPaths(nodes, edges);
-      const deadCode = this.findDeadCode(nodes, edges);
-
-      console.log('Returning transformed data with', nodes.length, 'nodes and', edges.length, 'edges');
-      return {
-        nodes,
-        edges,
-        metrics,
-        dataFlows: [],
-        hotPaths,
-        deadCode,
-        symbol: data.symbol, // Include symbol information for navigation
-        functionCalls: data.edges || [], // Store function call edges from API
-        blocks: data.blocks || [], // Store control flow blocks from API
-        callers: [], // Will be populated from call graph API
-        callees: [] // Will be populated from call graph API
-      };
+      console.log('Returning transformed data with', analysis.nodes.length, 'nodes and', analysis.edges.length, 'edges');
+      return analysis;
     } catch (error) {
       console.error('Error in transformControlFlow:', error);
       throw new Error(`Transform failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  private calculateCyclomaticComplexity(data: any): number {
-    // McCabe's cyclomatic complexity: E - N + 2P
-    // E = edges, N = nodes, P = connected components (usually 1)
-    const nodeCount = (data.blocks?.length || 0) + 2; // +2 for entry and exit
-    const edgeCount = data.edges?.length || nodeCount - 1;
-    return edgeCount - nodeCount + 2;
-  }
-
-  private calculateCognitiveComplexity(data: any): number {
-    let complexity = 0;
-    let nestingLevel = 0;
-    
-    data.blocks?.forEach((block: any) => {
-      if (block.block_type === 'condition') {
-        complexity += 1 + nestingLevel;
-      } else if (block.block_type === 'loop') {
-        complexity += 1 + nestingLevel;
-      }
-      
-      if (block.parent_block_id) {
-        nestingLevel++;
-      }
-    });
-    
-    return complexity;
-  }
-
-  private calculateNestingDepth(data: any): number {
-    let maxDepth = 0;
-    const blockMap = new Map(data.blocks?.map((b: any) => [b.id, b]) || []);
-    
-    data.blocks?.forEach((block: any) => {
-      let depth = 0;
-      let current = block;
-      
-      while (current.parent_block_id) {
-        depth++;
-        current = blockMap.get(current.parent_block_id);
-        if (!current) break;
-      }
-      
-      maxDepth = Math.max(maxDepth, depth);
-    });
-    
-    return maxDepth;
-  }
-
-  private countLocalVariables(data: any): number {
-    // This would require parsing the actual code
-    // For now, return an estimate based on complexity
-    return Math.floor(data.blocks?.length * 1.5 || 0);
-  }
-
-  private extractParameters(signature: string | null): string {
-    if (!signature) return '';
-    const match = signature.match(/\((.*?)\)/);
-    return match ? match[1] : '';
-  }
-
-  private mapBlockType(blockType: string): ControlFlowNode['type'] {
-    const mapping: Record<string, ControlFlowNode['type']> = {
-      'entry': 'entry',
-      'exit': 'exit',
-      'conditional': 'condition',
-      'condition': 'condition',
-      'loop': 'loop',
-      'try': 'exception',
-      'catch': 'exception',
-      'return': 'return'
-    };
-    return mapping[blockType] || 'statement';
-  }
-
-  private findHotPaths(nodes: ControlFlowNode[], edges: ControlFlowEdge[]): string[][] {
-    // Find paths with highest execution probability
-    const paths: string[][] = [];
-    const visited = new Set<string>();
-    
-    const dfs = (nodeId: string, path: string[]) => {
-      if (visited.has(nodeId)) return;
-      visited.add(nodeId);
-      
-      const node = nodes.find(n => n.id === nodeId);
-      if (!node) return;
-      
-      path.push(nodeId);
-      
-      if (node.type === 'exit') {
-        paths.push([...path]);
-      } else {
-        const outgoing = edges.filter(e => e.from === nodeId);
-        outgoing.forEach(edge => {
-          dfs(edge.to, path);
-        });
-      }
-      
-      path.pop();
-      visited.delete(nodeId);
-    };
-    
-    dfs('entry', []);
-    
-    // Sort by length (shorter paths are often hotter)
-    return paths.sort((a, b) => a.length - b.length).slice(0, 5);
-  }
-
-  private findDeadCode(nodes: ControlFlowNode[], edges: ControlFlowEdge[]): number[] {
-    // Find unreachable nodes
-    const reachable = new Set<string>();
-    const queue = ['entry'];
-    
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
-      if (reachable.has(nodeId)) continue;
-      
-      reachable.add(nodeId);
-      
-      const outgoing = edges.filter(e => e.from === nodeId);
-      outgoing.forEach(edge => {
-        if (!reachable.has(edge.to)) {
-          queue.push(edge.to);
-        }
-      });
-    }
-    
-    // Return line numbers of unreachable nodes
-    return nodes
-      .filter(n => !reachable.has(n.id))
-      .map(n => n.line);
-  }
 
   private renderBreadcrumbs(): string {
-    // Always show breadcrumbs if we have control flow data, even if no navigation stack
-    if (this.navigationStack.length === 0 && !this.currentContext && !this.controlFlow) {
+    const breadcrumbs = this.navigationBuilder.buildBreadcrumbs();
+    
+    // Always show breadcrumbs if we have control flow data
+    if (breadcrumbs.length === 0 && !this.controlFlow) {
       return '';
     }
 
-    const breadcrumbItems = [];
-    
-    // Add navigation stack items
-    this.navigationStack.forEach((context, index) => {
-      breadcrumbItems.push(`
-        <span class="breadcrumb-item" data-nav-index="${index}">
-          <span class="breadcrumb-icon">🔗</span>
-          ${context.symbolName}
-        </span>
-      `);
-    });
+    const breadcrumbItems = breadcrumbs.map((item, index) => `
+      <span class="breadcrumb-item ${item.type === 'current' ? 'current' : ''}" 
+            ${item.type !== 'current' ? `data-nav-index="${index}"` : ''}>
+        <span class="breadcrumb-icon">${item.icon || '📍'}</span>
+        ${item.label}
+      </span>
+    `);
 
-    // Add current context or current function if no context
-    if (this.currentContext) {
-      breadcrumbItems.push(`
-        <span class="breadcrumb-item current">
-          <span class="breadcrumb-icon">📍</span>
-          ${this.currentContext.symbolName}
-        </span>
-      `);
-    } else if (this.controlFlow && this.controlFlow.symbol) {
-      // Show current function even without navigation context
+    // Add current function if no navigation context
+    if (breadcrumbs.length === 0 && this.controlFlow && this.controlFlow.symbol) {
       breadcrumbItems.push(`
         <span class="breadcrumb-item current">
           <span class="breadcrumb-icon">📍</span>
@@ -434,7 +173,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
       <div class="navigation-breadcrumbs">
         <div class="breadcrumb-header">
           <div class="nav-controls">
-            ${this.navigationStack.length > 0 ? `
+            ${breadcrumbs.length > 0 ? `
               <button class="nav-button back-button" data-nav-back title="Go back one step">
                 <span>⬅️</span>
                 Back
@@ -446,7 +185,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
               </button>
             ` : ''}
             <span class="breadcrumb-title">🧭 Navigation Path</span>
-            ${this.navigationStack.length > 0 ? `
+            ${breadcrumbs.length > 0 ? `
               <button class="nav-button home-button" data-nav-home title="Return to starting function">
                 <span>🏠</span>
                 Home

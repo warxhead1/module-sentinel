@@ -595,4 +595,4 @@ export class RelationshipGraph extends DashboardComponent {
   }
 }
 
-defineComponent('relationship-graph', RelationshipGraph);
+defineComponent('relationship-graph', RelationshipGraph); 
