@@ -34,6 +34,8 @@ export interface Symbol {
   is_exported: boolean;
   language_id: number;
   project_id: number;
+  complexity?: number; // Added for cyclomatic complexity
+  depth?: number; // Added for cognitive complexity calculation
 }
 
 export interface ModuleFile {
@@ -63,11 +65,33 @@ export interface GraphNode {
   moduleId?: string; // New: For grouping by module/file (e.g., file path hash)
   parentGroupId?: string; // New: For explicit hierarchical grouping (e.g., namespace ID)
   size?: number;
-  metrics?: { // New: Object for various metrics
+  
+  // Multi-language support
+  language?: string; // 'cpp', 'python', 'typescript', 'javascript'
+  languageFeatures?: { // Language-specific features
+    isAsync?: boolean; // TypeScript/JavaScript async functions
+    isExported?: boolean; // Exports from modules
+    visibility?: 'public' | 'private' | 'protected'; // C++/TypeScript
+    isStatic?: boolean; // Static methods/fields
+    isAbstract?: boolean; // Abstract classes/methods
+    decorators?: string[]; // Python/TypeScript decorators
+    isReactComponent?: boolean; // TypeScript React components
+    isReactHook?: boolean; // TypeScript React hooks
+    spawn?: string; // Cross-language process spawning type
+    spawnsPython?: boolean; // Indicates this function spawns Python
+    spawnsCpp?: boolean; // Indicates this function spawns C++
+    spawnTarget?: string; // Target language/script for spawning
+  };
+  
+  metrics?: { // Enhanced metrics
     loc?: number; // Lines of Code
     cyclomaticComplexity?: number; // Cyclomatic Complexity
+    callCount?: number; // How many times this is called
+    crossLanguageCalls?: number; // Number of cross-language calls
+    childCount?: number; // Number of child nodes (for group nodes)
     // Add other static metrics as they become available from backend
   };
+  
   // D3 simulation properties
   x?: number;
   y?: number;
@@ -79,8 +103,16 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
-  type: string;
+  type: string; // 'calls', 'inherits', 'uses', 'includes', 'spawns', 'imports'
   weight?: number;
+  details?: string; // Enhanced tooltip information
+  
+  // Multi-language relationship properties
+  isCrossLanguage?: boolean; // True if connecting different language nodes
+  sourceLanguage?: string; // Language of source node
+  targetLanguage?: string; // Language of target node
+  spawnType?: 'process' | 'script' | 'module'; // Type of cross-language spawn
+  confidence?: number; // Confidence in relationship detection
 }
 
 export interface Relationship {

@@ -1,4 +1,5 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import * as d3 from 'd3';
 
 /**
  * 🧠 Analytics Hub - Advanced Data Visualization & Intelligence Dashboard
@@ -420,25 +421,90 @@ export class AnalyticsHub extends DashboardComponent {
     return `
       <div class="chart-container">
         <div class="chart-header">
-          <h3>🌍 Multi-Language Analytics</h3>
+          <h3>🌍 Multi-Language Analytics & Flow Visualization</h3>
+          <div class="chart-controls">
+            <button class="control-btn" data-action="explore-flow">🔍 Explore Cross-Language Flow</button>
+            <button class="control-btn" data-action="refresh-data">🔄 Refresh Data</button>
+          </div>
         </div>
-        <div id="language-analytics" class="language-grid">
-          ${this.chartData.languages.map((lang: any) => `
-            <div class="language-card">
-              <div class="language-header">
-                <span class="language-name">${lang.display_name || lang.name}</span>
-                <span class="symbol-count">${lang.symbol_count} symbols</span>
-              </div>
-              <div class="language-progress">
-                <div class="progress-bar">
-                  <div class="progress-fill" style="width: ${Math.min(100, (lang.symbol_count / 1000) * 100)}%"></div>
+        
+        <div class="language-analytics-container">
+          <!-- Language Statistics Grid -->
+          <div class="language-stats-section">
+            <h4>📊 Language Distribution</h4>
+            <div id="language-analytics" class="language-grid">
+              ${this.chartData.languages.map((lang: any) => `
+                <div class="language-card">
+                  <div class="language-header">
+                    <span class="language-name">${lang.display_name || lang.name}</span>
+                    <span class="symbol-count">${lang.symbol_count} symbols</span>
+                  </div>
+                  <div class="language-progress">
+                    <div class="progress-bar">
+                      <div class="progress-fill" style="width: ${Math.min(100, (lang.symbol_count / 1000) * 100)}%"></div>
+                    </div>
+                  </div>
+                  <div class="language-stats">
+                    <span>📂 Extensions: ${lang.file_extensions || 'Unknown'}</span>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          
+          <!-- Multi-Language Flow Visualization -->
+          <div class="flow-visualization-section">
+            <h4>🌐 Cross-Language Flow Visualization</h4>
+            <div class="flow-integration-container">
+              <div id="multi-language-flow-integration" class="ml-flow-container">
+                <div class="flow-instructions">
+                  <div class="instruction-card">
+                    <h5>🎯 How to Explore Multi-Language Flow</h5>
+                    <ol>
+                      <li>Click "Explore Cross-Language Flow" above to open the full explorer</li>
+                      <li>Or browse relationships in the dedicated <a href="#/relationships" class="flow-link">Relationship Graph</a></li>
+                      <li>Search for specific symbols in the <a href="#/search" class="flow-link">Search Interface</a></li>
+                    </ol>
+                  </div>
+                  
+                  <div class="quick-actions">
+                    <button class="action-btn" onclick="this.getRootNode().host.openMultiLanguageFlow()">
+                      🚀 Launch Multi-Language Explorer
+                    </button>
+                    <button class="action-btn" onclick="this.getRootNode().host.openRelationships()">
+                      🕸️ View Relationship Graph
+                    </button>
+                  </div>
+                </div>
+                
+                <!-- Placeholder for embedded mini-visualization -->
+                <div class="mini-flow-preview">
+                  <div class="preview-header">
+                    <span>📈 Recent Cross-Language Activity</span>
+                  </div>
+                  <div class="preview-content">
+                    <div class="connection-summary">
+                      <div class="connection-type">
+                        <span class="connection-icon">🔗</span>
+                        <span class="connection-label">C++ ↔ Python</span>
+                        <span class="connection-count">12 connections</span>
+                      </div>
+                      <div class="connection-type">
+                        <span class="connection-icon">⚡</span>
+                        <span class="connection-label">TypeScript ↔ JavaScript</span>
+                        <span class="connection-count">8 connections</span>
+                      </div>
+                      <div class="connection-type">
+                        <span class="connection-icon">🌊</span>
+                        <span class="connection-label">Python Process Spawning</span>
+                        <span class="connection-count">5 spawns detected</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
-              <div class="language-stats">
-                <span>📂 Extensions: ${lang.file_extensions || 'Unknown'}</span>
-              </div>
             </div>
-          `).join('')}
+          </div>
         </div>
       </div>
     `;
@@ -507,6 +573,41 @@ export class AnalyticsHub extends DashboardComponent {
       case 'layout':
         console.log('🎯 Re-layouting graph...');
         break;
+      case 'explore-flow':
+        this.openMultiLanguageFlow();
+        break;
+      case 'refresh-data':
+        this.refreshLanguageData();
+        break;
+    }
+  }
+
+  // Public methods for navigation (called from button onclick)
+  openMultiLanguageFlow(): void {
+    const router = (window as any).dashboardServices?.router;
+    if (router) {
+      router.navigate('/multi-language-flow');
+    } else {
+      window.location.hash = '#/multi-language-flow';
+    }
+  }
+
+  openRelationships(): void {
+    const router = (window as any).dashboardServices?.router;
+    if (router) {
+      router.navigate('/relationships');
+    } else {
+      window.location.hash = '#/relationships';
+    }
+  }
+
+  private async refreshLanguageData(): Promise<void> {
+    console.log('🔄 Refreshing language data...');
+    try {
+      await this.loadLanguageData();
+      this.render(); // Re-render with fresh data
+    } catch (error) {
+      console.error('Failed to refresh language data:', error);
     }
   }
 
@@ -1086,6 +1187,172 @@ export class AnalyticsHub extends DashboardComponent {
       .language-stats {
         font-size: 0.875rem;
         color: var(--text-muted);
+      }
+
+      /* Multi-Language Flow Integration Styles */
+      .language-analytics-container {
+        padding: 32px;
+        display: flex;
+        flex-direction: column;
+        gap: 32px;
+      }
+
+      .language-stats-section h4,
+      .flow-visualization-section h4 {
+        color: var(--text-primary);
+        margin: 0 0 16px 0;
+        font-size: 1.2rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .flow-integration-container {
+        background: var(--bg-secondary);
+        border: 1px solid var(--card-border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      .ml-flow-container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        padding: 24px;
+      }
+
+      .flow-instructions {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .instruction-card {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        padding: 20px;
+      }
+
+      .instruction-card h5 {
+        color: var(--primary-accent);
+        margin: 0 0 12px 0;
+        font-size: 1rem;
+        font-weight: 600;
+      }
+
+      .instruction-card ol {
+        color: var(--text-secondary);
+        margin: 0;
+        padding-left: 20px;
+        line-height: 1.6;
+      }
+
+      .instruction-card li {
+        margin-bottom: 8px;
+      }
+
+      .flow-link {
+        color: var(--primary-accent);
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: var(--transition-smooth);
+      }
+
+      .flow-link:hover {
+        border-bottom-color: var(--primary-accent);
+      }
+
+      .quick-actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      .action-btn {
+        background: linear-gradient(135deg, var(--primary-accent), var(--secondary-accent));
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 12px 20px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: var(--transition-smooth);
+        box-shadow: 0 4px 12px rgba(147, 112, 219, 0.3);
+      }
+
+      .action-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(147, 112, 219, 0.4);
+      }
+
+      .mini-flow-preview {
+        background: var(--card-bg);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+
+      .preview-header {
+        background: linear-gradient(135deg, 
+          rgba(147, 112, 219, 0.1) 0%, 
+          rgba(186, 85, 211, 0.05) 100%);
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--card-border);
+        font-weight: 600;
+        color: var(--text-primary);
+        font-size: 0.9rem;
+      }
+
+      .preview-content {
+        padding: 16px;
+      }
+
+      .connection-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .connection-type {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        background: rgba(255, 255, 255, 0.02);
+        border-radius: 6px;
+        border: 1px solid rgba(147, 112, 219, 0.1);
+        transition: var(--transition-smooth);
+      }
+
+      .connection-type:hover {
+        background: rgba(147, 112, 219, 0.05);
+        border-color: var(--primary-accent);
+      }
+
+      .connection-icon {
+        font-size: 1.2rem;
+        min-width: 20px;
+      }
+
+      .connection-label {
+        color: var(--text-secondary);
+        flex: 1;
+        font-size: 0.9rem;
+        font-family: 'Fira Code', monospace;
+      }
+
+      .connection-count {
+        background: var(--primary-accent);
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        min-width: 50px;
+        text-align: center;
       }
 
       @keyframes pulse {

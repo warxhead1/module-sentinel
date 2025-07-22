@@ -1,4 +1,5 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import * as d3 from 'd3';
 
 interface FlowNode {
   id: string | number;

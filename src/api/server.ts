@@ -21,6 +21,8 @@ import { SymbolsRoutes } from './routes/symbols.js';
 import { StatsRoutes } from './routes/stats.js';
 import { CodeFlowRoutes } from './routes/code-flow.js';
 import { SearchRoutes } from './routes/search.js';
+import { CrossLanguageRoutes } from './routes/cross-language.js';
+import { AnalyticsRoutes } from './routes/analytics.js';
 
 // Types
 import type { Request, Response } from './types/express.js';
@@ -47,6 +49,8 @@ export class ModernApiServer {
   private statsRoutes: StatsRoutes;
   private codeFlowRoutes: CodeFlowRoutes;
   private searchRoutes: SearchRoutes;
+  private crossLanguageRoutes: CrossLanguageRoutes;
+  private analyticsRoutes: AnalyticsRoutes;
 
   constructor(database: Database.Database, port: number = 8080) {
     this.db = database;
@@ -68,6 +72,8 @@ export class ModernApiServer {
     this.statsRoutes = new StatsRoutes(this.dbService);
     this.codeFlowRoutes = new CodeFlowRoutes(database);
     this.searchRoutes = new SearchRoutes(database);
+    this.crossLanguageRoutes = new CrossLanguageRoutes(this.dbService);
+    this.analyticsRoutes = new AnalyticsRoutes(database);
 
     // Create HTTP server
     this.server = http.createServer(this.handleRequest.bind(this));
@@ -244,6 +250,49 @@ export class ModernApiServer {
       else if (apiPath === '/relationships' && req.method === 'GET') {
         await this.symbolsRoutes.getAllRelationships(req, res);
       }
+      // Cross-language analysis routes
+      else if (apiPath === '/cross-language/symbols' && req.method === 'GET') {
+        await this.crossLanguageRoutes.getCrossLanguageSymbols(req, res);
+      }
+      else if (apiPath === '/cross-language/relationships' && req.method === 'GET') {
+        await this.crossLanguageRoutes.getCrossLanguageRelationships(req, res);
+      }
+      else if (apiPath === '/cross-language/entry-points' && req.method === 'GET') {
+        await this.crossLanguageRoutes.getCrossLanguageEntryPoints(req, res);
+      }
+      else if (apiPath === '/cross-language/languages' && req.method === 'GET') {
+        await this.crossLanguageRoutes.getCrossLanguageLanguages(req, res);
+      }
+      // Analytics routes
+      else if (apiPath.match(/^\/analytics\/data-flow\/\d+$/) && req.method === 'GET') {
+        const symbolId = apiPath.split('/')[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getDataFlow(req, res);
+      }
+      else if (apiPath.match(/^\/analytics\/impact\/\d+$/) && req.method === 'GET') {
+        const symbolId = apiPath.split('/')[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getImpactAnalysis(req, res);
+      }
+      else if (apiPath === '/analytics/patterns' && req.method === 'GET') {
+        await this.analyticsRoutes.getPatterns(req, res);
+      }
+      else if (apiPath.match(/^\/analytics\/execution\/\d+$/) && req.method === 'GET') {
+        const entryPoint = apiPath.split('/')[3];
+        req.params.entryPoint = entryPoint;
+        await this.analyticsRoutes.getExecutionSimulation(req, res);
+      }
+      else if (apiPath.match(/^\/analytics\/complexity\/\d+$/) && req.method === 'GET') {
+        const symbolId = apiPath.split('/')[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getComplexityMetrics(req, res);
+      }
+      else if (apiPath === '/analytics/bulk-impact' && req.method === 'POST') {
+        if (rawReq) {
+          req.body = await this.parseRequestBody(rawReq);
+        }
+        await this.analyticsRoutes.getBulkImpactAnalysis(req, res);
+      }
       else if (apiPath === '/rebuild-index' && req.method === 'POST') {
         await this.statsRoutes.rebuildIndex(req, res);
       }
@@ -326,6 +375,11 @@ export class ModernApiServer {
       }
       else if (apiPath === '/code-flow/hotspots' && req.method === 'GET') {
         await this.codeFlowRoutes.getHotspots(req, res);
+      }
+      else if (apiPath.match(/^\/code-flow\/multi-language\/\d+$/) && req.method === 'GET') {
+        const symbolId = apiPath.split('/')[3];
+        req.params.symbolId = symbolId;
+        await this.codeFlowRoutes.getMultiLanguageFlow(req, res);
       }
       else if (apiPath === '/search' && req.method === 'GET') {
         await this.searchRoutes.search(req, res);

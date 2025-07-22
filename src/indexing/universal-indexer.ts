@@ -31,6 +31,9 @@ import { OptimizedTreeSitterBaseParser as TreeSitterBaseParser } from '../parser
 import { ParseOptions, ParseResult, RelationshipInfo } from '../parsers/tree-sitter/parser-types.js';
 import { OptimizedCppTreeSitterParser as CppTreeSitterParser } from '../parsers/tree-sitter/optimized-cpp-parser.js';
 
+// Import new semantic analysis functions
+import { inferDataFlow, discoverVirtualOverrides } from '../analysis/relationship-enrichment.js';
+
 export interface IndexOptions {
   projectPath: string;
   projectName?: string;
@@ -444,6 +447,12 @@ export class UniversalIndexer extends EventEmitter {
     // TODO: Implement cross-file reference resolution
     // await this.resolveCrossFileReferences(projectId);
     
+    // Infer data flow relationships
+    await inferDataFlow(this.db, projectId);
+
+    // Discover virtual override relationships
+    await discoverVirtualOverrides(this.db, projectId);
+
     // Detect architectural patterns
     await this.detectArchitecturalPatterns(projectId);
     
@@ -644,42 +653,105 @@ export class UniversalIndexer extends EventEmitter {
       symbolNames.add(relationship.toName);
     });
     
-    // Fetch all relevant symbols from database
+    // Fetch ALL symbols from database for cross-language resolution
     const symbolMap = new Map<string, number>();
     const symbolsInDb = await this.db.select({
       id: universalSymbols.id,
       name: universalSymbols.name,
-      qualifiedName: universalSymbols.qualifiedName
+      qualifiedName: universalSymbols.qualifiedName,
+      filePath: universalSymbols.filePath,
+      kind: universalSymbols.kind,
+      isExported: universalSymbols.isExported
     })
       .from(universalSymbols)
-      .where(and(
-        eq(universalSymbols.projectId, projectId),
-        or(
-          ...Array.from(symbolNames).map(name => 
-            or(
-              eq(universalSymbols.name, name),
-              eq(universalSymbols.qualifiedName, name)
-            )
-          )
-        )
-      ));
+      .where(eq(universalSymbols.projectId, projectId));
     
-    // Build map of symbol names to IDs
+    // Build comprehensive symbol map for cross-language resolution
     symbolsInDb.forEach(sym => {
+      // Basic name mappings
       symbolMap.set(sym.name, sym.id);
-      symbolMap.set(sym.qualifiedName, sym.id);
+      if (sym.qualifiedName && sym.qualifiedName !== sym.name) {
+        symbolMap.set(sym.qualifiedName, sym.id);
+      }
+      
+      // File-based mapping for cross-language resolution
+      if (sym.filePath) {
+        const fileName = path.basename(sym.filePath);
+        
+        // For Python files, create multiple mapping strategies
+        if (fileName.endsWith('.py')) {
+          const baseName = path.basename(fileName, '.py');
+          
+          // Strategy 1: Direct filename mapping (terrain_generator.py -> filename)
+          if (!symbolMap.has(fileName)) {
+            symbolMap.set(fileName, sym.id);
+            this.debug(`Mapped ${fileName} to ${sym.name} (ID: ${sym.id}) - first symbol`);
+          }
+          
+          // Strategy 2: Prefer classes over functions for filename mapping
+          if (sym.kind === 'class') {
+            symbolMap.set(fileName, sym.id);
+            this.debug(`Mapped ${fileName} to class ${sym.name} (ID: ${sym.id}) - class override`);
+            
+            // Strategy 3: Python naming convention (snake_case -> PascalCase)
+            const expectedClassName = baseName.split('_')
+              .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+              .join('');
+            
+            if (sym.name === expectedClassName) {
+              symbolMap.set(fileName, sym.id);
+              this.debug(`Mapped ${fileName} to class ${sym.name} (ID: ${sym.id}) - naming convention match`);
+            }
+          }
+          
+          // Strategy 4: Exported symbols get priority
+          if (sym.isExported && (sym.kind === 'class' || sym.kind === 'function')) {
+            symbolMap.set(fileName, sym.id);
+            this.debug(`Mapped ${fileName} to exported ${sym.kind} ${sym.name} (ID: ${sym.id}) - exported priority`);
+          }
+        }
+        
+        // For TypeScript/JavaScript files
+        if (fileName.endsWith('.ts') || fileName.endsWith('.js') || fileName.endsWith('.tsx') || fileName.endsWith('.jsx')) {
+          // Prefer exported classes and functions
+          if (sym.isExported && (sym.kind === 'class' || sym.kind === 'function')) {
+            symbolMap.set(fileName, sym.id);
+            this.debug(`Mapped ${fileName} to exported ${sym.kind} ${sym.name} (ID: ${sym.id})`);
+          } else if (!symbolMap.has(fileName)) {
+            // Fallback to any symbol in the file
+            symbolMap.set(fileName, sym.id);
+            this.debug(`Mapped ${fileName} to ${sym.name} (ID: ${sym.id}) - fallback`);
+          }
+        }
+      }
     });
     
-    // Convert relationships to database format
+    // Debug: Show what's in our symbol map for troubleshooting
+    this.debug(`Symbol map contains ${symbolMap.size} entries`);
+    if (this.options.debugMode) {
+      const sampleEntries = Array.from(symbolMap.entries()).slice(0, 10);
+      this.debug(`Sample symbol map entries: ${JSON.stringify(sampleEntries, null, 2)}`);
+    }
+    
+    // Convert relationships to database format with detailed logging
     const relationshipRecords = allRelationships
       .filter(({ relationship }) => {
         const fromId = symbolMap.get(relationship.fromName);
         const toId = symbolMap.get(relationship.toName);
-        if (!fromId || !toId) {
-          this.debug(`Skipping relationship ${relationship.fromName} -> ${relationship.toName}: symbol not found`);
-          return false;
+        
+        if (!fromId) {
+          this.debug(`❌ Missing fromSymbol: "${relationship.fromName}" in relationship ${relationship.fromName} -> ${relationship.toName}`);
         }
-        return true;
+        if (!toId) {
+          this.debug(`❌ Missing toSymbol: "${relationship.toName}" in relationship ${relationship.fromName} -> ${relationship.toName} (crossLanguage: ${relationship.crossLanguage})`);
+        }
+        
+        if (fromId && toId) {
+          this.debug(`✅ Resolved relationship: ${relationship.fromName} (${fromId}) -> ${relationship.toName} (${toId}) [${relationship.crossLanguage ? 'cross-language' : 'same-language'}]`);
+          return true;
+        }
+        
+        return false;
       })
       .map(({ relationship }) => ({
         projectId,

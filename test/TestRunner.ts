@@ -21,6 +21,7 @@ import { RelationshipExtractionTest } from './unit/RelationshipExtractionTest';
 import { ControlFlowAnalysisTest } from './unit/ControlFlowAnalysisTest';
 import { EnhancedArchitectureTest } from './unit/EnhancedArchitectureTest';
 import { ComprehensiveSymbolExtractionTest } from './unit/ComprehensiveSymbolExtractionTest';
+import { CrossLanguageFlowTest } from './unit/CrossLanguageFlowTest';
 
 export class TestRunner extends EventEmitter {
   private projectPath = process.cwd();
@@ -112,7 +113,7 @@ export class TestRunner extends EventEmitter {
     const indexer = new UniversalIndexer(db, {
       projectPath: testDataPath,
       projectName: 'test-project',
-      languages: ['cpp'],
+      languages: ['cpp', 'python', 'typescript', 'javascript'],
       debugMode: true,
       enableSemanticAnalysis: true, // Enable control flow for all tests
       maxFiles: this.maxFiles
@@ -137,7 +138,8 @@ export class TestRunner extends EventEmitter {
       { name: 'RelationshipExtractionTest', class: RelationshipExtractionTest },
       { name: 'VisualizationAPITest', class: VisualizationAPITest },
       { name: 'ControlFlowAnalysisTest', class: ControlFlowAnalysisTest },
-      { name: 'EnhancedArchitectureTest', class: EnhancedArchitectureTest }
+      { name: 'EnhancedArchitectureTest', class: EnhancedArchitectureTest },
+      { name: 'CrossLanguageFlowTest', class: CrossLanguageFlowTest }
     ];
     
     for (const testDef of testClasses) {

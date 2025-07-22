@@ -163,12 +163,57 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         const functionNode = node.childForFieldName('function');
         if (functionNode) {
           const functionName = this.getNodeText(functionNode, context.content);
+          const callerName = this.getQualifiedName(node, context.content);
+          
+          // Check if this is a cross-language call
+          // 1. Direct process spawning functions
+          const isProcessSpawn = functionName.match(/\b(spawn|exec|execFile|fork|system)\b/);
+          
+          // 2. Custom Python script calls (look for .py in arguments)
+          let isPythonScriptCall = false;
+          try {
+            // Check if any child nodes contain .py file references
+            const callArgs = this.getCallArguments(node, context.content);
+            isPythonScriptCall = callArgs.some(arg => 
+              typeof arg === 'string' && arg.includes('.py')
+            );
+          } catch (e) {
+            // Fallback: check raw text for .py references
+            const nodeText = this.getNodeText(node, context.content);
+            isPythonScriptCall = nodeText.includes('.py');
+          }
+          
+          const isCrossLanguageCall = isProcessSpawn || isPythonScriptCall;
+          
+          // For Python script calls, set the target to the actual script name
+          let targetName = functionName;
+          if (isPythonScriptCall) {
+            try {
+              const callArgs = this.getCallArguments(node, context.content);
+              const pythonFile = callArgs.find(arg => arg.includes('.py'));
+              if (pythonFile) {
+                targetName = pythonFile;
+              }
+            } catch (e) {
+              // Fallback: extract .py filename from raw text
+              const nodeText = this.getNodeText(node, context.content);
+              const pythonMatch = nodeText.match(/['"`]([^'"`]*\.py)['"`]/);
+              if (pythonMatch) {
+                targetName = pythonMatch[1];
+              }
+            }
+          }
+          
           return {
-            fromName: this.getQualifiedName(node, context.content), // Caller
-            toName: functionName, // Callee
+            fromName: callerName, // Caller
+            toName: targetName, // Target (function name or Python script)
             relationshipType: UniversalRelationshipType.Calls,
-            confidence: 0.7,
-            crossLanguage: false,
+            confidence: isCrossLanguageCall ? 0.8 : 0.7, // Higher confidence for cross-language
+            crossLanguage: !!isCrossLanguageCall,
+            lineNumber: node.startPosition.row,
+            columnNumber: node.startPosition.column,
+            sourceContext: isCrossLanguageCall ? this.getNodeText(node, context.content) : undefined,
+            bridgeType: isPythonScriptCall ? 'python_script' : undefined
           };
         }
         return null;
@@ -261,18 +306,27 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
     const patterns: PatternInfo[] = [];
     const lines = content.split('\n');
     
-    // Track current context
+    // Track current context - similar to C++ parser
     let currentNamespace: string | undefined;
     let currentClass: string | undefined;
-    let insideInterface = false;
+    let currentInterface: string | undefined;
     let insideEnum = false;
+    let braceDepth = 0;
+    let classBraceDepth = -1; // -1 means not in a class
+    let interfaceBraceDepth = -1; // -1 means not in an interface
+    let classStack: { name: string; depth: number }[] = []; // Support nested classes
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       const lineNum = i + 1;
+      const trimmedLine = line.trim();
       
       // Skip comments and empty lines
-      if (line.trim().startsWith('//') || line.trim() === '') continue;
+      if (trimmedLine.startsWith('//') || trimmedLine === '') continue;
+      
+      // Count braces on this line
+      const openBraces = (line.match(/{/g) || []).length;
+      const closeBraces = (line.match(/}/g) || []).length;
       
       // Interface detection
       const interfaceMatch = line.match(/export\s+interface\s+(\w+)(?:<.*?>)?/);
@@ -296,7 +350,8 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             isAsync: false,
             languageFeatures: {}
           });
-          insideInterface = true;
+          currentInterface = simpleInterfaceMatch[1];
+          interfaceBraceDepth = braceDepth + openBraces;
         }
       } else if (interfaceMatch) {
         symbols.push({
@@ -316,7 +371,8 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
           isAsync: false,
           languageFeatures: {}
         });
-        insideInterface = true;
+        currentInterface = interfaceMatch[1];
+        interfaceBraceDepth = braceDepth + openBraces;
       }
       
       // Class detection
@@ -347,6 +403,14 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             }
           });
           currentClass = className;
+          // If there's an opening brace on the same line, include it
+          if (line.includes('{')) {
+            classBraceDepth = braceDepth + 1;
+          } else {
+            // Brace might be on next line
+            classBraceDepth = braceDepth;
+          }
+          classStack.push({ name: className, depth: classBraceDepth });
           
           // Add inheritance relationship
           if (simpleClassMatch[2]) {
@@ -383,6 +447,14 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
           }
         });
         currentClass = className;
+        // If there's an opening brace on the same line, include it
+        if (line.includes('{')) {
+          classBraceDepth = braceDepth + 1;
+        } else {
+          // Brace might be on next line
+          classBraceDepth = braceDepth;
+        }
+        classStack.push({ name: className, depth: classBraceDepth });
         
         // Add inheritance relationship
         if (classMatch[2]) {
@@ -398,8 +470,25 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       
       // Function/Method detection
       const funcMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<.*?>)?\s*\(/);
-      const methodMatch = line.match(/(?:async\s+)?(\w+)\s*(?:<.*?>)?\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*{/);
       const arrowFuncMatch = line.match(/(?:export\s+)?const\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>/);
+      
+      // Method detection - only look for methods inside classes
+      let methodMatch = null;
+      if (currentClass && classBraceDepth >= 0) {
+        if (braceDepth >= classBraceDepth) {
+          // Inside a class - look for method patterns
+          // Pattern 1: async methodName(params): ReturnType {
+          methodMatch = line.match(/^\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*:\s*.*?\s*{/);
+          if (!methodMatch) {
+            // Pattern 2: methodName(params) {
+            methodMatch = line.match(/^\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*{/);
+          }
+          if (!methodMatch) {
+            // Pattern 3: With modifiers
+            methodMatch = line.match(/^\s*(?:(?:public|private|protected|static|readonly)\s+)*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*{/);
+          }
+        }
+      }
       
       if (funcMatch) {
         const funcName = funcMatch[1];
@@ -445,9 +534,11 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             isReactHook: isHook
           }
         });
-      } else if (methodMatch && currentClass && !line.trim().startsWith('if') && !line.trim().startsWith('for')) {
+      } else if (methodMatch) {
         const methodName = methodMatch[1];
-        if (methodName !== 'constructor' && methodName !== 'if' && methodName !== 'for' && methodName !== 'while') {
+        // Skip reserved words, constructor, and control flow keywords
+        const reservedWords = ['constructor', 'if', 'for', 'while', 'switch', 'catch', 'try', 'else', 'return', 'throw', 'typeof', 'instanceof', 'new', 'var', 'let', 'const'];
+        if (!reservedWords.includes(methodName)) {
           symbols.push({
             name: methodName,
             qualifiedName: `${currentClass}.${methodName}`,
@@ -571,6 +662,68 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         });
       }
       
+      // Process spawning detection
+      const spawnMatch = line.match(/\b(spawn|exec|execFile|fork)\s*\(/);
+      const pythonCallMatch = line.match(/\b(callPythonScript|executePython|runPython)\s*\(\s*['"`]([^'"`]*\.py)['"`]/);
+      
+      if (spawnMatch || pythonCallMatch) {
+        let targetScript = 'python_script';
+        let isSpawn = false;
+        let spawnType = 'spawn';
+        
+        if (pythonCallMatch) {
+          // Direct Python method call with script name
+          targetScript = pythonCallMatch[2]; // Extract script name from quotes
+          isSpawn = true;
+          spawnType = pythonCallMatch[1]; // callPythonScript, executePython, etc.
+        } else if (spawnMatch) {
+          // Check if it's spawning a Python script
+          const pythonMatch = line.match(/(python3?|\.py['"])/);
+          if (pythonMatch) {
+            // Try to extract script name from spawn arguments
+            const scriptMatch = line.match(/(['"`])([^'"`]*\.py)\1/);
+            targetScript = scriptMatch ? scriptMatch[2] : 'python_script';
+            isSpawn = true;
+            spawnType = spawnMatch[1];
+          }
+        }
+        
+        if (isSpawn) {
+          // Find the current method/function we're in
+          let targetSymbol = null;
+          
+          // Look backwards through symbols to find the containing method/function
+          for (let j = symbols.length - 1; j >= 0; j--) {
+            const sym = symbols[j];
+            if ((sym.kind === UniversalSymbolKind.Method || sym.kind === UniversalSymbolKind.Function) &&
+                sym.line <= lineNum) {
+              targetSymbol = sym;
+              break;
+            }
+          }
+          
+          if (targetSymbol) {
+            if (!targetSymbol.languageFeatures) {
+              targetSymbol.languageFeatures = {};
+            }
+            targetSymbol.languageFeatures.spawn = spawnType;
+            targetSymbol.languageFeatures.spawnsPython = true;
+            targetSymbol.semanticTags.push('cross-language-caller');
+            
+            // Create cross-language relationship
+            relationships.push({
+              fromName: targetSymbol.qualifiedName,
+              toName: targetScript,
+              relationshipType: UniversalRelationshipType.Spawns,
+              confidence: 0.9,
+              crossLanguage: true,
+              lineNumber: lineNum,
+              columnNumber: 0,
+            });
+          }
+        }
+      }
+      
       // Namespace detection
       const namespaceMatch = line.match(/(?:export\s+)?namespace\s+(\w+)/);
       if (namespaceMatch) {
@@ -594,12 +747,36 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         });
       }
       
-      // Reset context on closing braces
-      if (line.includes('}')) {
-        if (insideInterface) insideInterface = false;
-        if (insideEnum) insideEnum = false;
-        if (currentClass && !insideInterface) currentClass = undefined;
+      // Check for closing braces BEFORE updating depth
+      if (closeBraces > 0) {
+        // Check if we're exiting a class
+        if (classBraceDepth >= 0 && braceDepth <= classBraceDepth) {
+          currentClass = undefined;
+          classBraceDepth = -1;
+          
+          // Pop from stack and check for parent class
+          classStack.pop();
+          if (classStack.length > 0) {
+            const parent = classStack[classStack.length - 1];
+            currentClass = parent.name;
+            classBraceDepth = parent.depth;
+          }
+        }
+        
+        // Check if we're exiting an interface
+        if (interfaceBraceDepth >= 0 && braceDepth <= interfaceBraceDepth) {
+          currentInterface = undefined;
+          interfaceBraceDepth = -1;
+        }
+        
+        // Check if we're exiting an enum
+        if (insideEnum && braceDepth === 0) {
+          insideEnum = false;
+        }
       }
+      
+      // Update brace depth after processing the line
+      braceDepth += openBraces - closeBraces;
     }
     
     this.debug(`Pattern-based extraction found ${symbols.length} symbols, ${relationships.length} relationships`);
@@ -634,6 +811,23 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       }
     }
     return parts.join('.');
+  }
+
+  private getCallArguments(node: Parser.SyntaxNode, content: string): string[] {
+    const args: string[] = [];
+    const argumentsNode = node.childForFieldName('arguments');
+    if (argumentsNode) {
+      for (let i = 0; i < argumentsNode.childCount; i++) {
+        const arg = argumentsNode.child(i);
+        if (arg && arg.type !== ',' && arg.type !== '(' && arg.type !== ')') {
+          const argText = this.getNodeText(arg, content).trim();
+          // Remove quotes from string literals
+          const cleanArgText = argText.replace(/^['"`]|['"`]$/g, '');
+          args.push(cleanArgText);
+        }
+      }
+    }
+    return args;
   }
 
   // TypeScript-specific helper methods

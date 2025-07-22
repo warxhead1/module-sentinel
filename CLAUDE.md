@@ -164,3 +164,8 @@ The system uses `module-sentinel.config.json` to specify:
 ### Build Commands:
 - `npm run build:dashboard` - Rebuilds dashboard from TypeScript sources
 - Generated files get automatically overwritten on build
+
+## Memories and Insights
+
+### Project Philosophy
+- GROUND FLOOR. FRESH START. NO LEGACY CRAP.

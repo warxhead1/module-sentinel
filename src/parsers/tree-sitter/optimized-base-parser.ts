@@ -16,7 +16,6 @@ import { eq } from 'drizzle-orm';
 import { DrizzleDatabase } from '../../database/drizzle/db.js';
 import { 
   universalSymbols, 
-  universalRelationships,
   controlFlowBlocks,
   symbolCalls
 } from '../../database/drizzle/schema.js';
@@ -184,9 +183,10 @@ export abstract class OptimizedTreeSitterBaseParser {
           languageFeatures: symbol.languageFeatures ? JSON.stringify(symbol.languageFeatures) : null
         }));
         
-        // Just insert symbols - no unique constraint exists for conflict resolution
+        // Use onConflictDoNothing to handle duplicate symbols
         await this.drizzleDb.insert(universalSymbols)
-          .values(symbolRecords);
+          .values(symbolRecords)
+          .onConflictDoNothing();
       }
       
       // Get symbol IDs for relationships and control flow
@@ -201,27 +201,9 @@ export abstract class OptimizedTreeSitterBaseParser {
         }
       }
       
-      // Batch insert relationships
-      if (relationships && relationships.length > 0) {
-        const relationshipRecords = relationships.map((rel: RelationshipInfo) => ({
-          projectId,
-          fromSymbolId: symbolMap.get(rel.fromName) || null,
-          toSymbolId: symbolMap.get(rel.toName) || null,
-          type: rel.relationshipType, // Schema expects 'type' not 'relationshipType'
-          confidence: rel.confidence || 1.0,
-          contextLine: rel.lineNumber,
-          contextColumn: rel.columnNumber || null,
-          metadata: JSON.stringify({
-            fromName: rel.fromName,
-            toName: rel.toName,
-            filePath,
-            crossLanguage: rel.crossLanguage
-          })
-        }));
-        
-        await this.drizzleDb.insert(universalRelationships)
-          .values(relationshipRecords);
-      }
+      // NOTE: Relationships are stored by UniversalIndexer after all symbols are parsed
+      // Individual parsers only collect relationship info, they don't store them
+      // This prevents cross-language relationship resolution issues
       
       // Store control flow data
       if (controlFlowData && controlFlowData.blocks && controlFlowData.blocks.length > 0) {

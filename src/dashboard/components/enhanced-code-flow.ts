@@ -1,9 +1,6 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import * as d3 from 'd3';
 
-// Type declaration for D3.js to avoid TypeScript issues
-declare const d3Local: any;
-
 interface FlowMetrics {
   cyclomaticComplexity: number;
   cognitiveComplexity: number;

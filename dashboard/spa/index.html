@@ -6,9 +6,6 @@
     <title>Module Sentinel - Code Analysis Dashboard</title>
     <meta name="description" content="Real-time architectural insights and code intelligence for C++ projects">
     
-    <!-- External dependencies -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-    
     <style>
         * {
             margin: 0;
@@ -93,7 +90,7 @@
         
         /* Sidebar styling */
         nav-sidebar {
-            width: calc(var(--sidebar-width) - 1px); /* Account for border */
+            width: calc(var(--sidebar-width) - 1px);
             min-width: calc(var(--sidebar-width) - 1px);
             max-width: calc(var(--sidebar-width) - 1px);
             background: linear-gradient(180deg, 
@@ -116,8 +113,8 @@
             overflow-x: hidden;
             background: transparent;
             position: relative;
-            min-width: 0; /* Prevents flex item overflow */
-            margin-left: 5px; /* 4px buffer + 1px border spacing */
+            min-width: 0;
+            margin-left: 5px;
             padding: 0;
             box-sizing: border-box;
         }
@@ -252,13 +249,17 @@
             }
         }
     </style>
+    
+    <!-- External dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script type="module" crossorigin src="./assets/main-ZvMmH28-.js"></script>
 </head>
 <body>
     <!-- Loading screen -->
     <div id="loading" class="app-loading">
         <div class="loading-content">
             <div class="loading-logo">Module Sentinel</div>
-            <div class="loading-tagline" style="margin-top: 10px; color: #c9c9dd; font-size: 1rem;">Code Analysis Dashboard</div>
+            <div class="loading-tagline" style="margin-top: 10px; color: #c9c9dd; font-size: 1rem;">Code Analysis Dashboard v2.0</div>
             <div class="loading-spinner"></div>
         </div>
     </div>
@@ -274,49 +275,5 @@
     <!-- Modals and overlays will be appended here -->
     <div id="modals"></div>
     
-    <script type="module">
-        // Import and initialize the app
-        async function initializeApp() {
-            try {
-                // Import components
-                const { router } = await import('./app.js');
-                
-                // Set router outlet
-                const outlet = document.querySelector('router-outlet');
-                router.setOutlet(outlet);
-                
-                // Hide loading screen
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('app').style.display = 'flex';
-                
-                // Handle errors
-                window.addEventListener('error', (event) => {
-                    console.error('Application error:', event.error);
-                });
-                
-                // Handle unhandled promise rejections
-                window.addEventListener('unhandledrejection', (event) => {
-                    console.error('Unhandled promise rejection:', event.reason);
-                });
-                
-            } catch (error) {
-                console.error('Failed to initialize app:', error);
-                document.getElementById('loading').innerHTML = `
-                    <div class="loading-content">
-                        <h2 style="color: #ff6b6b;">Failed to load application</h2>
-                        <p style="margin-top: 10px; color: #888;">Please refresh the page or check your connection.</p>
-                        <p style="margin-top: 20px; color: #666; font-size: 0.9rem;">${error.message}</p>
-                    </div>
-                `;
-            }
-        }
-        
-        // Start initialization when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeApp);
-        } else {
-            initializeApp();
-        }
-    </script>
 </body>
 </html>

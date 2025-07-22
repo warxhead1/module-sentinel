@@ -333,6 +333,8 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       const line = processedLines[i].content;
       const lineNum = processedLines[i].originalLine;
       
+      let symbol: SymbolInfo | undefined; // Declare symbol here, initialized to undefined
+      
       // Track brace depth
       braceDepth += (line.match(/{/g) || []).length;
       braceDepth -= (line.match(/}/g) || []).length;
@@ -345,7 +347,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         currentNamespace = namespaceStack.join('::');
         context.resolutionContext.currentNamespace = currentNamespace;
         
-        const symbol: SymbolInfo = {
+        symbol = { // Assign symbol here
           name: ns,
           qualifiedName: currentNamespace,
           kind: 'namespace',
@@ -363,7 +365,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         
         context.symbols.set(symbol.qualifiedName, symbol);
         context.stats.symbolsExtracted++;
-        this.debug(`  Found namespace: ${symbol.qualifiedName}`);
+        this.debug(`  Found namespace: ${symbol.qualifiedName} (filePath: ${symbol.filePath}, line: ${symbol.line})`);
       }
       
       // Class/struct detection
@@ -374,7 +376,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         
         insideClass = { name: qualifiedName, depth: braceDepth };
         
-        const symbol: SymbolInfo = {
+        symbol = { // Assign symbol here
           name,
           qualifiedName,
           kind: type,
@@ -392,7 +394,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         
         context.symbols.set(symbol.qualifiedName, symbol);
         context.stats.symbolsExtracted++;
-        this.debug(`  Found ${type}: ${symbol.qualifiedName}`);
+        this.debug(`  Found ${type}: ${symbol.qualifiedName} (filePath: ${symbol.filePath}, line: ${symbol.line})`);
         
         // Cache the symbol for fast resolution
         OptimizedCppTreeSitterParser.symbolCache.addSymbol({
@@ -470,12 +472,13 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         const isDestructor = name.startsWith('~');
         
         const parentQualifiedName = insideClass?.name;
-        const qualifiedName = classMethodMatch ? 
+        let qualifiedName = classMethodMatch ? 
           (currentNamespace ? `${currentNamespace}::${fullQualifiedName}` : fullQualifiedName) :
           (parentQualifiedName ? `${parentQualifiedName}::${name}` : 
            currentNamespace ? `${currentNamespace}::${name}` : name);
-        
-        const symbol: SymbolInfo = {
+
+        // For functions and methods, append a simplified signature to ensure uniqueness for overloads
+        symbol = { // Assign symbol here
           name,
           qualifiedName,
           kind: isConstructor ? 'constructor' : isDestructor ? 'destructor' : 'function',
@@ -493,6 +496,12 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           namespace: currentNamespace,
           parentScope: parentQualifiedName
         };
+
+        if (symbol.kind === 'function' || symbol.kind === 'constructor' || symbol.kind === 'destructor') {
+          const paramsMatch = fullMatch.match(/\((.*?)\)/);
+          const params = paramsMatch && paramsMatch[1] ? paramsMatch[1].replace(/\s/g, '') : '';
+          symbol.qualifiedName = `${qualifiedName}(${params})`; // Update qualifiedName on the symbol object
+        }
         
         // Estimate complexity for selective control flow analysis
         const complexity = this.estimateFunctionComplexity(symbol, lines, i);
@@ -500,14 +509,14 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         
         context.symbols.set(symbol.qualifiedName, symbol);
         context.stats.symbolsExtracted++;
-        this.debug(`  Found ${symbol.kind}: ${symbol.qualifiedName} (complexity: ${complexity})`);
+        this.debug(`  Found ${symbol.kind}: ${symbol.qualifiedName} (complexity: ${complexity}, filePath: ${symbol.filePath}, line: ${symbol.line})`);
         
         // Only analyze control flow for complex functions
         if (complexity >= 2 && context.stats.controlFlowAnalyzed < 10) {
           context.stats.complexityChecks++;
           this.debug(`    Analyzing control flow for ${symbol.qualifiedName}`);
           await this.analyzePatternBasedControlFlow(symbol, lines, i, context);
-          const blocksFound = context.controlFlowData.blocks.filter(b => b.symbolName === symbol.qualifiedName).length;
+          const blocksFound = context.controlFlowData.blocks.filter(b => b.symbolName === symbol?.qualifiedName).length;
           this.debug(`    Found ${blocksFound} control flow blocks`);
         }
       }

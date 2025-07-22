@@ -17,7 +17,10 @@ export class RouterService {
   private isNavigating = false;
 
   constructor() {
-    // Listen for browser navigation
+    // Listen for hash changes
+    window.addEventListener('hashchange', () => this.handleRoute());
+    
+    // Listen for browser navigation (popstate)
     window.addEventListener('popstate', () => this.handleRoute());
     
     // Listen for custom navigation events
@@ -26,7 +29,7 @@ export class RouterService {
       if (path) this.navigate(path);
     });
     
-    // Intercept link clicks
+    // Intercept link clicks for hash-based routing
     document.addEventListener('click', (e) => {
       const link = (e.target as HTMLElement).closest('a[href^="/"]');
       if (link && link instanceof HTMLAnchorElement) {
@@ -81,11 +84,12 @@ export class RouterService {
         }
       }
 
-      // Update browser history
+      // Update browser history with hash
+      const hashPath = path === '/' ? '#/' : `#${path}`;
       if (options.replace) {
-        window.history.replaceState(options.state || {}, '', path);
+        window.history.replaceState(options.state || {}, '', hashPath);
       } else {
-        window.history.pushState(options.state || {}, '', path);
+        window.history.pushState(options.state || {}, '', hashPath);
       }
 
       // Update current path
@@ -116,7 +120,7 @@ export class RouterService {
    * Handle route change (from popstate or initial load)
    */
   async handleRoute() {
-    const path = window.location.pathname;
+    const path = window.location.hash.replace('#', '') || '/';
     await this.navigate(path, { replace: true });
   }
 

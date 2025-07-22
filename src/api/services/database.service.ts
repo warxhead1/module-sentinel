@@ -77,14 +77,20 @@ export class DatabaseService {
     
     const params: any[] = [];
     
-    if (qualifiedName) {
-      // Exact match on qualified_name for file-level symbol queries
-      sql += ' WHERE s.qualified_name = ?';
-      params.push(query);
-    } else {
-      // Fuzzy search on name and qualified_name
-      sql += ' WHERE (s.name LIKE ? OR s.qualified_name LIKE ?)';
-      params.push(`%${query}%`, `%${query}%`);
+    // Add WHERE clause only if we have search criteria
+    let whereAdded = false;
+    
+    if (query && query.trim()) {
+      if (qualifiedName) {
+        // Exact match on qualified_name for file-level symbol queries
+        sql += ' WHERE s.qualified_name = ?';
+        params.push(query);
+      } else {
+        // Fuzzy search on name and qualified_name
+        sql += ' WHERE (s.name LIKE ? OR s.qualified_name LIKE ?)';
+        params.push(`%${query}%`, `%${query}%`);
+      }
+      whereAdded = true;
     }
     
     if (kind) {
@@ -362,6 +368,13 @@ export class DatabaseService {
       to_kind: string;
       to_namespace: string;
     }>;
+  }
+
+  /**
+   * Execute a custom SQL query (for specialized routes)
+   */
+  executeQuery(sql: string, params: any[] = []): any[] {
+    return this.db.prepare(sql).all(...params);
   }
 
   /**
