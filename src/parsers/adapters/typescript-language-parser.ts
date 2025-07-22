@@ -20,8 +20,14 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
   async initialize(): Promise<void> {
     const wasmPath = path.join(__dirname, '..', 'wasm', 'tree-sitter-typescript.wasm');
     try {
-      const loadedLanguage = await (Parser as any).Language.load(wasmPath); // Access Language via Parser instance
-      this.parser.setLanguage(loadedLanguage);
+      // Tree-sitter web bindings syntax
+      const Language = (Parser as any).Language;
+      if (Language && Language.load) {
+        const loadedLanguage = await Language.load(wasmPath);
+        this.parser.setLanguage(loadedLanguage);
+      } else {
+        console.error("Tree-sitter Language.load not available, pattern-based parsing will be used");
+      }
     } catch (e) {
       console.error("Failed to load TypeScript parser:", e);
     }
@@ -47,8 +53,44 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             confidence: 1.0,
             semanticTags: [],
             complexity: 1,
-            isExported: false,
+            isExported: this.isExported(node, context),
             isAsync: false,
+            languageFeatures: {
+              isAbstract: this.isAbstract(node),
+              visibility: this.getVisibility(node),
+              typeParameters: this.getTypeParameters(node, context.content),
+              implements: this.getImplements(node, context.content),
+              decorators: this.getDecorators(node, context.content)
+            }
+          };
+        }
+        return null;
+      },
+      
+      onInterface: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          const name = this.getNodeText(nameNode, context.content);
+          const qualifiedName = this.getQualifiedName(node, context.content);
+          return {
+            name: name,
+            qualifiedName: qualifiedName,
+            kind: UniversalSymbolKind.Interface,
+            filePath: context.filePath,
+            line: node.startPosition.row,
+            column: node.startPosition.column,
+            endLine: node.endPosition.row,
+            endColumn: node.endPosition.column,
+            isDefinition: true,
+            confidence: 1.0,
+            semanticTags: [],
+            complexity: 1,
+            isExported: this.isExported(node, context),
+            isAsync: false,
+            languageFeatures: {
+              typeParameters: this.getTypeParameters(node, context.content),
+              extends: this.getExtends(node, context.content)
+            }
           };
         }
         return null;
@@ -72,8 +114,14 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             confidence: 1.0,
             semanticTags: [],
             complexity: 1,
-            isExported: false,
-            isAsync: false,
+            isExported: this.isExported(node, context),
+            isAsync: this.isAsyncFunction(node),
+            languageFeatures: {
+              typeParameters: this.getTypeParameters(node, context.content),
+              parameters: this.getParameters(node, context.content),
+              returnType: this.getReturnType(node, context.content),
+              decorators: this.getDecorators(node, context.content)
+            }
           };
         }
         return null;
@@ -96,8 +144,17 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
             confidence: 1.0,
             semanticTags: [],
             complexity: 1,
-            isExported: false,
-            isAsync: false,
+            isExported: this.isExported(node, context),
+            isAsync: this.isAsyncFunction(node),
+            languageFeatures: {
+              visibility: this.getVisibility(node),
+              isStatic: this.isStatic(node),
+              isReadonly: this.isReadonly(node),
+              typeParameters: this.getTypeParameters(node, context.content),
+              parameters: this.getParameters(node, context.content),
+              returnType: this.getReturnType(node, context.content),
+              decorators: this.getDecorators(node, context.content)
+            }
           };
         }
         return null;
@@ -184,7 +241,6 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       ['call_expression', 'onCall'],
       ['import_statement', 'onImport'],
       ['export_statement', 'onExport'],
-      ['class_declaration', 'onInheritance'], // Re-use class_declaration for inheritance
     ]);
   }
 
@@ -199,12 +255,365 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
     stats: any;
   }> {
     this.debug(`Falling back to pattern-based extraction for ${filePath}`);
+    
+    const symbols: SymbolInfo[] = [];
+    const relationships: RelationshipInfo[] = [];
+    const patterns: PatternInfo[] = [];
+    const lines = content.split('\n');
+    
+    // Track current context
+    let currentNamespace: string | undefined;
+    let currentClass: string | undefined;
+    let insideInterface = false;
+    let insideEnum = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+      
+      // Skip comments and empty lines
+      if (line.trim().startsWith('//') || line.trim() === '') continue;
+      
+      // Interface detection
+      const interfaceMatch = line.match(/export\s+interface\s+(\w+)(?:<.*?>)?/);
+      if (!interfaceMatch) {
+        const simpleInterfaceMatch = line.match(/interface\s+(\w+)(?:<.*?>)?/);
+        if (simpleInterfaceMatch) {
+          symbols.push({
+            name: simpleInterfaceMatch[1],
+            qualifiedName: simpleInterfaceMatch[1],
+            kind: UniversalSymbolKind.Interface,
+            filePath,
+            line: lineNum,
+            column: 0,
+            endLine: lineNum,
+            endColumn: line.length,
+            isDefinition: true,
+            confidence: 0.9,
+            semanticTags: [],
+            complexity: 1,
+            isExported: false,
+            isAsync: false,
+            languageFeatures: {}
+          });
+          insideInterface = true;
+        }
+      } else if (interfaceMatch) {
+        symbols.push({
+          name: interfaceMatch[1],
+          qualifiedName: interfaceMatch[1],
+          kind: UniversalSymbolKind.Interface,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: [],
+          complexity: 1,
+          isExported: true,
+          isAsync: false,
+          languageFeatures: {}
+        });
+        insideInterface = true;
+      }
+      
+      // Class detection
+      const classMatch = line.match(/export\s+(?:abstract\s+)?class\s+(\w+)(?:<.*?>)?(?:\s+extends\s+(\w+))?(?:\s+implements\s+(.+?))?(?:\s*{)?/);
+      if (!classMatch) {
+        const simpleClassMatch = line.match(/(?:abstract\s+)?class\s+(\w+)(?:<.*?>)?(?:\s+extends\s+(\w+))?(?:\s+implements\s+(.+?))?(?:\s*{)?/);
+        if (simpleClassMatch) {
+          const className = simpleClassMatch[1];
+          symbols.push({
+            name: className,
+            qualifiedName: className,
+            kind: UniversalSymbolKind.Class,
+            filePath,
+            line: lineNum,
+            column: 0,
+            endLine: lineNum,
+            endColumn: line.length,
+            isDefinition: true,
+            confidence: 0.9,
+            semanticTags: [],
+            complexity: 1,
+            isExported: false,
+            isAsync: false,
+            languageFeatures: {
+              isAbstract: line.includes('abstract'),
+              extends: simpleClassMatch[2] || undefined,
+              implements: simpleClassMatch[3]?.split(',').map(s => s.trim()) || []
+            }
+          });
+          currentClass = className;
+          
+          // Add inheritance relationship
+          if (simpleClassMatch[2]) {
+            relationships.push({
+              fromName: className,
+              toName: simpleClassMatch[2],
+              relationshipType: UniversalRelationshipType.Inherits,
+              confidence: 0.9,
+              crossLanguage: false
+            });
+          }
+        }
+      } else if (classMatch) {
+        const className = classMatch[1];
+        symbols.push({
+          name: className,
+          qualifiedName: className,
+          kind: UniversalSymbolKind.Class,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: [],
+          complexity: 1,
+          isExported: true,
+          isAsync: false,
+          languageFeatures: {
+            isAbstract: line.includes('abstract'),
+            extends: classMatch[2] || undefined,
+            implements: classMatch[3]?.split(',').map(s => s.trim()) || []
+          }
+        });
+        currentClass = className;
+        
+        // Add inheritance relationship
+        if (classMatch[2]) {
+          relationships.push({
+            fromName: className,
+            toName: classMatch[2],
+            relationshipType: UniversalRelationshipType.Inherits,
+            confidence: 0.9,
+            crossLanguage: false
+          });
+        }
+      }
+      
+      // Function/Method detection
+      const funcMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<.*?>)?\s*\(/);
+      const methodMatch = line.match(/(?:async\s+)?(\w+)\s*(?:<.*?>)?\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*{/);
+      const arrowFuncMatch = line.match(/(?:export\s+)?const\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>/);
+      
+      if (funcMatch) {
+        const funcName = funcMatch[1];
+        symbols.push({
+          name: funcName,
+          qualifiedName: currentClass ? `${currentClass}.${funcName}` : funcName,
+          kind: UniversalSymbolKind.Function,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.8,
+          semanticTags: [],
+          complexity: 1,
+          isExported: line.includes('export'),
+          isAsync: line.includes('async'),
+          languageFeatures: {}
+        });
+      } else if (arrowFuncMatch) {
+        const funcName = arrowFuncMatch[1];
+        const isReactComponent = line.includes('React.FC') || line.includes('React.Component');
+        const isHook = funcName.startsWith('use') && funcName[3] === funcName[3].toUpperCase();
+        
+        symbols.push({
+          name: funcName,
+          qualifiedName: funcName,
+          kind: UniversalSymbolKind.Function,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.8,
+          semanticTags: [],
+          complexity: 1,
+          isExported: line.includes('export'),
+          isAsync: line.includes('async'),
+          languageFeatures: {
+            isReactComponent,
+            isReactHook: isHook
+          }
+        });
+      } else if (methodMatch && currentClass && !line.trim().startsWith('if') && !line.trim().startsWith('for')) {
+        const methodName = methodMatch[1];
+        if (methodName !== 'constructor' && methodName !== 'if' && methodName !== 'for' && methodName !== 'while') {
+          symbols.push({
+            name: methodName,
+            qualifiedName: `${currentClass}.${methodName}`,
+            kind: UniversalSymbolKind.Method,
+            filePath,
+            line: lineNum,
+            column: 0,
+            endLine: lineNum,
+            endColumn: line.length,
+            isDefinition: true,
+            confidence: 0.7,
+            semanticTags: [],
+            complexity: 1,
+            isExported: false,
+            isAsync: line.includes('async'),
+            languageFeatures: {
+              visibility: line.includes('private') ? 'private' : line.includes('protected') ? 'protected' : 'public',
+              isStatic: line.includes('static')
+            }
+          });
+        }
+      }
+      
+      // Enum detection
+      const enumMatch = line.match(/export\s+enum\s+(\w+)/);
+      if (!enumMatch) {
+        const simpleEnumMatch = line.match(/enum\s+(\w+)/);
+        if (simpleEnumMatch) {
+          symbols.push({
+            name: simpleEnumMatch[1],
+            qualifiedName: simpleEnumMatch[1],
+            kind: UniversalSymbolKind.Enum,
+            filePath,
+            line: lineNum,
+            column: 0,
+            endLine: lineNum,
+            endColumn: line.length,
+            isDefinition: true,
+            confidence: 0.9,
+            semanticTags: [],
+            complexity: 1,
+            isExported: false,
+            isAsync: false,
+            languageFeatures: {}
+          });
+          insideEnum = true;
+        }
+      } else if (enumMatch) {
+        symbols.push({
+          name: enumMatch[1],
+          qualifiedName: enumMatch[1],
+          kind: UniversalSymbolKind.Enum,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: [],
+          complexity: 1,
+          isExported: true,
+          isAsync: false,
+          languageFeatures: {}
+        });
+        insideEnum = true;
+      }
+      
+      // Type alias detection
+      const typeMatch = line.match(/export\s+type\s+(\w+)(?:<.*?>)?\s*=/);
+      if (!typeMatch) {
+        const simpleTypeMatch = line.match(/type\s+(\w+)(?:<.*?>)?\s*=/);
+        if (simpleTypeMatch) {
+          symbols.push({
+            name: simpleTypeMatch[1],
+            qualifiedName: simpleTypeMatch[1],
+            kind: UniversalSymbolKind.TypeAlias,
+            filePath,
+            line: lineNum,
+            column: 0,
+            endLine: lineNum,
+            endColumn: line.length,
+            isDefinition: true,
+            confidence: 0.8,
+            semanticTags: [],
+            complexity: 1,
+            isExported: false,
+            isAsync: false,
+            languageFeatures: {}
+          });
+        }
+      } else if (typeMatch) {
+        symbols.push({
+          name: typeMatch[1],
+          qualifiedName: typeMatch[1],
+          kind: UniversalSymbolKind.TypeAlias,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.8,
+          semanticTags: [],
+          complexity: 1,
+          isExported: true,
+          isAsync: false,
+          languageFeatures: {}
+        });
+      }
+      
+      // Import detection
+      const importMatch = line.match(/import\s+(?:\{[^}]+\}|[^{}\s]+)\s+from\s+['"]([^'"]+)['"]/);
+      if (importMatch) {
+        relationships.push({
+          fromName: filePath,
+          toName: importMatch[1],
+          relationshipType: UniversalRelationshipType.Imports,
+          confidence: 1.0,
+          crossLanguage: false
+        });
+      }
+      
+      // Namespace detection
+      const namespaceMatch = line.match(/(?:export\s+)?namespace\s+(\w+)/);
+      if (namespaceMatch) {
+        currentNamespace = namespaceMatch[1];
+        symbols.push({
+          name: namespaceMatch[1],
+          qualifiedName: namespaceMatch[1],
+          kind: UniversalSymbolKind.Namespace,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: [],
+          complexity: 1,
+          isExported: line.includes('export'),
+          isAsync: false,
+          languageFeatures: {}
+        });
+      }
+      
+      // Reset context on closing braces
+      if (line.includes('}')) {
+        if (insideInterface) insideInterface = false;
+        if (insideEnum) insideEnum = false;
+        if (currentClass && !insideInterface) currentClass = undefined;
+      }
+    }
+    
+    this.debug(`Pattern-based extraction found ${symbols.length} symbols, ${relationships.length} relationships`);
+    
     return {
-      symbols: [],
-      relationships: [],
-      patterns: [],
+      symbols,
+      relationships,
+      patterns,
       controlFlowData: { blocks: [], calls: [] },
-      stats: {},
+      stats: {
+        linesProcessed: lines.length,
+        symbolsExtracted: symbols.length,
+        relationshipsFound: relationships.length
+      },
     };
   }
 
@@ -225,5 +634,149 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       }
     }
     return parts.join('.');
+  }
+
+  // TypeScript-specific helper methods
+  private isExported(node: Parser.SyntaxNode, context: VisitorContext): boolean {
+    // Check for export keyword
+    let current: Parser.SyntaxNode | null = node;
+    while (current) {
+      if (current.type === 'export_statement') {
+        return true;
+      }
+      // Check if there's an export modifier
+      const hasExportModifier = current.children.some(child => 
+        child.type === 'export' || child.text === 'export'
+      );
+      if (hasExportModifier) return true;
+      current = current.parent;
+    }
+    return false;
+  }
+
+  private isAsyncFunction(node: Parser.SyntaxNode): boolean {
+    // Check for async modifier
+    return node.children.some(child => 
+      child.type === 'async' || child.text === 'async'
+    );
+  }
+
+  private isAbstract(node: Parser.SyntaxNode): boolean {
+    return node.children.some(child => 
+      child.type === 'abstract' || child.text === 'abstract'
+    );
+  }
+
+  private isStatic(node: Parser.SyntaxNode): boolean {
+    return node.children.some(child => 
+      child.type === 'static' || child.text === 'static'
+    );
+  }
+
+  private isReadonly(node: Parser.SyntaxNode): boolean {
+    return node.children.some(child => 
+      child.type === 'readonly' || child.text === 'readonly'
+    );
+  }
+
+  private getVisibility(node: Parser.SyntaxNode): string {
+    if (node.children.some(child => child.text === 'private')) return 'private';
+    if (node.children.some(child => child.text === 'protected')) return 'protected';
+    if (node.children.some(child => child.text === 'public')) return 'public';
+    return 'public'; // Default in TypeScript
+  }
+
+  private getTypeParameters(node: Parser.SyntaxNode, content: string): string[] | null {
+    const typeParamsNode = node.childForFieldName('type_parameters');
+    if (typeParamsNode) {
+      const params: string[] = [];
+      for (const param of typeParamsNode.children) {
+        if (param.type === 'type_parameter') {
+          params.push(this.getNodeText(param, content));
+        }
+      }
+      return params.length > 0 ? params : null;
+    }
+    return null;
+  }
+
+  private getParameters(node: Parser.SyntaxNode, content: string): any[] {
+    const params: any[] = [];
+    const parametersNode = node.childForFieldName('parameters');
+    if (parametersNode) {
+      for (const param of parametersNode.children) {
+        if (param.type === 'required_parameter' || param.type === 'optional_parameter') {
+          const paramInfo: any = {
+            name: this.getNodeText(param.childForFieldName('pattern') || param, content),
+            required: param.type === 'required_parameter'
+          };
+          
+          // Get type annotation
+          const typeNode = param.childForFieldName('type');
+          if (typeNode) {
+            paramInfo.type = this.getNodeText(typeNode, content);
+          }
+          
+          params.push(paramInfo);
+        }
+      }
+    }
+    return params;
+  }
+
+  private getReturnType(node: Parser.SyntaxNode, content: string): string | null {
+    const returnTypeNode = node.childForFieldName('return_type');
+    if (returnTypeNode) {
+      return this.getNodeText(returnTypeNode, content);
+    }
+    return null;
+  }
+
+  private getDecorators(node: Parser.SyntaxNode, content: string): string[] {
+    const decorators: string[] = [];
+    // Look for decorator nodes before the definition
+    let prev = node.previousSibling;
+    while (prev && prev.type === 'decorator') {
+      const decoratorName = this.getNodeText(prev, content)
+        .replace('@', '')
+        .trim();
+      decorators.unshift(decoratorName);
+      prev = prev.previousSibling;
+    }
+    return decorators;
+  }
+
+  private getImplements(node: Parser.SyntaxNode, content: string): string[] {
+    const implementsList: string[] = [];
+    const heritageNode = node.childForFieldName('heritage');
+    if (heritageNode) {
+      for (const clause of heritageNode.children) {
+        if (clause.type === 'implements_clause') {
+          for (const child of clause.children) {
+            if (child.type === 'type_identifier' || child.type === 'generic_type') {
+              implementsList.push(this.getNodeText(child, content));
+            }
+          }
+        }
+      }
+    }
+    return implementsList;
+  }
+
+  private getExtends(node: Parser.SyntaxNode, content: string): string[] {
+    const extendsList: string[] = [];
+    const heritageNode = node.childForFieldName('heritage');
+    if (heritageNode) {
+      for (const clause of heritageNode.children) {
+        if (clause.type === 'extends_clause') {
+          for (const child of clause.children) {
+            if (child.type === 'type_identifier' || child.type === 'generic_type') {
+              extendsList.push(this.getNodeText(child, content));
+            }
+          }
+        }
+      }
+    }
+    return extendsList;
   }
 }

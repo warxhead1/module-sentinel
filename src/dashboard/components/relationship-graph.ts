@@ -1,6 +1,6 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
-import { dataService } from '../services/data.service.js'; // Import dataService
-import { stateService } from '../services/state.service.js';
+import { dataService } from '../services/data.service.js';
+import { stateService } from '../services/state.service.js'; // Import stateService
 
 import { GraphNode, GraphEdge } from '../../shared/types/api';
 
@@ -17,7 +17,7 @@ export class RelationshipGraph extends DashboardComponent {
 
   async loadData(): Promise<void> {
     try {
-      const response = await dataService.getRelationships(); // Use dataService.getRelationships()
+      const response = await dataService.getRelationships();
       
       // Convert to consistent format
       this.graphData = {
@@ -584,14 +584,12 @@ export class RelationshipGraph extends DashboardComponent {
       .attr('dy', '.35em')
       .text((d: any) => d.name)
       .style('font-size', (d: any) => {
-        // Semantic zooming for labels: larger font for larger nodes or at higher zoom levels
         const currentScale = (this as any)._zoom?.transform().k || 1;
         const baseSize = 8; // Minimum font size
         const scaledSize = baseSize + Math.log(d.size || 1) * 0.5; // Scale with node size
         return `${Math.min(14, scaledSize * Math.sqrt(currentScale))}px`;
       })
       .style('opacity', (d: any) => {
-        // Hide labels at very low zoom levels
         const currentScale = (this as any)._zoom?.transform().k || 1;
         return currentScale > 0.5 ? 1 : 0;
       });
@@ -626,7 +624,7 @@ export class RelationshipGraph extends DashboardComponent {
     (this as any)._zoom = zoom;
   }
 
-    // New: Function to toggle group expansion
+  // New: Function to toggle group expansion
   private toggleGroupExpansion(groupNode: GraphNode) {
     const d3 = window.d3;
     const g = (this as any)._g;
@@ -637,13 +635,11 @@ export class RelationshipGraph extends DashboardComponent {
 
     // Find all nodes belonging to this group
     const childNodes = this.hierarchicalGraphData?.nodes.filter(n => n.parentGroupId === groupNode.id) || [];
-    const childLinks = this.hierarchicalGraphData?.edges.filter(e => {
-      const sourceId = typeof e.source === 'string' ? e.source : (e.source as any)?.id;
-      const targetId = typeof e.target === 'string' ? e.target : (e.target as any)?.id;
-      return (childNodes.some(n => n.id === sourceId) && childNodes.some(n => n.id === targetId)) ||
-             (childNodes.some(n => n.id === sourceId) && targetId === groupNode.id) ||
-             (childNodes.some(n => n.id === targetId) && sourceId === groupNode.id);
-    }) || [];
+    const childLinks = this.hierarchicalGraphData?.edges.filter(e => 
+      (childNodes.some(n => n.id === e.source) && childNodes.some(n => n.id === e.target)) ||
+      (childNodes.some(n => n.id === e.source) && e.target === groupNode.id) ||
+      (childNodes.some(n => n.id === e.target) && e.source === groupNode.id)
+    ) || [];
 
     if (groupNode.isExpanded) { // Collapse the group
       groupNode.isExpanded = false;
@@ -935,8 +931,8 @@ export class RelationshipGraph extends DashboardComponent {
     // Highlight connected links with transition
     g.selectAll('.link')
       .filter((d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source?.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target?.id;
+        const sourceId = typeof d.source === 'string' ? d.source : (d.source as any)?.id;
+        const targetId = typeof d.target === 'string' ? d.target : (d.target as any)?.id;
         return sourceId === nodeId || targetId === nodeId;
       })
       .transition().duration(200)

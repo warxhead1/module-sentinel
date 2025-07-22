@@ -21,6 +21,7 @@ export interface SymbolInfo {
   isAsync: boolean;
   namespace?: string;
   parentScope?: string;
+  languageFeatures?: Record<string, any>;
 }
 
 export interface RelationshipInfo {

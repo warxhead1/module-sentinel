@@ -90,7 +90,7 @@ export class UniversalIndexer extends EventEmitter {
     this.options = {
       projectPath: options.projectPath,
       projectName: options.projectName || path.basename(options.projectPath),
-      languages: options.languages || ['cpp', 'python', 'typescript'],
+      languages: options.languages || ['cpp', 'python', 'typescript', 'javascript'],
       filePatterns: options.filePatterns || [],
       excludePatterns: options.excludePatterns || ['node_modules/**', 'dist/**', 'build/**', '.git/**'],
       parallelism: options.parallelism || 4,
@@ -124,19 +124,26 @@ export class UniversalIndexer extends EventEmitter {
       parser: CppTreeSitterParser
     });
     
-    // TODO: Add Python parser
-    // this.parsers.set('python', {
-    //   language: 'python',
-    //   extensions: ['.py', '.pyi'],
-    //   parser: PythonTreeSitterParser
-    // });
+    // Register Python parser - dynamic import to avoid circular dependencies
+    this.parsers.set('python', {
+      language: 'python',
+      extensions: ['.py', '.pyi', '.pyx'],
+      parser: require('../parsers/adapters/python-language-parser.js').PythonLanguageParser
+    });
     
-    // TODO: Add TypeScript parser
-    // this.parsers.set('typescript', {
-    //   language: 'typescript',
-    //   extensions: ['.ts', '.tsx', '.js', '.jsx'],
-    //   parser: TypeScriptTreeSitterParser
-    // });
+    // Register TypeScript parser
+    this.parsers.set('typescript', {
+      language: 'typescript',
+      extensions: ['.ts', '.tsx'],
+      parser: require('../parsers/adapters/typescript-language-parser.js').TypeScriptLanguageParser
+    });
+    
+    // Register JavaScript parser (uses TypeScript parser with JS mode)
+    this.parsers.set('javascript', {
+      language: 'javascript',
+      extensions: ['.js', '.jsx', '.mjs', '.cjs'],
+      parser: require('../parsers/adapters/typescript-language-parser.js').TypeScriptLanguageParser
+    });
   }
 
   /**

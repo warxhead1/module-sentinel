@@ -176,9 +176,12 @@ export abstract class OptimizedTreeSitterBaseParser {
           semanticTags: JSON.stringify(symbol.semanticTags || []),
           isDefinition: symbol.isDefinition ? 1 : 0,
           isExported: symbol.isExported ? 1 : 0,
+          isAsync: symbol.isAsync ? 1 : 0,
+          isAbstract: 0, // Not part of SymbolInfo type
           namespace: symbol.namespace,
           parentScope: symbol.parentScope,
-          confidence: symbol.confidence || 1.0
+          confidence: symbol.confidence || 1.0,
+          languageFeatures: symbol.languageFeatures ? JSON.stringify(symbol.languageFeatures) : null
         }));
         
         // Just insert symbols - no unique constraint exists for conflict resolution

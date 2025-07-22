@@ -280,31 +280,50 @@ export const cppFeatures = sqliteTable('cpp_features', {
 export const pythonFeatures = sqliteTable('python_features', {
   symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   
-  // Python decorators
-  decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
-  
-  // Python type hints
-  typeHint: text('type_hint'),
-  returnTypeHint: text('return_type_hint'),
-  
-  // Python async/await
-  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  // Function/Method features
   isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
   isCoroutine: integer('is_coroutine', { mode: 'boolean' }).default(false),
-  
-  // Python special methods
-  isDunder: integer('is_dunder', { mode: 'boolean' }).default(false),
-  isProperty: integer('is_property', { mode: 'boolean' }).default(false),
-  isClassmethod: integer('is_classmethod', { mode: 'boolean' }).default(false),
+  isLambda: integer('is_lambda', { mode: 'boolean' }).default(false),
   isStaticmethod: integer('is_staticmethod', { mode: 'boolean' }).default(false),
+  isClassmethod: integer('is_classmethod', { mode: 'boolean' }).default(false),
+  isProperty: integer('is_property', { mode: 'boolean' }).default(false),
   
-  // Python metaclasses
-  metaclass: text('metaclass'),
+  // Decorators
+  decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
   
-  // Python docstrings
+  // Type hints
+  typeAnnotations: text('type_annotations', { mode: 'json' }).$type<Record<string, any>>(),
+  returnAnnotation: text('return_annotation'),
+  
+  // Documentation
   docstring: text('docstring'),
+  docstringFormat: text('docstring_format'), // 'google', 'numpy', 'sphinx', etc.
   
-  // Python imports
+  // Parameters
+  parameters: text('parameters', { mode: 'json' }).$type<any[]>(), // with default values, *args, **kwargs
+  hasVarargs: integer('has_varargs', { mode: 'boolean' }).default(false),
+  hasKwargs: integer('has_kwargs', { mode: 'boolean' }).default(false),
+  
+  // Class features
+  baseClasses: text('base_classes', { mode: 'json' }).$type<string[]>(),
+  metaclass: text('metaclass'),
+  isDataclass: integer('is_dataclass', { mode: 'boolean' }).default(false),
+  isNamedtuple: integer('is_namedtuple', { mode: 'boolean' }).default(false),
+  isEnum: integer('is_enum', { mode: 'boolean' }).default(false),
+  
+  // Module features
+  isDunderAll: integer('is_dunder_all', { mode: 'boolean' }).default(false),
+  dunderAllExports: text('dunder_all_exports', { mode: 'json' }).$type<string[]>(),
+  
+  // Context managers
+  isContextManager: integer('is_context_manager', { mode: 'boolean' }).default(false),
+  isAsyncContextManager: integer('is_async_context_manager', { mode: 'boolean' }).default(false),
+  
+  // Legacy compatibility fields
+  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  isDunder: integer('is_dunder', { mode: 'boolean' }).default(false),
+  typeHint: text('type_hint'),
+  returnTypeHint: text('return_type_hint'),
   importFrom: text('import_from'),
   importAs: text('import_as'),
   isRelativeImport: integer('is_relative_import', { mode: 'boolean' }).default(false)
@@ -313,32 +332,60 @@ export const pythonFeatures = sqliteTable('python_features', {
 export const typescriptFeatures = sqliteTable('typescript_features', {
   symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   
-  // TypeScript type system
-  typeAnnotation: text('type_annotation'),
-  genericParams: text('generic_params', { mode: 'json' }).$type<any[]>(),
-  typeConstraints: text('type_constraints', { mode: 'json' }).$type<any[]>(),
-  
-  // TypeScript access modifiers
+  // Type system
   isReadonly: integer('is_readonly', { mode: 'boolean' }).default(false),
   isOptional: integer('is_optional', { mode: 'boolean' }).default(false),
+  typeParameters: text('type_parameters', { mode: 'json' }).$type<any[]>(),
+  typeConstraints: text('type_constraints', { mode: 'json' }).$type<Record<string, any>>(),
   
-  // TypeScript decorators
+  // Function features
+  isArrowFunction: integer('is_arrow_function', { mode: 'boolean' }).default(false),
+  isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
+  
+  // Decorators (experimental)
   decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
   
-  // TypeScript modules
-  isNamespace: integer('is_namespace', { mode: 'boolean' }).default(false),
-  exportType: text('export_type'), // 'named', 'default', 'star'
+  // Access modifiers (TypeScript)
+  accessModifier: text('access_modifier'), // 'public', 'private', 'protected'
   
-  // TypeScript advanced types
+  // Class features
+  isAbstract: integer('is_abstract', { mode: 'boolean' }).default(false),
+  implementsInterfaces: text('implements_interfaces', { mode: 'json' }).$type<string[]>(),
+  extendsClasses: text('extends_classes', { mode: 'json' }).$type<string[]>(),
+  
+  // Interface/Type features
+  isInterface: integer('is_interface', { mode: 'boolean' }).default(false),
+  isTypeAlias: integer('is_type_alias', { mode: 'boolean' }).default(false),
+  isEnum: integer('is_enum', { mode: 'boolean' }).default(false),
+  isNamespace: integer('is_namespace', { mode: 'boolean' }).default(false),
+  
+  // Module system
+  exportType: text('export_type'), // 'named', 'default', 'namespace', 'type-only'
+  importType: text('import_type'), // 'named', 'default', 'namespace', 'type-only', 'side-effect'
+  moduleType: text('module_type'), // 'commonjs', 'esm', 'umd', 'amd'
+  
+  // JSX/React specific
+  isReactComponent: integer('is_react_component', { mode: 'boolean' }).default(false),
+  isReactHook: integer('is_react_hook', { mode: 'boolean' }).default(false),
+  jsxReturnType: text('jsx_return_type'),
+  
+  // Additional TypeScript features
+  isGeneric: integer('is_generic', { mode: 'boolean' }).default(false),
+  isTypeGuard: integer('is_type_guard', { mode: 'boolean' }).default(false),
+  isAssertion: integer('is_assertion', { mode: 'boolean' }).default(false),
+  
+  // Documentation
+  jsDocComments: text('jsdoc_comments', { mode: 'json' }).$type<Record<string, any>>(),
+  tsDocComments: text('tsdoc_comments', { mode: 'json' }).$type<Record<string, any>>(),
+  
+  // Legacy compatibility fields
+  typeAnnotation: text('type_annotation'),
+  genericParams: text('generic_params', { mode: 'json' }).$type<any[]>(),
   isUnionType: integer('is_union_type', { mode: 'boolean' }).default(false),
   isIntersectionType: integer('is_intersection_type', { mode: 'boolean' }).default(false),
   isConditionalType: integer('is_conditional_type', { mode: 'boolean' }).default(false),
   isMappedType: integer('is_mapped_type', { mode: 'boolean' }).default(false),
-  
-  // TypeScript utility types
   utilityType: text('utility_type'),
-  
-  // TypeScript ambient declarations
   isAmbient: integer('is_ambient', { mode: 'boolean' }).default(false),
   isDeclaration: integer('is_declaration', { mode: 'boolean' }).default(false)
 });
