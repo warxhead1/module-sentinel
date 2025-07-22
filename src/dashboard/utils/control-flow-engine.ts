@@ -426,7 +426,7 @@ export class ControlFlowEngine {
     if (nodeData && nodeData.id === 'function_body') {
       return controlFlow.functionCalls
         .map(call => call.to_symbol || call.target_function || call.functionName || call.calleeName)
-        .filter(Boolean);
+        .filter(Boolean) as string[];
     }
 
     // Find block range for the line
@@ -448,7 +448,7 @@ export class ControlFlowEngine {
         return callLine !== undefined && callLine >= startLine && callLine <= endLine;
       })
       .map(call => call.to_symbol || call.target_function || call.functionName || call.calleeName)
-      .filter(Boolean);
+      .filter(Boolean) as string[];
   }
 
   /**

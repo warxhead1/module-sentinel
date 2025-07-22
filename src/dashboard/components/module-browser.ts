@@ -2,7 +2,7 @@
  * Module Browser Component
  * 
  * A hierarchical tree view for browsing code modules/namespaces
- * Works across different languages (namespaces for C++, modules for Python, packages for Java)
+ * Works across different languages (namespaces for C++, mosdules for Python, packages for Java)
  */
 
 export class ModuleBrowser extends HTMLElement {

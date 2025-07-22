@@ -2181,11 +2181,11 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
       // Update current context
       if (this.controlFlow) {
-        this.currentContext = {
+        this.navigationBuilder.navigateTo({
           symbolId: targetSymbol.id,
           symbolName: targetSymbol.name || targetSymbol.qualified_name,
           controlFlow: this.controlFlow
-        };
+        });
       }
 
     } catch (error) {
@@ -2202,17 +2202,16 @@ export class EnhancedCodeFlow extends DashboardComponent {
     
     if (targetIndex !== undefined && targetIndex >= 0 && targetIndex < this.navigationStack.length) {
       // Navigate to specific index
-      targetContext = this.navigationStack[targetIndex];
-      this.navigationStack = this.navigationStack.slice(0, targetIndex);
+      targetContext = this.navigationBuilder.navigateToIndex(targetIndex)!;
     } else {
       // Navigate to previous function
-      targetContext = this.navigationStack.pop()!;
+      targetContext = this.navigationBuilder.navigateBack()!;
     }
 
     // Restore the context
     this.symbolId = targetContext.symbolId;
     this.controlFlow = targetContext.controlFlow;
-    this.currentContext = targetContext;
+    // Context is already updated by navigationBuilder
     
     // Re-render
     this.render();
@@ -2231,9 +2230,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
     // Get the root context
     const rootContext = this.navigationStack[0];
     
-    // Clear the navigation stack
-    this.navigationStack = [];
-    this.currentContext = rootContext;
+    // Navigation is handled by navigationBuilder
     
     // Restore the root context
     this.symbolId = rootContext.symbolId;
@@ -2252,8 +2249,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
   private returnToSearch() {
     // Clear all navigation state and return to search mode
-    this.navigationStack = [];
-    this.currentContext = null;
+    this.navigationBuilder.clearNavigation();
     this.symbolId = null;
     this.controlFlow = null;
     this.searchQuery = '';
@@ -2291,11 +2287,11 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
       // Update current context
       if (this.controlFlow) {
-        this.currentContext = {
+        this.navigationBuilder.navigateTo({
           symbolId: symbolId,
           symbolName: this.controlFlow.symbol.name || this.controlFlow.symbol.qualified_name || `Symbol ${symbolId}`,
           controlFlow: this.controlFlow
-        };
+        });
       }
 
     } catch (error) {

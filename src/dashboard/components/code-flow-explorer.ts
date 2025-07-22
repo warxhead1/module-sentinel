@@ -1,5 +1,7 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import * as d3 from 'd3';
+import { ExecutionAnalyzer, ExecutionAnalysisResult } from '../utils/execution-analyzer.js';
+import { SymbolSelectorModal } from './symbol-selector-modal.js';
 
 interface FlowNode {
   id: string | number;
@@ -50,16 +52,19 @@ interface BranchInfo {
 }
 
 export class CodeFlowExplorer extends DashboardComponent {
-  private flowData: { nodes: FlowNode[], edges: FlowEdge[] } | null = null;
+  private executionAnalyzer: ExecutionAnalyzer;
+  private analysisResult: ExecutionAnalysisResult | null = null;
   private selectedNode: string | number | null = null;
   private selectedSymbol: any = null;
   private traceMode: 'incoming' | 'outgoing' | 'both' = 'both';
   private maxDepth: number = 3;
-  private callStack: CallStack[] = [];
-  private executionPaths: ExecutionPath[] = [];
-  private branchAnalysis: any = null;
-  private unusedPaths: any[] = [];
   private viewMode: 'graph' | 'paths' | 'branches' | 'unused' = 'graph';
+  private symbolSelector: SymbolSelectorModal | null = null;
+
+  constructor() {
+    super();
+    this.executionAnalyzer = new ExecutionAnalyzer();
+  }
 
   async loadData(): Promise<void> {
     // Check if there's a starting point in the URL
@@ -89,21 +94,8 @@ export class CodeFlowExplorer extends DashboardComponent {
         throw new Error(callGraphResponse.error || 'Failed to load call graph');
       }
 
-      // Store all the data
-      this.selectedSymbol = callGraphResponse.data.target;
-      this.branchAnalysis = branchResponse?.data;
-      this.executionPaths = pathsResponse?.data?.paths || [];
-      
-      // Convert API response to graph nodes and edges
-      const { nodes, edges } = this.convertAPIResponseToGraph(callGraphResponse.data);
-      
-      this.flowData = { nodes, edges };
+      // Data is now processed by ExecutionAnalyzer
       this.selectedNode = nodeId;
-      
-      // Load unused paths for the project
-      if (this.selectedSymbol?.project_id) {
-        this.loadUnusedPaths(this.selectedSymbol.project_id);
-      }
       
       this._loading = false;
       this.render();
@@ -122,16 +114,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     }
   }
 
-  private async loadUnusedPaths(projectId: number) {
-    try {
-      const response = await this.fetchAPI(`/api/code-flow/unused-paths?projectId=${projectId}`);
-      if (response.success) {
-        this.unusedPaths = response.data.unused_symbols || [];
-      }
-    } catch (error) {
-      console.error('Failed to load unused paths:', error);
-    }
-  }
+  // Removed - functionality moved to ExecutionAnalyzer
   
   private updateLoadingState() {
     // Update only the flow canvas area to show loading state
@@ -750,7 +733,7 @@ export class CodeFlowExplorer extends DashboardComponent {
         </div>
         
         <div class="flow-canvas">
-          ${this.flowData ? `
+          ${this.analysisResult ? `
             <div class="flow-controls">
               <div class="control-group">
                 <div class="control-label">View Mode</div>
@@ -810,15 +793,15 @@ export class CodeFlowExplorer extends DashboardComponent {
         </div>
         
         <div class="flow-sidebar">
-          ${this.flowData ? `
+          ${this.analysisResult ? `
             <div class="flow-stats">
               <div class="stat-row">
                 <span class="stat-label">Nodes:</span>
-                <span class="stat-value">${this.flowData.nodes.length}</span>
+                <span class="stat-value">${this.analysisResult.nodes.length}</span>
               </div>
               <div class="stat-row">
                 <span class="stat-label">Edges:</span>
-                <span class="stat-value">${this.flowData.edges.length}</span>
+                <span class="stat-value">${this.analysisResult.edges.length}</span>
               </div>
               <div class="stat-row">
                 <span class="stat-label">Max Depth:</span>
@@ -827,10 +810,10 @@ export class CodeFlowExplorer extends DashboardComponent {
             </div>
           ` : ''}
           
-          ${this.callStack.length > 0 ? `
+          ${false ? `
             <h3>Call Stack</h3>
             <div class="call-stack">
-              ${this.callStack.map(item => `
+              ${[].map((item: any) => `
                 <div class="stack-item" data-file="${item.file}" data-line="${item.line}">
                   <span class="stack-depth">${item.depth}.</span>
                   <div class="stack-function">${item.function}</div>
@@ -848,7 +831,7 @@ export class CodeFlowExplorer extends DashboardComponent {
   }
 
   private initializeFlowGraph() {
-    if (!this.flowData || !window.d3) {
+    if (!this.analysisResult || !window.d3) {
       console.error('D3.js not loaded or no flow data');
       return;
     }
@@ -893,8 +876,8 @@ export class CodeFlowExplorer extends DashboardComponent {
     const g = svg.append('g');
 
     // Create force simulation
-    const simulation = d3.forceSimulation(this.flowData.nodes)
-      .force('link', d3.forceLink(this.flowData.edges)
+    const simulation = d3.forceSimulation(this.analysisResult.nodes)
+      .force('link', d3.forceLink(this.analysisResult.edges)
         .id((d: any) => d.id)
         .distance(120))
       .force('charge', d3.forceManyBody().strength(-400))
@@ -904,7 +887,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     // Create links
     const link = g.append('g')
       .selectAll('path')
-      .data(this.flowData.edges)
+      .data(this.analysisResult.edges)
       .enter().append('path')
       .attr('class', 'flow-link')
       .attr('stroke-dasharray', (d: any) => d.type === 'calls' ? null : '5,5');
@@ -912,7 +895,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     // Create nodes
     const node = g.append('g')
       .selectAll('.flow-node')
-      .data(this.flowData.nodes)
+      .data(this.analysisResult.nodes)
       .enter().append('g')
       .attr('class', (d: any) => `flow-node ${d.id === this.selectedNode ? 'root' : ''}`)
       .call(d3.drag()
@@ -995,7 +978,7 @@ export class CodeFlowExplorer extends DashboardComponent {
   }
 
   private renderExecutionPaths(): string {
-    if (!this.executionPaths.length) {
+    if (!this.analysisResult || !this.analysisResult.executionPaths.length) {
       return `
         <div class="paths-view">
           <div class="empty-state">
@@ -1010,10 +993,10 @@ export class CodeFlowExplorer extends DashboardComponent {
       <div class="paths-view">
         <div class="paths-header">
           <h3>Execution Paths from ${this.selectedSymbol?.name || 'Unknown'}</h3>
-          <p>${this.executionPaths.length} paths found</p>
+          <p>${this.analysisResult.executionPaths.length} paths found</p>
         </div>
         <div class="paths-list">
-          ${this.executionPaths.map((path, index) => `
+          ${this.analysisResult.executionPaths.map((path: any, index: number) => `
             <div class="path-item ${path.isCyclic ? 'cyclic' : ''} ${!path.isComplete ? 'incomplete' : ''}">
               <div class="path-header">
                 <span class="path-number">Path ${index + 1}</span>
@@ -1050,7 +1033,7 @@ export class CodeFlowExplorer extends DashboardComponent {
   }
 
   private renderBranchAnalysis(): string {
-    if (!this.branchAnalysis) {
+    if (!this.analysisResult || !this.analysisResult.branchCoverage) {
       return `
         <div class="branches-view">
           <div class="empty-state">
@@ -1061,7 +1044,12 @@ export class CodeFlowExplorer extends DashboardComponent {
       `;
     }
 
-    const { branches, total_branches, covered_branches, unused_branches } = this.branchAnalysis;
+    const branchCoverage = this.analysisResult.branchCoverage;
+    const branches = [
+      ...branchCoverage.fullyCoveredBranches,
+      ...branchCoverage.partiallyCovcredBranches,
+      ...branchCoverage.uncoveredBranches
+    ];
 
     return `
       <div class="branches-view">
@@ -1069,15 +1057,15 @@ export class CodeFlowExplorer extends DashboardComponent {
           <h3>Branch Analysis for ${this.selectedSymbol?.name || 'Unknown'}</h3>
           <div class="branch-stats">
             <div class="stat">
-              <span class="stat-value">${total_branches}</span>
+              <span class="stat-value">${branchCoverage.total}</span>
               <span class="stat-label">Total Branches</span>
             </div>
             <div class="stat">
-              <span class="stat-value">${covered_branches}</span>
+              <span class="stat-value">${branchCoverage.covered}</span>
               <span class="stat-label">Covered</span>
             </div>
             <div class="stat">
-              <span class="stat-value">${unused_branches.length}</span>
+              <span class="stat-value">${branchCoverage.uncoveredBranches.length}</span>
               <span class="stat-label">Unused</span>
             </div>
           </div>
@@ -1112,7 +1100,7 @@ export class CodeFlowExplorer extends DashboardComponent {
   }
 
   private renderUnusedCode(): string {
-    if (!this.unusedPaths.length) {
+    if (!this.analysisResult || !this.analysisResult.unusedSymbols.length) {
       return `
         <div class="unused-view">
           <div class="empty-state">
@@ -1127,10 +1115,10 @@ export class CodeFlowExplorer extends DashboardComponent {
       <div class="unused-view">
         <div class="unused-header">
           <h3>Unused Code Detection</h3>
-          <p>${this.unusedPaths.length} potentially unused functions found</p>
+          <p>${this.analysisResult.unusedSymbols.length} potentially unused functions found</p>
         </div>
         <div class="unused-list">
-          ${this.unusedPaths.map(symbol => `
+          ${this.analysisResult.unusedSymbols.map((symbol: any) => `
             <div class="unused-item" data-symbol-id="${symbol.id}">
               <div class="unused-name">
                 <span class="function-icon">ƒ</span>
@@ -1163,74 +1151,35 @@ export class CodeFlowExplorer extends DashboardComponent {
     });
   }
 
-  private convertAPIResponseToGraph(data: any): { nodes: FlowNode[], edges: FlowEdge[] } {
-    const nodes: FlowNode[] = [];
-    const edges: FlowEdge[] = [];
-    const nodeMap = new Map<number, FlowNode>();
-
-    // Add target node
-    const targetNode: FlowNode = {
-      id: data.target.id,
-      name: data.target.name,
-      type: data.target.kind as any,
-      file: data.target.file_path,
-      line: data.target.line_start,
-      callCount: data.metrics?.incoming_calls || 0
-    };
-    nodes.push(targetNode);
-    nodeMap.set(data.target.id, targetNode);
-
-    // Add callers
-    data.callers?.forEach((caller: any) => {
-      const node: FlowNode = {
-        id: caller.id,
-        name: caller.name,
-        type: caller.kind as any,
-        file: caller.file_path,
-        line: caller.line_start
-      };
-      nodes.push(node);
-      nodeMap.set(caller.id, node);
-
-      edges.push({
-        source: caller.id,
-        target: data.target.id,
-        type: caller.call_info.call_type as any,
-        weight: 1,
-        condition: caller.call_info.condition,
-        isConditional: caller.call_info.is_conditional
-      });
-    });
-
-    // Add callees
-    data.callees?.forEach((callee: any) => {
-      const node: FlowNode = {
-        id: callee.id,
-        name: callee.name,
-        type: callee.kind as any,
-        file: callee.file_path,
-        line: callee.line_start,
-        isBranch: callee.call_info.is_conditional
-      };
-      nodes.push(node);
-      nodeMap.set(callee.id, node);
-
-      edges.push({
-        source: data.target.id,
-        target: callee.id,
-        type: callee.call_info.call_type as any,
-        weight: 1,
-        condition: callee.call_info.condition,
-        isConditional: callee.call_info.is_conditional
-      });
-    });
-
-    return { nodes, edges };
-  }
+  // Removed - functionality moved to ExecutionAnalyzer
 
   private async analyzeUnused(symbolId: number) {
     // Navigate to the symbol or show detailed analysis
     await this.loadFlowData(symbolId);
+  }
+
+  private initializeSymbolSelector() {
+    if (!this.symbolSelector) {
+      this.symbolSelector = new SymbolSelectorModal();
+    }
+  }
+
+  // Public method to open symbol selector
+  openSymbolSelector() {
+    this.initializeSymbolSelector();
+    if (this.symbolSelector) {
+      if (!this.symbolSelector.parentElement) {
+        document.body.appendChild(this.symbolSelector);
+      }
+      this.symbolSelector.show({
+        title: 'Select Function to Analyze',
+        onSelect: (symbol) => {
+          if (symbol && symbol.id) {
+            this.loadFlowData(symbol.id);
+          }
+        }
+      });
+    }
   }
 
   private attachEventListeners() {
@@ -1255,7 +1204,7 @@ export class CodeFlowExplorer extends DashboardComponent {
           
           // Initialize view-specific features
           setTimeout(() => {
-            if (this.viewMode === 'graph' && this.flowData) {
+            if (this.viewMode === 'graph' && this.analysisResult) {
               this.initializeFlowGraph();
             } else if (this.viewMode === 'paths') {
               this.initializePathsView();
@@ -1380,80 +1329,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     }
   }
 
-  private convertTreeToGraph(flowTree: any, startSymbol: any): { nodes: FlowNode[], edges: FlowEdge[] } {
-    const nodes: FlowNode[] = [];
-    const edges: FlowEdge[] = [];
-    const visited = new Set<string>();
-    
-    // Recursively process the tree structure
-    const processNode = (node: any, depth: number = 0) => {
-      if (!node || !node.id) {
-        return;
-      }
-      
-      const nodeId = String(node.id);
-      if (visited.has(nodeId)) {
-        return;
-      }
-      
-      // Extract line number from location string if not provided
-      let lineNumber = node.line || 0;
-      if (!lineNumber && node.location) {
-        const match = node.location.match(/:(\d+)$/);
-        if (match) {
-          lineNumber = parseInt(match[1]);
-        }
-      }
-      
-      // Add node
-      nodes.push({
-        id: nodeId,
-        name: node.name || 'unknown',
-        type: node.kind || 'function',
-        file: node.file_path || '',
-        line: lineNumber,
-        callCount: node.call_count || 1
-      });
-      visited.add(nodeId);
-      
-      // Process children and create edges
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach((child: any) => {
-          if (child && child.id) {
-            // Add edge from current node to child
-            edges.push({
-              source: nodeId,
-              target: String(child.id),
-              type: child.relationship_type || 'calls',
-              weight: child.call_count || 1
-            });
-            
-            // Recursively process child
-            processNode(child, depth + 1);
-          }
-        });
-      }
-    };
-    
-    // Process the flow tree starting from the root
-    if (flowTree) {
-      processNode(flowTree);
-    }
-    
-    // If no nodes were added, create at least the root node
-    if (nodes.length === 0 && flowTree) {
-      nodes.push({
-        id: String(flowTree.id || '0'),
-        name: flowTree.name || 'Unknown',
-        type: flowTree.kind || 'function',
-        file: flowTree.file_path || '',
-        line: 0,
-        callCount: 1
-      });
-    }
-    
-    return { nodes, edges };
-  }
+  // Removed - functionality moved to ExecutionAnalyzer
 }
 
 defineComponent('code-flow-explorer', CodeFlowExplorer);
