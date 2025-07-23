@@ -4,11 +4,8 @@ import { ParseOptions, SymbolInfo, RelationshipInfo, PatternInfo } from '../tree
 import { UniversalSymbolKind, UniversalRelationshipType } from '../language-parser-interface.js';
 import { typescriptQueries } from '../queries/typescript-queries.js';
 import { Database } from 'better-sqlite3';
-import * as path from 'path';
-import * as fs from 'fs';
 
 import Parser from 'tree-sitter';
-import { Language } from 'tree-sitter';
 import { VisitorHandlers, VisitorContext } from '../unified-ast-visitor.js';
 
 export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
@@ -18,19 +15,20 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
   }
 
   async initialize(): Promise<void> {
-    const wasmPath = path.join(__dirname, '..', 'wasm', 'tree-sitter-typescript.wasm');
     try {
-      // Tree-sitter web bindings syntax
-      const Language = (Parser as any).Language;
-      if (Language && Language.load) {
-        const loadedLanguage = await Language.load(wasmPath);
-        this.parser.setLanguage(loadedLanguage);
-      } else {
-        console.error("Tree-sitter Language.load not available, pattern-based parsing will be used");
+      // Use native tree-sitter-typescript (Node.js API) - modern v0.23.2
+      const typescriptLanguage = require("tree-sitter-typescript/typescript");
+      if (typescriptLanguage && this.parser) {
+        this.parser.setLanguage(typescriptLanguage);
+        this.debug("Successfully loaded tree-sitter-typescript v0.23.2!");
+        return;
       }
-    } catch (e) {
-      console.error("Failed to load TypeScript parser:", e);
+    } catch (error) {
+      this.debug(`Failed to load tree-sitter-typescript: ${error}`);
     }
+    
+    // Fall back to pattern-based parsing if tree-sitter fails
+    this.debug("Using pattern-based parsing for TypeScript");
   }
 
   protected createVisitorHandlers(): VisitorHandlers {

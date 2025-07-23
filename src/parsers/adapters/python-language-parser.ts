@@ -4,10 +4,8 @@ import { ParseOptions, SymbolInfo, RelationshipInfo, PatternInfo } from '../tree
 import { UniversalSymbolKind, UniversalRelationshipType } from '../language-parser-interface.js';
 import { pythonQueries } from '../queries/python-queries.js';
 import { Database } from 'better-sqlite3';
-import * as path from 'path';
-import * as fs from 'fs';
 
-import Parser, { Language } from 'tree-sitter';
+import Parser from 'tree-sitter';
 import { VisitorHandlers, VisitorContext } from '../unified-ast-visitor.js';
 
 export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
@@ -17,19 +15,20 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
   }
 
   async initialize(): Promise<void> {
-    const wasmPath = path.join(__dirname, '..', 'wasm', 'tree-sitter-python.wasm');
     try {
-      // Tree-sitter web bindings syntax
-      const Language = (Parser as any).Language;
-      if (Language && Language.load) {
-        const loadedLanguage = await Language.load(wasmPath);
-        this.parser.setLanguage(loadedLanguage);
-      } else {
-        console.error("Tree-sitter Language.load not available, pattern-based parsing will be used");
+      // Use native tree-sitter-python (Node.js API) - modern v0.23.6
+      const pythonLanguage = require("tree-sitter-python");
+      if (pythonLanguage && this.parser) {
+        this.parser.setLanguage(pythonLanguage);
+        this.debug("Successfully loaded tree-sitter-python v0.23.6!");
+        return;
       }
-    } catch (e) {
-      console.error("Failed to load Python parser:", e);
+    } catch (error) {
+      this.debug(`Failed to load tree-sitter-python: ${error}`);
     }
+    
+    // Fall back to pattern-based parsing if tree-sitter fails
+    this.debug("Using pattern-based parsing for Python");
   }
 
   protected createVisitorHandlers(): VisitorHandlers {
@@ -175,12 +174,16 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
     const symbols: SymbolInfo[] = [];
     const relationships: RelationshipInfo[] = [];
     const patterns: PatternInfo[] = [];
+    const controlFlowCalls: any[] = [];
     const lines = content.split('\n');
     
     // Track current context
     let currentClass: string | undefined;
+    let currentFunction: string | undefined;
     let currentIndentLevel = 0;
     let insideClass = false;
+    let insideFunction = false;
+    let functionIndentLevel = 0;
     let decorators: string[] = [];
     let docstring: string | null = null;
     let captureDocstring = false;
@@ -341,9 +344,11 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
           }
         }
         
+        const qualifiedFuncName = isMethod && currentClass ? `${currentClass}.${funcName}` : funcName;
+        
         symbols.push({
           name: funcName,
-          qualifiedName: isMethod && currentClass ? `${currentClass}.${funcName}` : funcName,
+          qualifiedName: qualifiedFuncName,
           kind: isMethod ? UniversalSymbolKind.Method : UniversalSymbolKind.Function,
           filePath,
           line: lineNum,
@@ -368,6 +373,11 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
             isAbstractMethod: decorators.includes('abstractmethod')
           }
         });
+        
+        // Track current function context for call detection
+        currentFunction = qualifiedFuncName;
+        functionIndentLevel = indent;
+        insideFunction = true;
         
         decorators = [];
         docstring = null;
@@ -432,24 +442,119 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
         }
       }
       
-      // Reset class context if dedented
-      if (insideClass && indent <= currentIndentLevel && trimmedLine !== '') {
+      // Function call detection (only inside functions)
+      if (insideFunction && indent > functionIndentLevel && currentFunction) {
+        // Pattern 1: Regular function calls - function_name(args)
+        const functionCallMatches = line.matchAll(/\b(\w+)\s*\(/g);
+        for (const match of functionCallMatches) {
+          const targetFunction = match[1];
+          
+          // Skip common Python keywords and built-ins
+          if (['if', 'for', 'while', 'with', 'try', 'except', 'class', 'def', 'return', 'yield', 'print', 'len', 'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple', 'range', 'enumerate', 'zip', 'open', 'super', 'isinstance', 'hasattr', 'getattr', 'setattr'].includes(targetFunction)) {
+            continue;
+          }
+          
+          // Add to control flow data
+          controlFlowCalls.push({
+            callerName: currentFunction,
+            targetFunction: targetFunction,
+            lineNumber: lineNum,
+            columnNumber: match.index || 0,
+            callType: 'direct',
+            isConditional: false,
+            isRecursive: targetFunction === currentFunction.split('.').pop()
+          });
+          
+          // Also create a relationship record for unified access
+          relationships.push({
+            fromName: currentFunction,
+            toName: targetFunction,
+            relationshipType: UniversalRelationshipType.Calls,
+            confidence: 0.8,
+            crossLanguage: false
+          });
+        }
+        
+        // Pattern 2: Method calls - obj.method(args) or obj.attr.method(args)
+        const methodCallMatches = line.matchAll(/\b(\w+(?:\.\w+)*?)\.(\w+)\s*\(/g);
+        for (const match of methodCallMatches) {
+          const objectName = match[1];
+          const methodName = match[2];
+          const targetMethod = `${objectName}.${methodName}`;
+          
+          // Add to control flow data
+          controlFlowCalls.push({
+            callerName: currentFunction,
+            targetFunction: targetMethod,
+            lineNumber: lineNum,
+            columnNumber: match.index || 0,
+            callType: 'method',
+            isConditional: false,
+            isRecursive: false
+          });
+          
+          // Also create a relationship record for unified access
+          relationships.push({
+            fromName: currentFunction,
+            toName: targetMethod,
+            relationshipType: UniversalRelationshipType.Calls,
+            confidence: 0.8,
+            crossLanguage: false
+          });
+        }
+        
+        // Pattern 3: Self method calls - self.method(args)
+        const selfMethodMatches = line.matchAll(/\bself\.(\w+)\s*\(/g);
+        for (const match of selfMethodMatches) {
+          const methodName = match[1];
+          const targetMethod = currentClass ? `${currentClass}.${methodName}` : methodName;
+          
+          // Add to control flow data
+          controlFlowCalls.push({
+            callerName: currentFunction,
+            targetFunction: targetMethod,
+            lineNumber: lineNum,
+            columnNumber: match.index || 0,
+            callType: 'self_method',
+            isConditional: false,
+            isRecursive: methodName === currentFunction.split('.').pop()
+          });
+          
+          // Also create a relationship record for unified access
+          relationships.push({
+            fromName: currentFunction,
+            toName: targetMethod,
+            relationshipType: UniversalRelationshipType.Calls,
+            confidence: 0.9,
+            crossLanguage: false
+          });
+        }
+      }
+      
+      // Reset contexts based on indentation  
+      if (insideFunction && indent < functionIndentLevel && trimmedLine !== '') {
+        insideFunction = false;
+        currentFunction = undefined;
+      }
+      
+      if (insideClass && indent < currentIndentLevel && trimmedLine !== '') {
         insideClass = false;
         currentClass = undefined;
       }
     }
     
-    this.debug(`Pattern-based extraction found ${symbols.length} symbols, ${relationships.length} relationships`);
+    this.debug(`Pattern-based extraction found ${symbols.length} symbols, ${relationships.length} relationships, ${controlFlowCalls.length} function calls`);
     
     return {
       symbols,
       relationships,
       patterns,
-      controlFlowData: { blocks: [], calls: [] },
+      controlFlowData: { blocks: [], calls: controlFlowCalls },
       stats: {
         linesProcessed: lines.length,
         symbolsExtracted: symbols.length,
-        relationshipsFound: relationships.length
+        relationshipsFound: relationships.length,
+        functionCallsFound: controlFlowCalls.length
       },
     };
   }
