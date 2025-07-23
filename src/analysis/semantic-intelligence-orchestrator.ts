@@ -181,14 +181,10 @@ export class SemanticIntelligenceOrchestrator {
         // Continue with partial results
       }
       
-      console.log(`[DEBUG] Context extraction completed: ${stats.contextsExtracted} contexts in ${Date.now() - contextStartTime}ms`);
-      
       if (this.debugMode) {
         console.log(`[SemanticOrchestrator] Extracted ${stats.contextsExtracted} contexts in ${Date.now() - contextStartTime}ms`);
       }
     }
-
-    console.log(`[DEBUG] Moving to Step 2: Embedding generation (enabled=${config.enableEmbeddingGeneration})`);
 
     // Step 2: Generate embeddings with timeout
     const embeddings: CodeEmbedding[] = [];
@@ -232,8 +228,6 @@ export class SemanticIntelligenceOrchestrator {
         // Continue without embeddings
       }
     }
-
-    console.log(`[DEBUG] Moving to Step 3: Clustering (enabled=${config.enableClustering}, embeddings=${embeddings.length})`);
 
     // Step 3: Perform clustering with timeout
     const clusters: SemanticCluster[] = [];

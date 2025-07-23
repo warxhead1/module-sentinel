@@ -1,60 +1,16 @@
 {
   "summary": {
     "totalSymbolsExpected": 200,
-    "totalSymbolsFound": 156,
-    "symbolCoverage": 78,
+    "totalSymbolsFound": 6146,
+    "symbolCoverage": 3073,
     "totalRelationshipsExpected": 100,
-    "totalRelationshipsFound": 21,
-    "relationshipCoverage": 21,
-    "criticalGaps": 13,
+    "totalRelationshipsFound": 2715,
+    "relationshipCoverage": 2715,
+    "criticalGaps": 3,
     "testsPassed": 0,
     "testsFailed": 0
   },
   "symbolGaps": [
-    {
-      "kind": "class",
-      "expected": 20,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "class MyClass { }",
-        "template<typename T> class Vector { }"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "struct",
-      "expected": 30,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "struct Point { int x, y; }",
-        "struct GenericResourceDesc { }"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "function",
-      "expected": 50,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "int add(int a, int b)",
-        "template<typename T> T max(T a, T b)"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "method",
-      "expected": 80,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "void MyClass::doSomething()",
-        "virtual void pure() = 0"
-      ],
-      "missingSymbols": []
-    },
     {
       "kind": "constructor",
       "expected": 15,
@@ -73,43 +29,12 @@
       "missingSymbols": []
     },
     {
-      "kind": "field",
-      "expected": 100,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "int memberVariable",
-        "static const int CONSTANT = 42"
-      ],
-      "missingSymbols": []
-    },
-    {
       "kind": "variable",
       "expected": 1,
       "found": 0,
       "priority": "medium",
       "examples": [
         "Example variable"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "parameter",
-      "expected": 1,
-      "found": 0,
-      "priority": "low",
-      "examples": [
-        "Example parameter"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "namespace",
-      "expected": 10,
-      "found": 0,
-      "priority": "medium",
-      "examples": [
-        "Example namespace"
       ],
       "missingSymbols": []
     },
@@ -130,16 +55,6 @@
       "priority": "low",
       "examples": [
         "Example typedef"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "interface",
-      "expected": 1,
-      "found": 0,
-      "priority": "low",
-      "examples": [
-        "Example interface"
       ],
       "missingSymbols": []
     },
@@ -186,65 +101,12 @@
   ],
   "relationshipGaps": [
     {
-      "type": "calls",
-      "expected": 30,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "function() calls otherFunction()",
-        "obj.method() calls member"
-      ],
-      "missingRelationships": []
-    },
-    {
-      "type": "inherits",
-      "expected": 5,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "class Derived : public Base"
-      ],
-      "missingRelationships": []
-    },
-    {
       "type": "implements",
       "expected": 1,
       "found": 0,
       "priority": "low",
       "examples": [
         "Example implements relationship"
-      ],
-      "missingRelationships": []
-    },
-    {
-      "type": "exports",
-      "expected": 1,
-      "found": 0,
-      "priority": "low",
-      "examples": [
-        "Example exports relationship"
-      ],
-      "missingRelationships": []
-    },
-    {
-      "type": "reads_field",
-      "expected": 20,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "value = obj.field",
-        "return this->member"
-      ],
-      "missingRelationships": []
-    },
-    {
-      "type": "writes_field",
-      "expected": 25,
-      "found": 0,
-      "priority": "high",
-      "examples": [
-        "obj.field = value",
-        "this->member = newValue"
       ],
       "missingRelationships": []
     },
@@ -309,24 +171,7 @@
       "missingRelationships": []
     }
   ],
-  "metadataGaps": [
-    {
-      "field": "function_signatures",
-      "completeness": 0,
-      "priority": "high",
-      "issues": [
-        "Missing complete function signatures with parameters"
-      ]
-    },
-    {
-      "field": "return_types",
-      "completeness": 0,
-      "priority": "medium",
-      "issues": [
-        "Missing return type information"
-      ]
-    }
-  ],
+  "metadataGaps": [],
   "languageFeatureGaps": [
     {
       "feature": "templates",

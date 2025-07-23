@@ -108,6 +108,7 @@ export class UniversalIndexer extends EventEmitter {
   private rawDb: Database;
   private options: Required<IndexOptions>;
   private parsers: Map<string, LanguageParser> = new Map();
+  private parserInstances: Map<string, TreeSitterBaseParser> = new Map(); // Pooled parser instances
   private progress: IndexProgress;
   private errors: string[] = [];
   private semanticOrchestrator: SemanticIntelligenceOrchestrator;
@@ -241,11 +242,15 @@ export class UniversalIndexer extends EventEmitter {
 
       // Phase 3.5: Store symbols from parse results
       this.updateProgress("storing");
+      console.log(`[UniversalIndexer] Starting storeSymbols phase...`);
       await this.storeSymbols(projectId, languageMap, parseResults);
+      console.log(`[UniversalIndexer] storeSymbols phase completed!`);
 
       // Phase 4: Resolve and store relationships
       this.updateProgress("relationships");
+      console.log(`[UniversalIndexer] Starting resolveAndStoreRelationships phase...`);
       await this.resolveAndStoreRelationships(projectId, parseResults);
+      console.log(`[UniversalIndexer] resolveAndStoreRelationships phase completed!`);
 
       // Phase 5: Semantic analysis
       if (this.options.enableSemanticAnalysis) {
@@ -561,17 +566,24 @@ export class UniversalIndexer extends EventEmitter {
       throw new Error(`No parser registered for language: ${language}`);
     }
 
-    // Create parser instance
-    const parseOptions: ParseOptions = {
-      projectId,
-      languageId,
-      debugMode: this.options.debugMode,
-      enablePatternDetection: this.options.enablePatternDetection,
-      enableSemanticAnalysis: this.options.enableSemanticAnalysis,
-    };
+    // Get or create pooled parser instance
+    const parserKey = `${language}-${languageId}`;
+    let parser = this.parserInstances.get(parserKey);
+    
+    if (!parser) {
+      // Create parser instance only once per language
+      const parseOptions: ParseOptions = {
+        projectId,
+        languageId,
+        debugMode: this.options.debugMode,
+        enablePatternDetection: this.options.enablePatternDetection,
+        enableSemanticAnalysis: this.options.enableSemanticAnalysis,
+      };
 
-    const parser = new parserInfo.parser(this.rawDb, parseOptions);
-    await parser.initialize();
+      parser = new parserInfo.parser(this.rawDb, parseOptions);
+      await parser.initialize();
+      this.parserInstances.set(parserKey, parser);
+    }
 
     // Read file content
     const content = await fs.readFile(filePath, "utf-8");
@@ -988,8 +1000,11 @@ export class UniversalIndexer extends EventEmitter {
     let totalControlFlow = 0;
     
     // Process each file's symbols
-    for (const result of parseResults) {
+    for (let i = 0; i < parseResults.length; i++) {
+      const result = parseResults[i];
       if (!result.symbols || result.symbols.length === 0) continue;
+      
+      console.log(`[storeSymbols] Processing file ${i + 1}/${parseResults.length}: ${result.filePath}`);
       
       const languageId = languageMap.get(
         this.getLanguageForExtension(path.extname(result.filePath)) || ""
@@ -1028,10 +1043,12 @@ export class UniversalIndexer extends EventEmitter {
         }));
         
         if (symbolRecords.length > 0) {
+          console.log(`[storeSymbols] Inserting ${symbolRecords.length} symbols...`);
           await this.db.insert(universalSymbols)
             .values(symbolRecords)
             .onConflictDoNothing();
           totalSymbols += symbolRecords.length;
+          console.log(`[storeSymbols] Inserted ${symbolRecords.length} symbols successfully`);
           this.debug(`Stored ${symbolRecords.length} symbols from ${result.filePath}`);
         }
         
@@ -1040,11 +1057,14 @@ export class UniversalIndexer extends EventEmitter {
         
         // Store control flow data if any
         if (result.controlFlowData) {
+          console.log(`[storeSymbols] Processing control flow data...`);
           // Get symbol IDs for control flow blocks
           const symbolMap = new Map<string, number>();
+          console.log(`[storeSymbols] Querying inserted symbols for ${result.filePath}...`);
           const insertedSymbols = await this.db.select()
             .from(universalSymbols)
             .where(eq(universalSymbols.filePath, result.filePath));
+          console.log(`[storeSymbols] Found ${insertedSymbols.length} symbols in DB`);
           
           for (const sym of insertedSymbols) {
             symbolMap.set(sym.name, sym.id);
@@ -1116,6 +1136,7 @@ export class UniversalIndexer extends EventEmitter {
     }
     
     const duration = Date.now() - startTime;
+    console.log(`[storeSymbols] COMPLETED in ${duration}ms: ${totalSymbols} symbols, ${totalPatterns} patterns, ${totalControlFlow} control flow blocks`);
     this.debug(`Symbol storage completed in ${duration}ms: ${totalSymbols} symbols, ${totalPatterns} patterns, ${totalControlFlow} control flow blocks`);
   }
 
@@ -1173,10 +1194,12 @@ export class UniversalIndexer extends EventEmitter {
     const { universalSymbols, universalRelationships, fileIndex } =
       await import("../database/schema/universal.js");
 
-    // Fetch ALL symbols from database for cross-language resolution
+    // Optimize: Build focused symbol maps with only needed data
     const symbolMap = new Map<string, number>();
     const fileMap = new Map<string, number>();
+    const fieldSymbolsByName = new Map<string, number[]>(); // For efficient field lookup
 
+    // Fetch symbols with optimized query - use index on projectId
     const symbolsInDb = await this.db
       .select({
         id: universalSymbols.id,
@@ -1208,75 +1231,24 @@ export class UniversalIndexer extends EventEmitter {
       }
     });
 
-    // Build comprehensive symbol map for cross-language resolution
+    // Build optimized symbol maps with minimal redundancy
     symbolsInDb.forEach((sym) => {
-      // Basic name mappings
+      // Primary mappings only
       symbolMap.set(sym.name, sym.id);
       if (sym.qualifiedName && sym.qualifiedName !== sym.name) {
         symbolMap.set(sym.qualifiedName, sym.id);
       }
 
-      // File-based mapping for cross-language resolution
-      if (sym.filePath) {
-        const fileName = path.basename(sym.filePath);
+      // Special handling for fields - build reverse index for fast lookup
+      if (sym.kind === "field") {
+        const fieldNames = fieldSymbolsByName.get(sym.name) || [];
+        fieldNames.push(sym.id);
+        fieldSymbolsByName.set(sym.name, fieldNames);
+      }
 
-        // For Python files, create multiple mapping strategies
-        if (fileName.endsWith(".py")) {
-          const baseName = path.basename(fileName, ".py");
-
-          // Strategy 1: Direct filename mapping (terrain_generator.py -> filename)
-          if (!symbolMap.has(fileName)) {
-            symbolMap.set(fileName, sym.id);
-            // Mapped first symbol for file (debug spam reduced)
-          }
-
-          // Strategy 2: Prefer classes over functions for filename mapping
-          if (sym.kind === "class") {
-            symbolMap.set(fileName, sym.id);
-            // Mapped class override for file (debug spam reduced)
-
-            // Strategy 3: Python naming convention (snake_case -> PascalCase)
-            const expectedClassName = baseName
-              .split("_")
-              .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-              .join("");
-
-            if (sym.name === expectedClassName) {
-              symbolMap.set(fileName, sym.id);
-              // Mapped naming convention match (debug spam reduced)
-            }
-          }
-
-          // Strategy 4: Exported symbols get priority
-          if (
-            sym.isExported &&
-            (sym.kind === "class" || sym.kind === "function")
-          ) {
-            symbolMap.set(fileName, sym.id);
-            // Mapped exported symbol priority (debug spam reduced)
-          }
-        }
-
-        // For TypeScript/JavaScript files
-        if (
-          fileName.endsWith(".ts") ||
-          fileName.endsWith(".js") ||
-          fileName.endsWith(".tsx") ||
-          fileName.endsWith(".jsx")
-        ) {
-          // Prefer exported classes and functions
-          if (
-            sym.isExported &&
-            (sym.kind === "class" || sym.kind === "function")
-          ) {
-            symbolMap.set(fileName, sym.id);
-            // Mapped exported symbol (debug spam reduced)
-          } else if (!symbolMap.has(fileName)) {
-            // Fallback to any symbol in the file
-            symbolMap.set(fileName, sym.id);
-            // Mapped fallback symbol (debug spam reduced)
-          }
-        }
+      // Minimal file-based mapping for imports
+      if (sym.kind === "file") {
+        symbolMap.set(sym.filePath, sym.id);
       }
     });
 
@@ -1327,6 +1299,8 @@ export class UniversalIndexer extends EventEmitter {
 
     // Process import relationships (file-to-module relationships)
     const processedImports = new Set<string>();
+    const importRecords: any[] = [];
+    
     for (const { relationship, filePath } of importRelationships) {
       // Get the file symbol for the importing file
       const fromFileSymbolId =
@@ -1348,167 +1322,106 @@ export class UniversalIndexer extends EventEmitter {
       const key = `${fromFileSymbolId}-${toModuleSymbolId}-imports`;
       if (!processedImports.has(key)) {
         processedImports.add(key);
-        // Resolved import relationship (debug spam reduced)
-
-        try {
-          await this.db.insert(universalRelationships).values({
-            projectId,
-            fromSymbolId: fromFileSymbolId,
-            toSymbolId: toModuleSymbolId,
-            type: "imports",
-            confidence: 1.0,
-            contextLine: relationship.lineNumber || null,
-            contextSnippet: relationship.sourceContext || null,
-            metadata: JSON.stringify({
-              moduleSpecifier: relationship.toName,
-              fromFile: filePath,
-              sourceText: relationship.sourceText,
-            }),
-          });
-        } catch (error: any) {
-          if (error.message?.includes("UNIQUE constraint failed")) {
-            // Skipping duplicate import (debug spam reduced)
-          } else {
-            this.errors.push(
-              `Failed to store import relationship: ${error.message}`
-            );
-          }
-        }
-      }
-    }
-
-    // Process symbol-to-symbol relationships
-    const processedSymbolRels = new Set<string>();
-    const relationshipRecords = symbolRelationships
-      .filter(({ relationship }) => {
-        const fromId = symbolMap.get(relationship.fromName);
-        let toId = symbolMap.get(relationship.toName);
-
-        // Special handling for field relationships
-        if (
-          !toId &&
-          (relationship.relationshipType === "reads_field" ||
-            relationship.relationshipType === "writes_field" ||
-            relationship.relationshipType === "initializes_field")
-        ) {
-          // Try to find the field symbol by looking for qualified name patterns
-          // relationship.toName contains something like "generic.type"
-          let memberName = relationship.toName;
-          
-          // If toName contains a dot, extract just the field name
-          if (memberName.includes('.')) {
-            memberName = memberName.split('.').pop() || memberName;
-          }
-
-          // Look for field symbols with this name
-          for (const [key, id] of symbolMap.entries()) {
-            if (key.endsWith(`::${memberName}`) || key === memberName) {
-              // Found a potential match - verify it's a field
-              const symbol = allSymbols.find((s) => s.id === id);
-              if (symbol && symbol.kind === "field") {
-                toId = id;
-                this.debug(`  Resolved field ${relationship.toName} -> ${key} (ID: ${id})`);
-                break;
-              }
-            }
-          }
-        }
-
-        // Enhanced call resolution with context awareness
-        if (
-          !toId &&
-          relationship.relationshipType === "calls"
-        ) {
-          toId = this.resolveCallTarget(relationship, symbolMap, allSymbols);
-        }
-
-        if (fromId && toId) {
-          const key = `${fromId}-${toId}-${relationship.relationshipType}`;
-          if (processedSymbolRels.has(key)) {
-            return false;
-          }
-          processedSymbolRels.add(key);
-          return true;
-        }
-
-        return false;
-      })
-      .map(({ relationship }) => {
-        const fromId = symbolMap.get(relationship.fromName)!;
-        let toId = symbolMap.get(relationship.toName);
-
-        // For field relationships, we need to resolve the field name
-        if (
-          !toId &&
-          (relationship.relationshipType === "reads_field" ||
-            relationship.relationshipType === "writes_field" ||
-            relationship.relationshipType === "initializes_field")
-        ) {
-          // Handle both "fieldName" and "object.fieldName" formats
-          let memberName = relationship.toName;
-          
-          // If toName contains a dot, extract just the field name
-          if (memberName.includes('.')) {
-            memberName = memberName.split('.').pop() || memberName;
-          }
-
-          // Look for field symbols with this name
-          for (const [key, id] of symbolMap.entries()) {
-            if (key.endsWith(`::${memberName}`) || key === memberName) {
-              // Found a potential match - verify it's a field
-              const symbol = allSymbols.find((s) => s.id === id);
-              if (symbol && symbol.kind === "field") {
-                toId = id;
-                break;
-              }
-            }
-          }
-        }
-
-        // Enhanced call resolution  
-        if (
-          !toId &&
-          relationship.relationshipType === "calls"
-        ) {
-          toId = this.resolveCallTarget(relationship, symbolMap, allSymbols);
-        }
-
-        return {
+        importRecords.push({
           projectId,
-          fromSymbolId: fromId,
-          toSymbolId: toId!,
-          type: relationship.relationshipType,
-          confidence: relationship.confidence,
+          fromSymbolId: fromFileSymbolId,
+          toSymbolId: toModuleSymbolId,
+          type: "imports",
+          confidence: 1.0,
           contextLine: relationship.lineNumber || null,
           contextSnippet: relationship.sourceContext || null,
           metadata: JSON.stringify({
-            usagePattern: relationship.usagePattern,
+            moduleSpecifier: relationship.toName,
+            fromFile: filePath,
             sourceText: relationship.sourceText,
-            crossLanguage: relationship.crossLanguage,
-            bridgeType: relationship.bridgeType,
           }),
-        };
-      });
+        });
+      }
+    }
+    
+    // Batch insert import relationships
+    if (importRecords.length > 0) {
+      try {
+        await this.db.insert(universalRelationships)
+          .values(importRecords)
+          .onConflictDoNothing();
+        this.debug(`Stored ${importRecords.length} import relationships`);
+      } catch (error) {
+        this.errors.push(`Failed to store import relationships: ${error}`);
+      }
+    }
 
+    // Process symbol-to-symbol relationships with optimized resolution
+    const processedSymbolRels = new Set<string>();
+    const relationshipRecords: any[] = [];
+    
+    // Process relationships in batches for efficiency
+    for (const { relationship, filePath } of symbolRelationships) {
+      const fromId = symbolMap.get(relationship.fromName);
+      if (!fromId) continue;
+      
+      let toId = symbolMap.get(relationship.toName);
+      
+      // Optimized field resolution using pre-built index
+      if (!toId && (relationship.relationshipType === "reads_field" || 
+                    relationship.relationshipType === "writes_field" || 
+                    relationship.relationshipType === "initializes_field")) {
+        let memberName = relationship.toName;
+        if (memberName.includes('.')) {
+          memberName = memberName.split('.').pop() || memberName;
+        }
+        
+        // Use pre-built field index for O(1) lookup
+        const fieldIds = fieldSymbolsByName.get(memberName);
+        if (fieldIds && fieldIds.length > 0) {
+          // TODO: Could add context-based selection if multiple fields with same name
+          toId = fieldIds[0];
+        }
+      }
+      
+      // Call resolution with caching potential
+      if (!toId && relationship.relationshipType === "calls") {
+        // Pass allSymbols which now has all symbols including file symbols
+        toId = this.resolveCallTarget(relationship, symbolMap, allSymbols);
+      }
+      
+      if (fromId && toId) {
+        const key = `${fromId}-${toId}-${relationship.relationshipType}`;
+        if (!processedSymbolRels.has(key)) {
+          processedSymbolRels.add(key);
+          relationshipRecords.push({
+            projectId,
+            fromSymbolId: fromId,
+            toSymbolId: toId,
+            type: relationship.relationshipType,
+            confidence: relationship.confidence || 1.0,
+            contextLine: relationship.lineNumber || null,
+            contextSnippet: relationship.sourceContext || null,
+            metadata: relationship.usagePattern || relationship.sourceText || relationship.crossLanguage || relationship.bridgeType ? 
+              JSON.stringify({
+                usagePattern: relationship.usagePattern,
+                sourceText: relationship.sourceText,
+                crossLanguage: relationship.crossLanguage,
+                bridgeType: relationship.bridgeType,
+              }) : null,
+          });
+        }
+      }
+    }
+    
+    // Batch insert relationships for massive performance improvement
     if (relationshipRecords.length > 0) {
       try {
-        // Insert in batches to handle duplicates better
-        for (const record of relationshipRecords) {
-          try {
-            await this.db.insert(universalRelationships).values(record);
-          } catch (error: any) {
-            if (error.message?.includes("UNIQUE constraint failed")) {
-              this.debug(
-                `Skipping duplicate relationship: ${record.fromSymbolId} -> ${record.toSymbolId}`
-              );
-            } else {
-              throw error;
-            }
-          }
+        // Use batch insert with onConflictDoNothing for efficiency
+        const batchSize = 1000; // SQLite can handle large batches
+        for (let i = 0; i < relationshipRecords.length; i += batchSize) {
+          const batch = relationshipRecords.slice(i, i + batchSize);
+          await this.db.insert(universalRelationships)
+            .values(batch)
+            .onConflictDoNothing(); // Handle duplicates at DB level
         }
-        // Successfully stored symbol relationships (debug spam reduced)
+        this.debug(`Stored ${relationshipRecords.length} relationships in batches`);
       } catch (error) {
-        // Failed to store relationships (debug spam reduced)
         this.errors.push(`Failed to store relationships: ${error}`);
       }
     }
@@ -1809,6 +1722,19 @@ export class UniversalIndexer extends EventEmitter {
   private debug(message: string, ...args: any[]): void {
     if (this.options.debugMode) {
       console.log(`[UniversalIndexer] ${message}`, ...args);
+    }
+  }
+  
+  /**
+   * Clean up resources
+   */
+  public cleanup(): void {
+    // Clear parser instances
+    this.parserInstances.clear();
+    
+    // Clear semantic orchestrator caches
+    if (this.semanticOrchestrator) {
+      this.semanticOrchestrator.clearCaches();
     }
   }
 }

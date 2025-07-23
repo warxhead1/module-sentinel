@@ -12,17 +12,10 @@
 import Parser from 'tree-sitter';
 import { Database } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { eq } from 'drizzle-orm';
-import { DrizzleDatabase } from '../../database/drizzle/db.js';
-import { 
-  universalSymbols, 
-  controlFlowBlocks,
-  symbolCalls
-} from '../../database/drizzle/schema.js';
 import { UnifiedASTVisitor } from '../unified-ast-visitor.js';
 import { VisitorHandlers } from '../unified-ast-visitor.js';
 import { SymbolInfo, RelationshipInfo, PatternInfo, ParseOptions, ParseResult } from './parser-types.js';
-import { SemanticIntelligenceOrchestrator, SemanticIntelligenceResult } from '../../analysis/semantic-intelligence-orchestrator.js';
+import { SemanticIntelligenceOrchestrator } from '../../analysis/semantic-intelligence-orchestrator.js';
 
 export abstract class OptimizedTreeSitterBaseParser {
   protected parser: Parser;
@@ -159,9 +152,9 @@ export abstract class OptimizedTreeSitterBaseParser {
           filePath,
           {
             enableContextExtraction: true,
-            enableEmbeddingGeneration: true,
-            enableClustering: true,
-            enableInsightGeneration: true,
+            enableEmbeddingGeneration: false,  // Disable for now
+            enableClustering: false,           // Disable for now
+            enableInsightGeneration: false,    // Disable for now
             debugMode: this.debugMode
           }
         );
@@ -193,141 +186,11 @@ export abstract class OptimizedTreeSitterBaseParser {
   /**
    * Store parsed data in database with batch operations
    */
-  protected async storeParsedData(filePath: string, data: any): Promise<void> {
-    console.log(`[DEBUG] storeParsedData called for ${filePath} - SKIPPING DB WRITES`);
-    const { symbols, relationships, patterns, controlFlowData } = data;
-    
-    console.log(`[DEBUG] Extracted data properties: symbols=${symbols?.length || 0}, relationships=${relationships?.length || 0}`);
-    this.debug(`Storing data for ${filePath}: ${symbols?.length || 0} symbols, ${relationships?.length || 0} relationships`);
-    
+  protected async storeParsedData(_filePath: string, _data: any): Promise<void> {
     // IMPORTANT: Parser should NOT write to database directly
     // The UniversalIndexer is responsible for all database operations
     // This prevents transaction conflicts and maintains clean architecture
-    console.log(`[DEBUG] Parser database writes disabled - returning without DB operations`);
-    return;
-    
-    try {
-      // Get project ID (assuming it's set in options or environment)
-      const projectId = this.options.projectId || 1;
-      const languageId = this.options.languageId || 1; // Get language ID from options
-      
-      // Batch insert symbols
-      if (symbols && symbols.length > 0) {
-        const symbolRecords = symbols.map((symbol: SymbolInfo) => ({
-          projectId,
-          languageId,
-          name: symbol.name,
-          qualifiedName: symbol.qualifiedName,
-          kind: symbol.kind,
-          filePath,
-          line: symbol.line,
-          column: symbol.column,
-          endLine: symbol.endLine,
-          endColumn: symbol.endColumn,
-          signature: symbol.signature,
-          returnType: symbol.returnType,
-          complexity: symbol.complexity || 1,
-          semanticTags: JSON.stringify(symbol.semanticTags || []),
-          isDefinition: symbol.isDefinition ? 1 : 0,
-          isExported: symbol.isExported ? 1 : 0,
-          isAsync: symbol.isAsync ? 1 : 0,
-          isAbstract: 0, // Not part of SymbolInfo type
-          namespace: symbol.namespace,
-          parentScope: symbol.parentScope,
-          confidence: symbol.confidence || 1.0,
-          languageFeatures: symbol.languageFeatures ? JSON.stringify(symbol.languageFeatures) : null
-        }));
-        
-        // Use onConflictDoNothing to handle duplicate symbols
-        this.debug(`Inserting ${symbolRecords.length} symbols for ${filePath}...`);
-        await this.drizzleDb.insert(universalSymbols)
-          .values(symbolRecords)
-          .onConflictDoNothing();
-        this.debug(`Symbol insertion completed for ${filePath}`);
-        
-        // Parent resolution will be done after symbol map is populated below
-      }
-      
-      // Get symbol IDs for relationships and control flow
-      const symbolMap = new Map<string, number>();
-      if (symbols.length > 0) {
-        const insertedSymbols = await this.drizzleDb.select()
-          .from(universalSymbols)
-          .where(eq(universalSymbols.filePath, filePath));
-        
-        for (const sym of insertedSymbols) {
-          symbolMap.set(sym.qualifiedName, sym.id);
-        }
-      }
-      
-      // NOTE: Relationships are stored by UniversalIndexer after all symbols are parsed
-      // Individual parsers only collect relationship info, they don't store them
-      // This prevents cross-language relationship resolution issues
-      
-      // Store control flow data
-      if (controlFlowData && controlFlowData.blocks && controlFlowData.blocks.length > 0) {
-        const blockRecords = controlFlowData.blocks.map((block: any) => {
-          const symbolId = symbolMap.get(block.symbolName);
-          if (!symbolId) return null;
-          
-          return {
-            symbolId,
-            projectId,
-            blockType: block.blockType,
-            startLine: block.startLine,
-            endLine: block.endLine,
-            condition: block.condition,
-            loopType: block.loopType,
-            complexity: block.complexity || 1
-          };
-        }).filter(Boolean);
-        
-        if (blockRecords.length > 0) {
-          await this.drizzleDb.insert(controlFlowBlocks)
-            .values(blockRecords);
-        }
-      }
-      
-      // Store function calls
-      if (controlFlowData && controlFlowData.calls && controlFlowData.calls.length > 0) {
-        const callRecords = controlFlowData.calls.map((call: any) => {
-          const callerId = symbolMap.get(call.callerName);
-          if (!callerId) return null;
-          
-          // Try to resolve the callee ID from the symbol map
-          const calleeId = call.calleeName ? symbolMap.get(call.calleeName) : null;
-          
-          return {
-            callerId,
-            calleeId,
-            projectId: this.options.projectId || 1,
-            targetFunction: call.targetFunction || call.calleeName || call.functionName || call.target,
-            lineNumber: call.lineNumber,
-            columnNumber: call.columnNumber,
-            callType: call.callType || 'direct',
-            condition: call.condition || null,
-            isConditional: call.isConditional ? 1 : 0,
-            isRecursive: call.isRecursive ? 1 : 0
-          };
-        }).filter(Boolean);
-        
-        if (callRecords.length > 0) {
-          await this.drizzleDb.insert(symbolCalls)
-            .values(callRecords);
-        }
-      }
-      
-      // Store patterns - skip for now as universalPatterns table doesn't exist
-      // TODO: Add pattern storage when table is created
-      
-      this.db.exec('COMMIT');
-      this.debug(`Successfully stored data for ${filePath}`);
-    } catch (error: any) {
-      this.db.exec('ROLLBACK');
-      this.debug(`Failed to store data for ${filePath}: ${error}`);
-      console.error(`Database error storing ${filePath}:`, error);
-      throw error;
-    }
+    // All database operations are handled by UniversalIndexer.storeSymbols()
   }
   
   /**

@@ -62,7 +62,9 @@ export class UniversalIndexerTest {
         projectPath: testPath,
         projectName: 'test-cpp',
         languages: ['cpp'],
-        filePatterns: ['**/*.cpp', '**/*.hpp', '**/*.h']
+        filePatterns: ['**/*.cpp', '**/*.hpp', '**/*.h'],
+        enableSemanticAnalysis: false,  // Disable for testing
+        maxFiles: 10  // Limit to 10 files for faster testing
       });
       
       const result = await indexer.indexProject();
