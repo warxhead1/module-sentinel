@@ -135,7 +135,7 @@ export class MultiLanguageDetector {
     const pathLower = filePath.toLowerCase();
     
     // Check each extension
-    for (const [ext, lang] of this.LANGUAGE_EXTENSIONS) {
+    for (const [ext, lang] of MultiLanguageDetector.LANGUAGE_EXTENSIONS) {
       if (pathLower.endsWith(ext)) {
         return lang;
       }
@@ -416,7 +416,6 @@ export class MultiLanguageDetector {
     
     nodes.forEach(node => {
       const nodeId = String(node.id);
-      const lang = node.language;
       
       if (!inDegrees.has(nodeId)) {
         inDegrees.set(nodeId, new Map());

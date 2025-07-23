@@ -1,30 +1,44 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
-import { GraphNode, GraphEdge } from '../../shared/types/api.js';
+import { 
+  MultiLanguageDetector, 
+  MultiLanguageNode, 
+  CrossLanguageEdge 
+} from '../utils/multi-language-detector.js';
+import { 
+  CrossLanguageAnalyzer 
+} from '../utils/cross-language-analyzer.js';
+import { 
+  LanguageClusterer, 
+  LanguageCluster 
+} from '../utils/language-clusterer.js';
+// import { 
+//   SpawnDetector 
+// } from '../utils/spawn-detector.js';
 import * as d3 from 'd3';
-
-interface MultiLanguageFlowNode extends GraphNode {
-  // Additional properties for multi-language flow analysis
-  isEntry?: boolean; // Entry point for language execution
-  isExit?: boolean; // Exit point for language execution
-  languageGroup?: string; // Grouping for language clusters
-}
 
 interface CrossLanguageConnection {
   id: string;
-  sourceNode: MultiLanguageFlowNode;
-  targetNode: MultiLanguageFlowNode;
-  connectionType: 'spawn' | 'import' | 'api_call' | 'data_transfer';
+  sourceNode: MultiLanguageNode;
+  targetNode: MultiLanguageNode;
+  connectionType: 'spawn' | 'import' | 'api_call' | 'data_transfer' | 'ffi';
   protocol?: string; // HTTP, IPC, file, etc.
   dataFormat?: string; // JSON, binary, etc.
   description: string;
 }
 
 export class MultiLanguageFlowExplorer extends DashboardComponent {
-  private flowData: { nodes: MultiLanguageFlowNode[], edges: GraphEdge[] } | null = null;
+  private flowData: { nodes: MultiLanguageNode[], edges: CrossLanguageEdge[] } | null = null;
   private crossLanguageConnections: CrossLanguageConnection[] = [];
   private selectedLanguages: Set<string> = new Set(['cpp', 'python', 'typescript']);
   private currentFocusNode: string | null = null;
   private availableSymbols: any[] = [];
+  
+  // Analyzer instances
+  private languageDetector: MultiLanguageDetector;
+  private crossLanguageAnalyzer: CrossLanguageAnalyzer;
+  private languageClusterer: LanguageClusterer;
+  // private spawnDetector: SpawnDetector; // For future use
+  
   private languageColors: Record<string, string> = {
     cpp: '#0055cc',      // Blue
     python: '#3776ab',   // Python blue
@@ -34,6 +48,14 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     go: '#00add8',       // Go cyan
     java: '#ed8b00',     // Java orange
   };
+  
+  constructor() {
+    super();
+    this.languageDetector = new MultiLanguageDetector();
+    this.crossLanguageAnalyzer = new CrossLanguageAnalyzer();
+    this.languageClusterer = new LanguageClusterer();
+    // this.spawnDetector = new SpawnDetector(); // For future use
+  }
 
   async loadData(): Promise<void> {
     try {
@@ -105,8 +127,8 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     });
 
     const result = {
-      nodes: Array.from(nodes.values()),
-      edges: edges
+      nodes: Array.from(nodes.values()) as MultiLanguageNode[],
+      edges: edges as CrossLanguageEdge[]
     };
     
     console.log('Converted flow data:', {
@@ -146,7 +168,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
           kind: symbol.kind,
           namespace: symbol.namespace,
           file_path: symbol.file_path,
-          language: this.detectLanguageFromPath(symbol.file_path)
+          language: this.languageDetector.detectLanguageFromPath(symbol.file_path)
         }));
         
         console.log(`✅ Loaded ${this.availableSymbols.length} cross-language symbols:`, this.availableSymbols);
@@ -171,7 +193,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
               kind: edge.from_kind,
               namespace: edge.from_namespace,
               file_path: edge.from_file_path || 'unknown',
-              language: this.detectLanguageFromPath(edge.from_file_path)
+              language: this.languageDetector.detectLanguageFromPath(edge.from_file_path)
             });
           }
           
@@ -190,7 +212,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
         
         this.availableSymbols = Array.from(symbolMap.values()).map(symbol => ({
           ...symbol,
-          language: this.detectLanguageFromPath(symbol.file_path || 'unknown')
+          language: this.languageDetector.detectLanguageFromPath(symbol.file_path || 'unknown')
         }));
       }
       
@@ -211,7 +233,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       const uniqueSymbols = new Map();
       
       this.availableSymbols.forEach(symbol => {
-        const detectedLang = this.detectLanguageFromPath(symbol.file_path) || symbol.language;
+        const detectedLang = this.languageDetector.detectLanguageFromPath(symbol.file_path) || symbol.language;
         if (targetLanguages.has(detectedLang) && !uniqueSymbols.has(symbol.id)) {
           uniqueSymbols.set(symbol.id, { ...symbol, language: detectedLang });
         }
@@ -264,8 +286,20 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       }
 
       console.log('Processing multi-language data:', flowData);
-      this.flowData = this.processMultiLanguageData(flowData);
-      this.crossLanguageConnections = this.detectCrossLanguageConnections();
+      this.flowData = await this.processMultiLanguageData(flowData);
+      
+      // Analyze cross-language connections
+      const analysis = this.crossLanguageAnalyzer.analyzeCrossLanguageConnections(
+        this.flowData.nodes,
+        this.flowData.edges
+      );
+      
+      // Convert to connection format for display
+      this.crossLanguageConnections = await this.identifyCrossLanguageConnections(
+        this.flowData.nodes,
+        analysis.connections
+      );
+      
       this.currentFocusNode = nodeId;
       
       console.log('Flow data processed:', {
@@ -289,29 +323,21 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     }
   }
 
-  private processMultiLanguageData(data: any): { nodes: MultiLanguageFlowNode[], edges: GraphEdge[] } {
-    const nodes: MultiLanguageFlowNode[] = [];
-    const edges: GraphEdge[] = [];
+  private async processMultiLanguageData(data: any): Promise<{ nodes: MultiLanguageNode[], edges: CrossLanguageEdge[] }> {
+    const nodes: MultiLanguageNode[] = [];
+    const edges: CrossLanguageEdge[] = [];
     
     // Process nodes and enhance with language information
     if (data.nodes) {
-      data.nodes.forEach((node: any) => {
-        const enhancedNode: MultiLanguageFlowNode = {
+      for (const node of data.nodes) {
+        const enhancedNode: MultiLanguageNode = {
           ...node,
-          language: this.detectLanguageFromPath(node.file_path || ''),
+          language: node.language || this.languageDetector.detectLanguageFromPath(node.file_path || ''),
           languageGroup: this.getLanguageGroup(node),
-          isEntry: this.isEntryPoint(node),
-          isExit: this.isExitPoint(node),
-          languageFeatures: {
-            ...node.languageFeatures,
-            spawn: node.languageFeatures?.spawn,
-            spawnsPython: node.languageFeatures?.spawnsPython,
-            isAsync: node.languageFeatures?.isAsync,
-            isExported: node.languageFeatures?.isExported,
-          }
+          languageFeatures: await this.detectLanguageFeatures(node)
         };
         nodes.push(enhancedNode);
-      });
+      }
     }
 
     // Process edges and detect cross-language relationships
@@ -320,111 +346,96 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
         const sourceNode = nodes.find(n => n.id === edge.source);
         const targetNode = nodes.find(n => n.id === edge.target);
         
-        const enhancedEdge: GraphEdge = {
-          ...edge,
-          isCrossLanguage: sourceNode?.language !== targetNode?.language,
-          sourceLanguage: sourceNode?.language,
-          targetLanguage: targetNode?.language,
-          details: this.generateEdgeDetails(edge, sourceNode, targetNode),
-        };
-        edges.push(enhancedEdge);
+        if (sourceNode && targetNode) {
+          const isCrossLanguage = sourceNode.language !== targetNode.language;
+          const connectionType = isCrossLanguage 
+            ? this.languageDetector.determineConnectionType(edge, sourceNode, targetNode)
+            : undefined;
+          
+          const enhancedEdge: CrossLanguageEdge = {
+            source: edge.source,
+            target: edge.target,
+            type: edge.type,
+            isCrossLanguage,
+            connectionType,
+            confidence: edge.confidence
+          };
+          edges.push(enhancedEdge);
+        }
       });
     }
+
+    // Detect language boundaries
+    const boundaries = this.languageDetector.detectLanguageBoundaries(nodes, edges);
+    boundaries.entryPoints.forEach(node => { node.isEntry = true; });
+    boundaries.exitPoints.forEach(node => { node.isExit = true; });
 
     return { nodes, edges };
   }
 
-  private detectLanguageFromPath(filePath: string | null | undefined): string {
-    if (!filePath || typeof filePath !== 'string') {
-      return 'unknown';
-    }
-    
-    const ext = filePath.split('.').pop()?.toLowerCase();
-    const languageMap: Record<string, string> = {
-      'cpp': 'cpp', 'hpp': 'cpp', 'cc': 'cpp', 'h': 'cpp', 'cxx': 'cpp', 'hxx': 'cpp', 'ixx': 'cpp',
-      'py': 'python', 'pyi': 'python', 'pyx': 'python',
-      'ts': 'typescript', 'tsx': 'typescript',
-      'js': 'javascript', 'jsx': 'javascript', 'mjs': 'javascript',
-      'rs': 'rust',
-      'go': 'go',
-      'java': 'java', 'kt': 'kotlin',
-    };
-    return languageMap[ext || ''] || 'unknown';
-  }
-
   private getLanguageGroup(node: any): string {
-    const language = this.detectLanguageFromPath(node.file_path || '');
+    const language = node.language || this.languageDetector.detectLanguageFromPath(node.file_path || '');
     const namespace = node.namespace || '';
     return `${language}::${namespace}`;
   }
 
-  private isEntryPoint(node: any): boolean {
-    return (
-      node.name === 'main' ||
-      node.name === '__main__' ||
-      node.languageFeatures?.isExported ||
-      node.type === 'module'
-    );
+  /**
+   * Detect language-specific features
+   */
+  private async detectLanguageFeatures(node: MultiLanguageNode): Promise<any> {
+    // In a real implementation, this would analyze actual code content
+    // For now, use simple name-based detection
+    const codeContent = node.name; // Simplified
+    return await this.languageDetector.detectLanguageFeatures(node, codeContent);
   }
 
-  private isExitPoint(node: any): boolean {
-    return (
-      node.languageFeatures?.spawn ||
-      node.languageFeatures?.spawnsPython ||
-      node.type === 'process' ||
-      node.name?.includes('exit') ||
-      node.name?.includes('return')
-    );
-  }
-
-  private detectCrossLanguageConnections(): CrossLanguageConnection[] {
+  /**
+   * Identify cross-language connections
+   */
+  private async identifyCrossLanguageConnections(
+    nodes: MultiLanguageNode[],
+    edges: CrossLanguageEdge[]
+  ): Promise<CrossLanguageConnection[]> {
     const connections: CrossLanguageConnection[] = [];
     
-    if (!this.flowData) return connections;
-
-    this.flowData.edges.forEach(edge => {
-      if (edge.isCrossLanguage) {
-        const sourceNode = this.flowData!.nodes.find(n => n.id === edge.source);
-        const targetNode = this.flowData!.nodes.find(n => n.id === edge.target);
+    edges.forEach(edge => {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      const targetNode = nodes.find(n => n.id === edge.target);
+      
+      if (sourceNode && targetNode) {
+        const connection: CrossLanguageConnection = {
+          id: `conn_${edge.source}_${edge.target}`,
+          sourceNode,
+          targetNode,
+          connectionType: edge.connectionType || 'data_transfer',
+          protocol: this.determineProtocol(edge, sourceNode, targetNode),
+          dataFormat: this.determineDataFormat(edge, sourceNode, targetNode),
+          description: this.generateEdgeDetails(edge, sourceNode, targetNode)
+        };
         
-        if (sourceNode && targetNode) {
-          connections.push({
-            id: `${edge.source}-${edge.target}`,
-            sourceNode: sourceNode as MultiLanguageFlowNode,
-            targetNode: targetNode as MultiLanguageFlowNode,
-            connectionType: this.determineConnectionType(edge, sourceNode, targetNode),
-            protocol: this.determineProtocol(edge, sourceNode, targetNode),
-            dataFormat: this.determineDataFormat(edge, sourceNode, targetNode),
-            description: edge.details || 'Cross-language connection'
-          });
-        }
+        connections.push(connection);
       }
     });
 
     return connections;
   }
 
-  private determineConnectionType(edge: GraphEdge, source: any, target: any): 'spawn' | 'import' | 'api_call' | 'data_transfer' {
-    if (source.languageFeatures?.spawn) return 'spawn';
-    if (edge.type === 'imports') return 'import';
-    if (edge.type === 'calls' && edge.isCrossLanguage) return 'api_call';
-    return 'data_transfer';
-  }
-
-  private determineProtocol(edge: GraphEdge, source: any, target: any): string {
-    if (source.languageFeatures?.spawn) return 'process';
-    if (edge.type === 'imports') return 'module';
+  private determineProtocol(edge: CrossLanguageEdge, _source: MultiLanguageNode, _target: MultiLanguageNode): string {
+    if (edge.connectionType === 'spawn') return 'process';
+    if (edge.connectionType === 'import' || edge.connectionType === 'ffi') return 'module';
+    if (edge.connectionType === 'api_call') return 'http';
     return 'unknown';
   }
 
-  private determineDataFormat(edge: GraphEdge, source: any, target: any): string {
+  private determineDataFormat(edge: CrossLanguageEdge, source: MultiLanguageNode, target: MultiLanguageNode): string {
     // Detect data format based on function signatures, file types, etc.
     if (source.name?.includes('json') || target.name?.includes('json')) return 'JSON';
-    if (source.languageFeatures?.spawn) return 'CLI args';
+    if (edge.connectionType === 'spawn') return 'CLI args';
+    if (edge.connectionType === 'ffi') return 'binary';
     return 'unknown';
   }
 
-  private generateEdgeDetails(edge: any, source: any, target: any): string {
+  private generateEdgeDetails(edge: CrossLanguageEdge, source: MultiLanguageNode, target: MultiLanguageNode): string {
     if (!source || !target) return edge.type;
     
     if (edge.isCrossLanguage) {
@@ -597,79 +608,113 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
         
         .spawn-line { background: #ff6b6b; }
         .import-line { background: #4ecdc4; }
-        .call-line { background: #feca57; }
-        .data-line { background: #a55eea; }
+        .api-line { background: #feca57; }
+        .ffi-line { background: #a55eea; }
+        .data-line { background: #74b9ff; }
+        
+        .ml-button {
+          background: rgba(78, 205, 196, 0.2);
+          border: 1px solid #4ecdc4;
+          color: #4ecdc4;
+          padding: 8px 16px;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 0.85rem;
+        }
+        
+        .ml-button:hover {
+          background: rgba(78, 205, 196, 0.3);
+        }
         
         #multiLanguageGraph {
           width: 100%;
           height: 100%;
         }
         
+        .symbol-selector {
+          margin-bottom: 15px;
+        }
+        
+        .symbol-selector select {
+          width: 100%;
+          padding: 8px 12px;
+          background: rgba(0, 0, 0, 0.5);
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 6px;
+          color: #e0e0e0;
+          font-size: 0.9rem;
+        }
+        
+        .symbol-selector button {
+          margin-top: 10px;
+          width: 100%;
+        }
+        
         .cross-language-list {
-          max-height: 300px;
-          overflow-y: auto;
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+          margin-top: 15px;
         }
         
         .connection-item {
           background: rgba(255, 255, 255, 0.05);
           border-radius: 8px;
           padding: 12px;
-          margin-bottom: 10px;
-          border-left: 4px solid #4ecdc4;
-          transition: all 0.2s ease;
           cursor: pointer;
+          transition: all 0.2s ease;
         }
         
         .connection-item:hover {
-          background: rgba(78, 205, 196, 0.1);
-          transform: translateX(5px);
+          background: rgba(255, 255, 255, 0.1);
         }
         
         .connection-header {
           display: flex;
-          justify-content: between;
+          justify-content: space-between;
           align-items: center;
           margin-bottom: 8px;
         }
         
         .connection-type {
-          font-size: 0.75rem;
-          padding: 2px 8px;
+          padding: 3px 8px;
           border-radius: 12px;
-          text-transform: uppercase;
+          font-size: 0.7rem;
           font-weight: 600;
+          text-transform: uppercase;
         }
         
-        .type-spawn { background: rgba(255, 107, 107, 0.2); color: #ff6b6b; }
-        .type-import { background: rgba(78, 205, 196, 0.2); color: #4ecdc4; }
-        .type-api_call { background: rgba(254, 202, 87, 0.2); color: #feca57; }
-        .type-data_transfer { background: rgba(165, 94, 234, 0.2); color: #a55eea; }
+        .type-spawn { background: #ff6b6b; color: white; }
+        .type-import { background: #4ecdc4; color: black; }
+        .type-api_call { background: #feca57; color: black; }
+        .type-ffi { background: #a55eea; color: white; }
+        .type-data_transfer { background: #74b9ff; color: white; }
         
         .connection-flow {
           font-size: 0.9rem;
           color: #e0e0e0;
-          font-family: 'Fira Code', monospace;
+          margin-bottom: 5px;
         }
         
         .flow-arrow {
-          color: #4ecdc4;
+          color: #666;
           margin: 0 8px;
         }
         
         .connection-details {
           font-size: 0.8rem;
-          color: #aaa;
-          margin-top: 5px;
+          color: #888;
         }
         
         .empty-state {
           display: flex;
+          flex-direction: column;
           align-items: center;
           justify-content: center;
           height: 100%;
           text-align: center;
-          color: #888;
-          flex-direction: column;
+          color: #666;
         }
         
         .empty-icon {
@@ -678,130 +723,108 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
           opacity: 0.5;
         }
         
-        .symbol-selector {
-          margin-top: 30px;
-          display: flex;
-          flex-direction: column;
-          gap: 15px;
-          max-width: 400px;
-        }
-        
-        .symbol-dropdown {
-          padding: 12px 16px;
-          border: 1px solid rgba(255, 255, 255, 0.2);
-          border-radius: 8px;
-          background: rgba(0, 0, 0, 0.3);
-          color: #e0e0e0;
-          font-size: 14px;
-          min-width: 300px;
-        }
-        
-        .symbol-dropdown option {
-          background: #2a2a2a;
-          color: #e0e0e0;
-          padding: 8px;
-        }
-        
-        .explore-btn {
-          padding: 12px 24px;
-          background: linear-gradient(45deg, #4ecdc4, #44a08d);
-          border: none;
-          border-radius: 8px;
-          color: white;
+        h3 {
+          color: #4ecdc4;
+          font-size: 1.1rem;
           font-weight: 600;
-          cursor: pointer;
-          transition: transform 0.2s ease;
-        }
-        
-        .explore-btn:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 4px 12px rgba(78, 205, 196, 0.3);
-        }
-        
-        .explore-btn:disabled {
-          opacity: 0.5;
-          cursor: not-allowed;
-          transform: none;
+          margin: 0 0 15px 0;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
       </style>
       
       <div class="multi-language-header">
-        <div class="ml-title">
-          🌐 Multi-Language Flow Explorer
+        <h1 class="ml-title">
+          Multi-Language Flow Explorer
           <div class="language-indicator">
-            ${Array.from(this.selectedLanguages).map(lang => 
-              `<span class="lang-badge lang-${lang}">${lang}</span>`
-            ).join('')}
+            <span class="lang-badge lang-cpp">C++</span>
+            <span class="lang-badge lang-python">Python</span>
+            <span class="lang-badge lang-typescript">TypeScript</span>
           </div>
-        </div>
-        <p class="ml-subtitle">Trace execution flow across language boundaries</p>
+        </h1>
+        <p class="ml-subtitle">Explore cross-language relationships and execution flows</p>
       </div>
       
       <div class="ml-container">
         <div class="ml-sidebar">
-          <h3>Language Filters</h3>
-          <div class="language-filters">
-            ${Object.keys(this.languageColors).map(lang => 
-              `<div class="lang-filter ${this.selectedLanguages.has(lang) ? 'active' : ''}" 
-                    data-lang="${lang}">${lang}</div>`
-            ).join('')}
-          </div>
-          
-          <h3 style="margin-top: 25px;">Connection Types</h3>
-          <div class="connection-types">
-            <div class="connection-legend">
-              <div class="connection-line spawn-line"></div>
-              <span>Process Spawn</span>
+          <h3>Symbol Explorer</h3>
+          ${this.availableSymbols.length > 0 ? `
+            <div class="symbol-selector">
+              <select id="symbolSelect">
+                <option value="">Select a symbol to explore...</option>
+                ${this.availableSymbols.map(symbol => `
+                  <option value="${symbol.id}" ${symbol.id == this.currentFocusNode ? 'selected' : ''}>
+                    [${symbol.language}] ${symbol.name}
+                  </option>
+                `).join('')}
+              </select>
+              <button class="ml-button" onclick="this.getRootNode().host.exploreSelectedSymbol()">
+                🔍 Explore Symbol
+              </button>
             </div>
-            <div class="connection-legend">
-              <div class="connection-line import-line"></div>
-              <span>Module Import</span>
-            </div>
-            <div class="connection-legend">
-              <div class="connection-line call-line"></div>
-              <span>API Call</span>
-            </div>
-            <div class="connection-legend">
-              <div class="connection-line data-line"></div>
-              <span>Data Transfer</span>
-            </div>
-          </div>
+          ` : this._loading ? `
+            <p>Loading symbols...</p>
+          ` : `
+            <p style="color: #888; margin-top: 20px;">No symbols available</p>
+          `}
         </div>
         
         <div class="ml-canvas">
-          ${this.flowData ? `
-            <div class="ml-controls">
-              <div class="control-panel">
-                <div class="control-title">View Controls</div>
-                <button class="lang-filter" onclick="this.getRootNode().host.resetView()">Reset View</button>
-                <button class="lang-filter" onclick="this.getRootNode().host.focusCrossLanguage()">Focus Cross-Language</button>
+          <div class="ml-controls">
+            <div class="control-panel">
+              <div class="control-title">Language Filter</div>
+              <div class="language-filters">
+                ${['cpp', 'python', 'typescript', 'javascript', 'rust', 'go'].map(lang => `
+                  <div class="lang-filter ${this.selectedLanguages.has(lang) ? 'active' : ''}" 
+                       data-lang="${lang}">
+                    ${lang}
+                  </div>
+                `).join('')}
               </div>
             </div>
+            
+            <div class="control-panel">
+              <div class="control-title">Connection Types</div>
+              <div class="connection-types">
+                <div class="connection-legend">
+                  <div class="connection-line spawn-line"></div>
+                  <span>Process Spawn</span>
+                </div>
+                <div class="connection-legend">
+                  <div class="connection-line import-line"></div>
+                  <span>Import/Module</span>
+                </div>
+                <div class="connection-legend">
+                  <div class="connection-line api-line"></div>
+                  <span>API Call</span>
+                </div>
+                <div class="connection-legend">
+                  <div class="connection-line ffi-line"></div>
+                  <span>FFI/Binding</span>
+                </div>
+                <div class="connection-legend">
+                  <div class="connection-line data-line"></div>
+                  <span>Data Transfer</span>
+                </div>
+              </div>
+            </div>
+            
+            <button class="ml-button" onclick="this.getRootNode().host.resetView()">
+              ↺ Reset View
+            </button>
+            
+            <button class="ml-button" onclick="this.getRootNode().host.focusCrossLanguage()">
+              🎯 Focus Cross-Language
+            </button>
+          </div>
+          
+          ${this.flowData ? `
             <svg id="multiLanguageGraph"></svg>
           ` : `
             <div class="empty-state">
-              <div class="empty-icon">🔍</div>
-              <h3>Select a starting point</h3>
-              <p>Choose a function to explore multi-language flow</p>
-              ${this.availableSymbols.length > 0 ? `
-                <div class="symbol-selector">
-                  <select id="symbolSelect" class="symbol-dropdown">
-                    <option value="">Choose a symbol...</option>
-                    ${this.availableSymbols.map(symbol => `
-                      <option value="${symbol.id}" data-language="${symbol.language}">
-                        [${symbol.language.toUpperCase()}] ${symbol.qualified_name || symbol.name}
-                      </option>
-                    `).join('')}
-                  </select>
-                  <button class="explore-btn" onclick="this.getRootNode().host.exploreSelectedSymbol()">
-                    🌐 Explore
-                  </button>
-                </div>
-              ` : this._loading ? `
-                <p>Loading symbols...</p>
-              ` : `
-                <p style="color: #888; margin-top: 20px;">No symbols available</p>
-              `}
+              <div class="empty-icon">🌐</div>
+              <h3>No Multi-Language Flow Loaded</h3>
+              <p>Select a symbol from the left panel to explore cross-language relationships</p>
             </div>
           `}
         </div>
@@ -875,14 +898,20 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
 
     const g = svg.append('g');
 
+    // Group nodes by language
+    const languageClusters = this.languageClusterer.groupSymbolsByLanguage(
+      this.flowData.nodes,
+      { groupByNamespace: true, groupByModule: true }
+    );
+
     // Create force simulation with language clustering
-    const simulation = d3.forceSimulation(this.flowData.nodes)
+    const simulation = d3.forceSimulation(this.flowData.nodes as any)
       .force('link', d3.forceLink(this.flowData.edges)
         .id((d: any) => d.id)
-        .distance((d: any) => (d as GraphEdge).isCrossLanguage ? 200 : 100))
+        .distance((d: any) => (d as CrossLanguageEdge).isCrossLanguage ? 200 : 100))
       .force('charge', d3.forceManyBody().strength(-300))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('cluster', this.createLanguageClusterForce())
+      .force('cluster', this.createLanguageClusterForce(languageClusters))
       .force('collision', d3.forceCollide().radius(30));
 
     // Create links with enhanced styling for cross-language connections
@@ -891,10 +920,10 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       .data(this.flowData.edges)
       .enter().append('path')
       .attr('class', 'flow-link')
-      .attr('stroke', (d: GraphEdge) => this.getEdgeColor(d))
-      .attr('stroke-width', (d: GraphEdge) => d.isCrossLanguage ? 4 : 2)
-      .attr('stroke-dasharray', (d: GraphEdge) => d.isCrossLanguage ? '10,5' : null)
-      .attr('opacity', (d: GraphEdge) => d.isCrossLanguage ? 0.9 : 0.6)
+      .attr('stroke', (d: CrossLanguageEdge) => this.getEdgeColor(d))
+      .attr('stroke-width', (d: CrossLanguageEdge) => d.isCrossLanguage ? 4 : 2)
+      .attr('stroke-dasharray', (d: CrossLanguageEdge) => d.isCrossLanguage ? '10,5' : null)
+      .attr('opacity', (d: CrossLanguageEdge) => d.isCrossLanguage ? 0.9 : 0.6)
       .attr('marker-end', 'url(#arrowhead)');
 
     // Create nodes with language-specific styling
@@ -923,7 +952,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     node.append('circle')
       .attr('r', (d: any) => this.getNodeRadius(d))
       .attr('fill', (d: any) => this.getNodeColor(d))
-      .attr('stroke', (d: any) => this.getNodeStrokeColor(d))
+      .attr('stroke', '#fff')
       .attr('stroke-width', (d: any) => d.id === this.currentFocusNode ? 3 : 1);
 
     // Add labels to nodes
@@ -955,7 +984,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       .text((d: any) => (d.language || 'unknown').substring(0, 3).toUpperCase());
 
     // Add click handlers
-    node.on('click', (event: any, d: any) => {
+    node.on('click', (_event: any, d: any) => {
       this.selectNode(d);
     });
 
@@ -993,20 +1022,32 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     (this as any)._simulation = simulation;
   }
 
-  private createLanguageClusterForce() {
-    const clusters: Record<string, {x: number, y: number}> = {};
+  private createLanguageClusterForce(clusters: Map<string, LanguageCluster>) {
+    // Generate cluster layout
+    const container = this.shadow.getElementById('multiLanguageGraph');
+    if (container) {
+      this.languageClusterer.generateClusterLayout(
+        clusters,
+        container.clientWidth,
+        container.clientHeight
+      );
+    }
+    
     const strength = 0.1;
     
     return (alpha: number) => {
       if (!this.flowData) return;
       
       this.flowData.nodes.forEach((d: any) => {
-        const cluster = clusters[d.language] || (clusters[d.language] = {x: Math.random() * 800, y: Math.random() * 600});
-        d.vx -= (d.x - cluster.x) * strength * alpha;
-        d.vy -= (d.y - cluster.y) * strength * alpha;
+        const cluster = clusters.get(d.language);
+        if (cluster && cluster.centroid) {
+          d.vx -= (d.x - cluster.centroid.x) * strength * alpha;
+          d.vy -= (d.y - cluster.centroid.y) * strength * alpha;
+        }
       });
     };
   }
+
 
   private getNodeRadius(node: any): number {
     const baseRadius = 15;
@@ -1037,25 +1078,16 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     return baseColor;
   }
 
-  private getNodeStrokeColor(node: any): string {
-    if (node.languageFeatures?.spawnsPython) {
-      return '#feca57'; // Gold for Python spawners
-    }
-    
-    if (node.languageFeatures?.isAsync) {
-      return '#a55eea'; // Purple for async
-    }
-    
-    return '#fff';
-  }
 
-  private getEdgeColor(edge: GraphEdge): string {
+  private getEdgeColor(edge: CrossLanguageEdge): string {
     if (edge.isCrossLanguage) {
-      switch (edge.type) {
-        case 'spawns': return '#ff6b6b';
-        case 'imports': return '#4ecdc4';
-        case 'calls': return '#feca57';
-        default: return '#a55eea';
+      switch (edge.connectionType) {
+        case 'spawn': return '#ff6b6b';
+        case 'import': return '#4ecdc4';
+        case 'api_call': return '#feca57';
+        case 'ffi': return '#a55eea';
+        case 'data_transfer': return '#74b9ff';
+        default: return '#666';
       }
     }
     return '#666';
@@ -1135,4 +1167,5 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
   }
 }
 
+// Initialize and register component
 defineComponent('multi-language-flow-explorer', MultiLanguageFlowExplorer);

@@ -56,6 +56,94 @@ export class CrossLanguageAnalyzer {
   private patterns: Map<string, CommunicationPattern> = new Map();
 
   /**
+   * Analyze cross-language connections in the graph
+   */
+  analyzeCrossLanguageConnections(
+    nodes: MultiLanguageNode[],
+    edges: CrossLanguageEdge[]
+  ): {
+    connections: CrossLanguageEdge[];
+    statistics: Map<string, number>;
+  } {
+    const connections: CrossLanguageEdge[] = [];
+    const statistics = new Map<string, number>();
+    
+    // Build node map for quick lookup
+    const nodeMap = new Map<string | number, MultiLanguageNode>();
+    nodes.forEach(node => nodeMap.set(node.id, node));
+    
+    // Process each edge
+    edges.forEach(edge => {
+      const sourceNode = nodeMap.get(edge.source);
+      const targetNode = nodeMap.get(edge.target);
+      
+      if (sourceNode && targetNode) {
+        // Check if cross-language
+        if (sourceNode.language !== targetNode.language) {
+          const connectionType = this.determineConnectionType(
+            edge, sourceNode, targetNode
+          );
+          
+          connections.push({
+            ...edge,
+            isCrossLanguage: true,
+            connectionType
+          });
+          
+          // Update statistics
+          const key = `${sourceNode.language}->${targetNode.language}`;
+          statistics.set(key, (statistics.get(key) || 0) + 1);
+        }
+      }
+    });
+    
+    return { connections, statistics };
+  }
+
+  /**
+   * Determine connection type from edge and nodes
+   */
+  private determineConnectionType(
+    edge: CrossLanguageEdge,
+    sourceNode: MultiLanguageNode,
+    targetNode: MultiLanguageNode
+  ): CrossLanguageEdge['connectionType'] {
+    // Check for existing connection type
+    if (edge.connectionType) return edge.connectionType;
+    
+    // Check if languages are different
+    if (sourceNode.language !== targetNode.language) {
+      // Check for spawn
+      if (sourceNode.languageFeatures?.spawn) {
+        return 'spawn';
+      }
+      
+      // Check for FFI
+      if (sourceNode.languageFeatures?.hasFFI || 
+          targetNode.languageFeatures?.hasFFI) {
+        return 'ffi';
+      }
+      
+      // Check for API calls
+      if (sourceNode.languageFeatures?.hasAPI || 
+          targetNode.languageFeatures?.hasAPI) {
+        return 'api_call';
+      }
+      
+      // Check edge type
+      if (edge.type === 'imports' || edge.type === 'uses') {
+        return 'import';
+      }
+      
+      if (edge.type === 'calls') {
+        return 'api_call';
+      }
+    }
+    
+    return 'data_transfer';
+  }
+
+  /**
    * Analyze cross-language function calls
    */
   async analyzeFunctionCalls(
