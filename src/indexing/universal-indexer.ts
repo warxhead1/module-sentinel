@@ -14,6 +14,7 @@ import * as path from "path";
 import { glob } from "glob";
 import { Worker } from "worker_threads";
 import { EventEmitter } from "events";
+import * as crypto from "crypto";
 
 // Import schema
 import {
@@ -26,12 +27,20 @@ import {
   projectLanguages,
 } from "../database/schema/universal.js";
 
+// Import code flow tables from drizzle schema
+import {
+  controlFlowBlocks,
+  symbolCalls,
+} from "../database/drizzle/schema.js";
+
 // Import optimized parsers
 import { OptimizedTreeSitterBaseParser as TreeSitterBaseParser } from "../parsers/tree-sitter/optimized-base-parser.js";
 import {
   ParseOptions,
   ParseResult,
   RelationshipInfo,
+  SymbolInfo,
+  PatternInfo,
 } from "../parsers/tree-sitter/parser-types.js";
 import { OptimizedCppTreeSitterParser as CppTreeSitterParser } from "../parsers/tree-sitter/optimized-cpp-parser.js";
 
@@ -230,6 +239,10 @@ export class UniversalIndexer extends EventEmitter {
         languageMap
       );
 
+      // Phase 3.5: Store symbols from parse results
+      this.updateProgress("storing");
+      await this.storeSymbols(projectId, languageMap, parseResults);
+
       // Phase 4: Resolve and store relationships
       this.updateProgress("relationships");
       await this.resolveAndStoreRelationships(projectId, parseResults);
@@ -396,12 +409,64 @@ export class UniversalIndexer extends EventEmitter {
       return extensionSet.has(ext);
     });
 
-    // Apply maxFiles limit if specified
+    // Apply maxFiles limit if specified  
     if (this.options.maxFiles && this.options.maxFiles > 0) {
       return filteredFiles.slice(0, this.options.maxFiles);
     }
 
     return filteredFiles;
+  }
+
+  /**
+   * Filter files to only those that have changed since last parsing
+   */
+  private async filterChangedFiles(
+    files: string[],
+    projectId: number
+  ): Promise<string[]> {
+    // Get existing file index for this project
+    const existingFiles = await this.db
+      .select({
+        filePath: fileIndex.filePath,
+        fileHash: fileIndex.fileHash,
+        lastParsed: fileIndex.lastParsed,
+      })
+      .from(fileIndex)
+      .where(eq(fileIndex.projectId, projectId));
+
+    const existingFileMap = new Map(
+      existingFiles.map(f => [f.filePath, f])
+    );
+
+    const changedFiles: string[] = [];
+
+    // Check each file for changes
+    for (const file of files) {
+      try {
+        const stats = await fs.stat(file);
+        const content = await fs.readFile(file, 'utf-8');
+        const currentHash = crypto.createHash('sha256').update(content).digest('hex');
+
+        const existingFile = existingFileMap.get(file);
+
+        if (!existingFile) {
+          // New file - needs parsing
+          changedFiles.push(file);
+        } else if (existingFile.fileHash !== currentHash) {
+          // File content changed - needs reparsing
+          changedFiles.push(file);
+        } else if (!existingFile.lastParsed) {
+          // File exists but was never successfully parsed
+          changedFiles.push(file);
+        }
+        // If hash matches and file was parsed, skip it (incremental optimization)
+      } catch (error) {
+        // If we can't read the file, include it for parsing (it might be deleted/moved)
+        changedFiles.push(file);
+      }
+    }
+
+    return changedFiles;
   }
 
   /**
@@ -412,10 +477,17 @@ export class UniversalIndexer extends EventEmitter {
     projectId: number,
     languageMap: Map<string, number>
   ): Promise<Array<ParseResult & { filePath: string }>> {
+    // SCALE 2: Incremental parsing - filter files that need reparsing
+    const filesToParse = await this.filterChangedFiles(files, projectId);
+    
+    if (filesToParse.length < files.length) {
+      console.log(`📈 Incremental parsing: Processing ${filesToParse.length}/${files.length} changed files`);
+    }
+
     const results: Array<ParseResult & { filePath: string }> = [];
     const chunks = this.chunkArray(
-      files,
-      Math.ceil(files.length / this.options.parallelism)
+      filesToParse,
+      Math.ceil(filesToParse.length / this.options.parallelism)
     );
 
     // Process chunks in parallel
@@ -440,22 +512,26 @@ export class UniversalIndexer extends EventEmitter {
     projectId: number,
     languageMap: Map<string, number>
   ): Promise<Array<ParseResult & { filePath: string }>> {
-    const results: Array<ParseResult & { filePath: string }> = [];
-
-    for (const file of files) {
+    // Process files within the chunk in parallel for maximum concurrency
+    const parsePromises = files.map(async (file) => {
       try {
         const result = await this.parseFile(file, projectId, languageMap);
-        results.push({ ...result, filePath: file });
-
         this.progress.processedFiles++;
         this.updateProgress("parsing", file);
+        return { ...result, filePath: file };
       } catch (error) {
         this.errors.push(`Failed to parse ${file}: ${error}`);
         this.progress.errors++;
+        return null;
       }
-    }
+    });
 
-    return results;
+    const results = await Promise.all(parsePromises);
+    
+    // Filter out failed parses (null results)
+    return results.filter((result): result is ParseResult & { filePath: string } => 
+      result !== null
+    );
   }
 
   /**
@@ -894,6 +970,153 @@ export class UniversalIndexer extends EventEmitter {
     if (this.options.progressCallback) {
       this.options.progressCallback(this.progress);
     }
+  }
+
+  /**
+   * Store symbols from parse results
+   */
+  private async storeSymbols(
+    projectId: number,
+    languageMap: Map<string, number>,
+    parseResults: Array<ParseResult & { filePath: string }>
+  ): Promise<void> {
+    const startTime = Date.now();
+    this.debug("Storing symbols from parse results...");
+    
+    let totalSymbols = 0;
+    let totalPatterns = 0;
+    let totalControlFlow = 0;
+    
+    // Process each file's symbols
+    for (const result of parseResults) {
+      if (!result.symbols || result.symbols.length === 0) continue;
+      
+      const languageId = languageMap.get(
+        this.getLanguageForExtension(path.extname(result.filePath)) || ""
+      );
+      
+      if (!languageId) {
+        this.errors.push(`No language ID for file: ${result.filePath}`);
+        continue;
+      }
+      
+      try {
+        // Batch insert symbols
+        const symbolRecords = result.symbols.map((symbol: SymbolInfo) => ({
+          projectId,
+          languageId,
+          name: symbol.name,
+          qualifiedName: symbol.qualifiedName,
+          kind: symbol.kind,
+          filePath: result.filePath,
+          line: symbol.line,
+          column: symbol.column,
+          endLine: symbol.endLine,
+          endColumn: symbol.endColumn,
+          signature: symbol.signature,
+          returnType: symbol.returnType,
+          complexity: symbol.complexity || 1,
+          semanticTags: JSON.stringify(symbol.semanticTags || []),
+          isDefinition: symbol.isDefinition ? 1 : 0,
+          isExported: symbol.isExported ? 1 : 0,
+          isAsync: symbol.isAsync ? 1 : 0,
+          isAbstract: 0, // Not part of SymbolInfo type
+          namespace: symbol.namespace,
+          parentScope: symbol.parentScope,
+          confidence: symbol.confidence || 1.0,
+          languageFeatures: symbol.languageFeatures ? JSON.stringify(symbol.languageFeatures) : null
+        }));
+        
+        if (symbolRecords.length > 0) {
+          await this.db.insert(universalSymbols)
+            .values(symbolRecords)
+            .onConflictDoNothing();
+          totalSymbols += symbolRecords.length;
+          this.debug(`Stored ${symbolRecords.length} symbols from ${result.filePath}`);
+        }
+        
+        // Skip pattern storage for now - pattern detection is a separate concern
+        // TODO: Implement pattern storage when pattern detection is needed
+        
+        // Store control flow data if any
+        if (result.controlFlowData) {
+          // Get symbol IDs for control flow blocks
+          const symbolMap = new Map<string, number>();
+          const insertedSymbols = await this.db.select()
+            .from(universalSymbols)
+            .where(eq(universalSymbols.filePath, result.filePath));
+          
+          for (const sym of insertedSymbols) {
+            symbolMap.set(sym.name, sym.id);
+          }
+          
+          // Store control flow blocks
+          if (result.controlFlowData.blocks && result.controlFlowData.blocks.length > 0) {
+            const blockRecords = result.controlFlowData.blocks
+              .map((block: any) => {
+                const symbolId = symbolMap.get(block.symbolName);
+                if (!symbolId) return null;
+                
+                return {
+                  symbolId,
+                  projectId,
+                  blockType: block.blockType,
+                  startLine: block.startLine,
+                  endLine: block.endLine,
+                  condition: block.condition,
+                  loopType: block.loopType,
+                  complexity: block.complexity || 1
+                };
+              })
+              .filter(Boolean);
+            
+            if (blockRecords.length > 0) {
+              await this.db.insert(controlFlowBlocks)
+                .values(blockRecords as any);
+              totalControlFlow += blockRecords.length;
+            }
+          }
+          
+          // Store function calls
+          if (result.controlFlowData.calls && result.controlFlowData.calls.length > 0) {
+            const callRecords = result.controlFlowData.calls
+              .map((call: any) => {
+                const callerId = symbolMap.get(call.callerName);
+                if (!callerId) return null;
+                
+                // Try to resolve the callee ID from the symbol map
+                const calleeId = call.calleeName ? symbolMap.get(call.calleeName) : null;
+                
+                return {
+                  callerId,
+                  calleeId,
+                  projectId,
+                  targetFunction: call.targetFunction || call.calleeName || call.functionName || call.target,
+                  lineNumber: call.lineNumber,
+                  columnNumber: call.columnNumber,
+                  callType: call.callType || 'direct',
+                  condition: call.condition || null,
+                  isConditional: call.isConditional ? 1 : 0,
+                  isRecursive: call.isRecursive ? 1 : 0
+                };
+              })
+              .filter(Boolean);
+            
+            if (callRecords.length > 0) {
+              await this.db.insert(symbolCalls)
+                .values(callRecords as any);
+            }
+          }
+        }
+        
+      } catch (error) {
+        this.errors.push(`Failed to store symbols from ${result.filePath}: ${error}`);
+        console.error(`Error storing symbols from ${result.filePath}:`, error);
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    this.debug(`Symbol storage completed in ${duration}ms: ${totalSymbols} symbols, ${totalPatterns} patterns, ${totalControlFlow} control flow blocks`);
   }
 
   /**

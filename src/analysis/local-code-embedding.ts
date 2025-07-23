@@ -414,11 +414,29 @@ class ASTFeatureExtractor {
       return new Array(20).fill(0); // Return empty features array
     }
     
+    // Use visited set to prevent infinite loops from circular references
+    const visited = new Set<Parser.SyntaxNode>();
+    
     const traverse = (node: Parser.SyntaxNode) => {
+      // Prevent infinite loops from circular references
+      if (visited.has(node)) {
+        return;
+      }
+      visited.add(node);
+      
+      // Validate node before processing
+      if (!node || !node.type) {
+        return;
+      }
+      
       nodeTypeCounts[node.type] = (nodeTypeCounts[node.type] || 0) + 1;
       
+      // Safely traverse children with validation
       for (let i = 0; i < node.childCount; i++) {
-        traverse(node.child(i)!);
+        const child = node.child(i);
+        if (child && child !== node) { // Ensure child exists and isn't self-referential
+          traverse(child);
+        }
       }
     };
 
@@ -448,13 +466,31 @@ class ASTFeatureExtractor {
       return [0, 0]; // Return default depth features
     }
 
+    // Use visited set to prevent infinite loops from circular references
+    const visited = new Set<Parser.SyntaxNode>();
+    
     const traverse = (node: Parser.SyntaxNode, depth: number) => {
+      // Prevent infinite loops from circular references
+      if (visited.has(node)) {
+        return;
+      }
+      visited.add(node);
+      
+      // Validate node before processing
+      if (!node) {
+        return;
+      }
+      
       maxDepth = Math.max(maxDepth, depth);
       avgDepth += depth;
       nodeCount++;
 
+      // Safely traverse children with validation
       for (let i = 0; i < node.childCount; i++) {
-        traverse(node.child(i)!, depth + 1);
+        const child = node.child(i);
+        if (child && child !== node) { // Ensure child exists and isn't self-referential
+          traverse(child, depth + 1);
+        }
       }
     };
 

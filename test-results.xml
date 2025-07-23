@@ -1,19 +1,49 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Module Sentinel Test Suite" tests="12" failures="3" skipped="0" time="208.062">
-  <testsuite name="Module Sentinel" tests="12" failures="3" skipped="0" time="208.062">
+<testsuites name="Module Sentinel Test Suite" tests="12" failures="11" skipped="0" time="16.001">
+  <testsuite name="Module Sentinel" tests="12" failures="11" skipped="0" time="16.001">
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Language Detection Working" time="0">
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Essential Symbol Kinds Present" time="0">
+      <failure message="Missing essential kinds: class, struct, function, method, field, namespace">
+Error: Missing essential kinds: class, struct, function, method, field, namespace
+    at ComprehensiveParserCapabilitiesTest.analyzeSymbolKinds (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:249:35)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:115:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Essential Relationship Types Present" time="0">
+      <failure message="Missing essential types: reads_field, writes_field">
+Error: Missing essential types: reads_field, writes_field
+    at ComprehensiveParserCapabilitiesTest.analyzeRelationshipTypes (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:311:35)
+    at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:118:7)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ module with structs, functions, and field access - Symbol Detection" time="0">
+      <failure message="0/6 symbols found">
+Error: 0/6 symbols found
+    at ComprehensiveParserCapabilitiesTest.testFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:450:45)
+    at async ComprehensiveParserCapabilitiesTest.testSpecificFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:337:5)
+    at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:121:7)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ module with structs, functions, and field access - Relationship Detection" time="0">
+      <failure message="0/3 relationships found">
+Error: 0/3 relationships found
+    at ComprehensiveParserCapabilitiesTest.testFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:457:57)
+    at async ComprehensiveParserCapabilitiesTest.testSpecificFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:337:5)
+    at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:121:7)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ factory pattern with modules and templates - Symbol Detection" time="0">
-      <failure message="1/4 symbols found">
-Error: 1/4 symbols found
+      <failure message="0/4 symbols found">
+Error: 0/4 symbols found
     at ComprehensiveParserCapabilitiesTest.testFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:450:45)
     at async ComprehensiveParserCapabilitiesTest.testSpecificFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:356:5)
     at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:121:7)
@@ -32,8 +62,22 @@ Error: 0/3 relationships found
       </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Function Signatures Completeness (>80%)" time="0">
+      <failure message="Only 0.0% of functions have signatures">
+Error: Only 0.0% of functions have signatures
+    at ComprehensiveParserCapabilitiesTest.analyzeMetadataCompleteness (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:513:44)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:124:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Return Types Completeness (>70%)" time="0">
+      <failure message="Only 0.0% of functions have return types">
+Error: Only 0.0% of functions have return types
+    at ComprehensiveParserCapabilitiesTest.analyzeMetadataCompleteness (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:520:45)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:124:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Modern C++ Features Detection" time="0">
       <failure message="No modern C++ features detected in codebase">
@@ -45,8 +89,22 @@ Error: No modern C++ features detected in codebase
       </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Template Detection (Known Gap)" time="0">
+      <failure message="Template detection not implemented - known gap">
+Error: Template detection not implemented - known gap
+    at ComprehensiveParserCapabilitiesTest.testTemplateDetection (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:617:36)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:130:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
     <testcase classname="ComprehensiveParserCapabilitiesTest" name="Inheritance Relationships (Known Gap)" time="0">
+      <failure message="Inheritance relationship detection not implemented - known gap">
+Error: Inheritance relationship detection not implemented - known gap
+    at ComprehensiveParserCapabilitiesTest.testInheritanceRelationships (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:643:39)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:133:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
+      </failure>
     </testcase>
   </testsuite>
 </testsuites>

@@ -185,32 +185,87 @@ export class SemanticContextEngine {
       console.log(`[SemanticContext] Analyzing symbol: ${symbol.name} (${symbol.kind})`);
     }
 
-    // Extract different aspects of semantic context in parallel
-    const [
-      semanticRole,
-      usagePatterns,
-      architecturalLayer,
-      moduleRole,
-      componentType,
-      complexityMetrics,
-      qualityIndicators,
-      semanticRelationships,
-      algorithmicPatterns,
-      performanceCharacteristics,
-      readabilityMetrics
-    ] = await Promise.all([
-      this.analyzeSemanticRole(symbol, ast, sourceCode),
-      this.analyzeUsagePatterns(symbol, relationships),
-      this.analyzeArchitecturalLayer(symbol, sourceCode),
-      this.analyzeModuleRole(symbol, relationships),
-      this.analyzeComponentType(symbol, sourceCode),
-      this.calculateComplexityMetrics(symbol, ast, sourceCode),
-      this.identifyQualityIndicators(symbol, ast, sourceCode),
-      this.analyzeSemanticRelationships(symbol, relationships),
-      this.recognizeAlgorithmicPatterns(symbol, ast, sourceCode),
-      this.analyzePerformanceCharacteristics(symbol, ast, sourceCode),
-      this.analyzeReadability(symbol, sourceCode)
-    ]);
+    // Create timeout wrapper for each analysis method
+    const withTimeout = <T>(promise: Promise<T>, timeoutMs: number, methodName: string): Promise<T> => {
+      return Promise.race([
+        promise,
+        new Promise<T>((_, reject) => 
+          setTimeout(() => reject(new Error(`${methodName} timeout after ${timeoutMs}ms`)), timeoutMs)
+        )
+      ]);
+    };
+
+    // Extract different aspects of semantic context in parallel with individual timeouts
+    const analysisPromises = [
+      withTimeout(this.analyzeSemanticRole(symbol, ast, sourceCode), 1000, 'analyzeSemanticRole'),
+      withTimeout(this.analyzeUsagePatterns(symbol, relationships), 500, 'analyzeUsagePatterns'),
+      withTimeout(this.analyzeArchitecturalLayer(symbol, sourceCode), 300, 'analyzeArchitecturalLayer'),
+      withTimeout(this.analyzeModuleRole(symbol, relationships), 300, 'analyzeModuleRole'),
+      withTimeout(this.analyzeComponentType(symbol, sourceCode), 300, 'analyzeComponentType'),
+      withTimeout(this.calculateComplexityMetrics(symbol, ast, sourceCode), 800, 'calculateComplexityMetrics'),
+      withTimeout(this.identifyQualityIndicators(symbol, ast, sourceCode), 500, 'identifyQualityIndicators'),
+      withTimeout(this.analyzeSemanticRelationships(symbol, relationships), 300, 'analyzeSemanticRelationships'),
+      withTimeout(this.recognizeAlgorithmicPatterns(symbol, ast, sourceCode), 500, 'recognizeAlgorithmicPatterns'),
+      withTimeout(this.analyzePerformanceCharacteristics(symbol, ast, sourceCode), 500, 'analyzePerformanceCharacteristics'),
+      withTimeout(this.analyzeReadability(symbol, sourceCode), 300, 'analyzeReadability')
+    ];
+
+    // Use Promise.allSettled to handle partial failures gracefully
+    const results = await Promise.allSettled(analysisPromises);
+    
+    // Extract successful results and provide defaults for failed ones
+    const getResult = (index: number, defaultValue: any): any => {
+      const result = results[index];
+      if (result.status === 'fulfilled') {
+        return result.value;
+      } else {
+        if (this.debugMode) {
+          console.warn(`[SemanticContext] Analysis failed for ${symbol.name}: ${result.reason}`);
+        }
+        return defaultValue;
+      }
+    };
+
+    const semanticRole = getResult(0, { primary: 'utility' as const, confidence: 0.1 });
+    const usagePatterns = getResult(1, []);
+    const architecturalLayer = getResult(2, { layer: 'business' as const, sublayer: 'unknown', confidence: 0.1 });
+    const moduleRole = getResult(3, { 
+      role: 'utility' as const, 
+      importance: 'utility' as const, 
+      publicInterface: false 
+    });
+    const componentType = getResult(4, { 
+      type: 'helper' as const, 
+      confidence: 0.1 
+    });
+    const complexityMetrics = getResult(5, {
+      cyclomaticComplexity: 1,
+      cognitiveComplexity: 1,
+      nestingDepth: 1,
+      parameterCount: 0,
+      lineCount: 1,
+      branchCount: 0,
+      dependencyCount: 0,
+      fanIn: 0,
+      fanOut: 0
+    });
+    const qualityIndicators = getResult(6, []);
+    const semanticRelationships = getResult(7, []);
+    const algorithmicPatterns = getResult(8, []);
+    const performanceCharacteristics = getResult(9, {
+      executionMode: 'balanced' as const,
+      scalability: 'unknown' as const,
+      resourceUsage: { memory: 'unknown' as const, cpu: 'unknown' as const, io: 'unknown' as const },
+      parallelizable: false,
+      cacheable: false
+    });
+    const readabilityMetrics = getResult(10, {
+      namingQuality: 0.5,
+      commentQuality: 0.5,
+      structureClarity: 0.5,
+      overallReadability: 0.5,
+      improvementSuggestions: []
+    });
 
     // Calculate derived metrics
     const dependencyStrength = this.calculateDependencyStrength(relationships);
@@ -392,11 +447,26 @@ export class SemanticContextEngine {
     ast: Parser.Tree,
     sourceCode: string
   ): Promise<ComplexityMetrics> {
+    // Limit analysis to reasonable bounds to prevent hangs
     const lines = sourceCode.split('\n');
-    const symbolLines = lines.slice(
-      (symbol.line || 1) - 1, 
-      (symbol.endLine || symbol.line || lines.length) - 1
-    );
+    const startLine = Math.max(0, (symbol.line || 1) - 1);
+    const endLine = Math.min(lines.length, symbol.endLine || startLine + 100); // Max 100 lines
+    const symbolLines = lines.slice(startLine, endLine);
+    
+    // Skip analysis for extremely large symbols that could cause performance issues
+    if (symbolLines.length > 200) {
+      return {
+        cyclomaticComplexity: 10, // Assume high complexity for very large symbols
+        cognitiveComplexity: 15,
+        nestingDepth: 5,
+        parameterCount: this.countParameters(symbol.signature || ''),
+        lineCount: symbolLines.length,
+        branchCount: 10,
+        dependencyCount: 0,
+        fanIn: 0,
+        fanOut: 0
+      };
+    }
 
     return {
       cyclomaticComplexity: this.calculateCyclomaticComplexity(symbolLines),
@@ -414,61 +484,84 @@ export class SemanticContextEngine {
   // Helper methods for complexity calculations
   private calculateCyclomaticComplexity(lines: string[]): number {
     let complexity = 1; // Base complexity
+    
+    // Limit processing to prevent hangs on extremely large code blocks
+    if (lines.length > 100) {
+      lines = lines.slice(0, 100);
+    }
+    
     const code = lines.join('\n');
     
-    // Count control flow statements
+    // Count control flow statements with efficient regex patterns
     const patterns = [
-      /\bif\b/g, /\belse if\b/g, /\bwhile\b/g, /\bfor\b/g,
-      /\bswitch\b/g, /\bcase\b/g, /\bcatch\b/g, /\b\?\b/g
+      /\bif\s*\(/g, /\belse\s+if\s*\(/g, /\bwhile\s*\(/g, /\bfor\s*\(/g,
+      /\bswitch\s*\(/g, /\bcase\s/g, /\bcatch\s*\(/g, /\?\s*[^:]/g
     ];
     
     patterns.forEach(pattern => {
       const matches = code.match(pattern);
-      if (matches) complexity += matches.length;
+      if (matches) complexity += Math.min(matches.length, 20); // Cap at 20 to prevent runaway complexity
     });
     
-    return complexity;
+    return Math.min(complexity, 50); // Cap total complexity at reasonable level
   }
 
   private calculateCognitiveComplexity(lines: string[]): number {
     let complexity = 0;
     let nestingLevel = 0;
     
-    lines.forEach(line => {
-      const trimmed = line.trim();
+    // Limit processing to prevent hangs
+    const maxLines = Math.min(lines.length, 100);
+    
+    for (let i = 0; i < maxLines; i++) {
+      const trimmed = lines[i].trim();
       
-      // Track nesting level
-      if (trimmed.includes('{')) nestingLevel++;
-      if (trimmed.includes('}')) nestingLevel = Math.max(0, nestingLevel - 1);
+      // Track nesting level efficiently
+      const openBraces = (trimmed.match(/\{/g) || []).length;
+      const closeBraces = (trimmed.match(/\}/g) || []).length;
+      nestingLevel += openBraces;
+      nestingLevel = Math.max(0, nestingLevel - closeBraces);
+      nestingLevel = Math.min(nestingLevel, 10); // Cap nesting level
       
       // Add complexity based on control structures and nesting
-      if (/\b(if|while|for|switch)\b/.test(trimmed)) {
+      if (/\b(if|while|for|switch)\s*\(/.test(trimmed)) {
         complexity += 1 + nestingLevel;
       }
-      if (/\belse if\b/.test(trimmed)) {
+      if (/\belse\s+if\s*\(/.test(trimmed)) {
         complexity += 1 + nestingLevel;
       }
-      if (/\bcatch\b/.test(trimmed)) {
+      if (/\bcatch\s*\(/.test(trimmed)) {
         complexity += 1 + nestingLevel;
       }
-    });
+      
+      // Prevent runaway complexity
+      if (complexity > 100) break;
+    }
     
-    return complexity;
+    return Math.min(complexity, 100); // Cap at reasonable level
   }
 
   private calculateNestingDepth(lines: string[]): number {
     let maxDepth = 0;
     let currentDepth = 0;
     
-    lines.forEach(line => {
+    // Limit processing to prevent hangs
+    const maxLines = Math.min(lines.length, 100);
+    
+    for (let i = 0; i < maxLines; i++) {
+      const line = lines[i];
       const openBraces = (line.match(/\{/g) || []).length;
       const closeBraces = (line.match(/\}/g) || []).length;
       
       currentDepth += openBraces - closeBraces;
+      currentDepth = Math.max(0, currentDepth); // Prevent negative depth
       maxDepth = Math.max(maxDepth, currentDepth);
-    });
+      
+      // Early exit if depth gets unreasonably high
+      if (maxDepth > 20) break;
+    }
     
-    return maxDepth;
+    return Math.min(maxDepth, 20); // Cap at reasonable level
   }
 
   private countParameters(signature: string): number {

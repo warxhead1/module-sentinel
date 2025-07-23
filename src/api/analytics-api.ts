@@ -127,8 +127,8 @@ export class AnalyticsAPI {
       return {
         success: true,
         data: clusters.map(cluster => ({
-          ...cluster,
-          centroid_embedding: cluster.centroid_embedding ? JSON.parse(cluster.centroid_embedding) : null
+          ...(cluster as any),
+          centroid_embedding: (cluster as any).centroid_embedding ? JSON.parse((cluster as any).centroid_embedding) : null
         }))
       };
     } catch (error) {
@@ -180,10 +180,10 @@ export class AnalyticsAPI {
       return {
         success: true,
         data: insights.map(insight => ({
-          ...insight,
-          affected_symbols: insight.affected_symbols ? JSON.parse(insight.affected_symbols) : [],
-          metrics: insight.metrics ? JSON.parse(insight.metrics) : null,
-          related_insights: insight.related_insights ? JSON.parse(insight.related_insights) : []
+          ...(insight as any),
+          affected_symbols: (insight as any).affected_symbols ? JSON.parse((insight as any).affected_symbols) : [],
+          metrics: (insight as any).metrics ? JSON.parse((insight as any).metrics) : null,
+          related_insights: (insight as any).related_insights ? JSON.parse((insight as any).related_insights) : []
         }))
       };
     } catch (error) {
@@ -212,8 +212,8 @@ export class AnalyticsAPI {
       return {
         success: true,
         data: recommendations.map(rec => ({
-          ...rec,
-          related_symbols: rec.related_symbols ? JSON.parse(rec.related_symbols) : []
+          ...(rec as any),
+          related_symbols: (rec as any).related_symbols ? JSON.parse((rec as any).related_symbols) : []
         }))
       };
     } catch (error) {
@@ -263,9 +263,9 @@ export class AnalyticsAPI {
       return {
         success: true,
         data: similarSymbols.map(symbol => ({
-          ...symbol,
-          semantic_embedding: options?.includeEmbeddings && symbol.semantic_embedding 
-            ? JSON.parse(symbol.semantic_embedding) 
+          ...(symbol as any),
+          semantic_embedding: options?.includeEmbeddings && (symbol as any).semantic_embedding 
+            ? JSON.parse((symbol as any).semantic_embedding) 
             : undefined
         }))
       };

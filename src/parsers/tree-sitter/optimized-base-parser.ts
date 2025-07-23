@@ -145,7 +145,6 @@ export abstract class OptimizedTreeSitterBaseParser {
       result = await this.performPatternBasedExtraction(content, filePath);
     }
     
-    // TARGETED TEST: Enable ONLY context extraction to isolate the hang
     // Apply semantic intelligence if enabled and we have both symbols AND a valid AST
     // Only process semantic intelligence when tree-sitter parsing succeeded
     if (this.options.enableSemanticAnalysis && tree && result.symbols.length > 0) {
@@ -160,9 +159,9 @@ export abstract class OptimizedTreeSitterBaseParser {
           filePath,
           {
             enableContextExtraction: true,
-            enableEmbeddingGeneration: false,  // DISABLE for targeted test
-            enableClustering: false,           // DISABLE for targeted test
-            enableInsightGeneration: false,    // DISABLE for targeted test
+            enableEmbeddingGeneration: true,
+            enableClustering: true,
+            enableInsightGeneration: true,
             debugMode: this.debugMode
           }
         );
@@ -181,10 +180,8 @@ export abstract class OptimizedTreeSitterBaseParser {
     // Cache the result
     this.setCachedParse(filePath, result);
     
-    // Store in database
-    this.debug(`Storing parsed data for ${filePath}...`);
-    await this.storeParsedData(filePath, result);
-    this.debug(`Database storage completed for ${filePath}`);
+    // Store in database - NOT NEEDED, UniversalIndexer handles this
+    // await this.storeParsedData(filePath, result);
     
     const duration = Date.now() - startTime;
     this.debug(`Parsed ${filePath} in ${duration}ms`);
@@ -197,14 +194,17 @@ export abstract class OptimizedTreeSitterBaseParser {
    * Store parsed data in database with batch operations
    */
   protected async storeParsedData(filePath: string, data: any): Promise<void> {
+    console.log(`[DEBUG] storeParsedData called for ${filePath} - SKIPPING DB WRITES`);
     const { symbols, relationships, patterns, controlFlowData } = data;
     
+    console.log(`[DEBUG] Extracted data properties: symbols=${symbols?.length || 0}, relationships=${relationships?.length || 0}`);
     this.debug(`Storing data for ${filePath}: ${symbols?.length || 0} symbols, ${relationships?.length || 0} relationships`);
     
-    this.debug(`Starting database transaction for ${filePath}...`);
-    // Start transaction for consistency
-    this.db.exec('BEGIN');
-    this.debug(`Transaction started for ${filePath}`);
+    // IMPORTANT: Parser should NOT write to database directly
+    // The UniversalIndexer is responsible for all database operations
+    // This prevents transaction conflicts and maintains clean architecture
+    console.log(`[DEBUG] Parser database writes disabled - returning without DB operations`);
+    return;
     
     try {
       // Get project ID (assuming it's set in options or environment)

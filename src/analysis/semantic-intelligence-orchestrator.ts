@@ -62,21 +62,39 @@ export class SemanticIntelligenceOrchestrator {
     this.db = db;
     this.debugMode = options.debugMode || false;
 
-    // Initialize engines
-    this.contextEngine = new SemanticContextEngine(db, { debugMode: this.debugMode });
-    this.embeddingEngine = new LocalCodeEmbeddingEngine(db, { 
-      dimensions: options.embeddingDimensions || 256,
-      debugMode: this.debugMode 
-    });
-    this.clusteringEngine = new SemanticClusteringEngine(db, this.embeddingEngine, { 
-      debugMode: this.debugMode 
-    });
-    this.insightsGenerator = new SemanticInsightsGenerator(
-      db, 
-      this.clusteringEngine, 
-      this.embeddingEngine, 
-      { debugMode: this.debugMode }
-    );
+    // Check if database is writable
+    let isReadOnly = false;
+    try {
+      // Test database write capability
+      db.prepare('CREATE TEMP TABLE IF NOT EXISTS test_write (id INTEGER)').run();
+      db.prepare('DROP TABLE IF EXISTS test_write').run();
+    } catch (error) {
+      console.warn('[SemanticOrchestrator] Database is read-only, semantic intelligence will run in limited mode');
+      isReadOnly = true;
+    }
+
+    // Initialize engines with read-only awareness
+    try {
+      this.contextEngine = new SemanticContextEngine(db, { debugMode: this.debugMode });
+      this.embeddingEngine = new LocalCodeEmbeddingEngine(db, { 
+        dimensions: options.embeddingDimensions || 256,
+        debugMode: this.debugMode 
+      });
+      this.clusteringEngine = new SemanticClusteringEngine(db, this.embeddingEngine, { 
+        debugMode: this.debugMode 
+      });
+      this.insightsGenerator = new SemanticInsightsGenerator(
+        db, 
+        this.clusteringEngine, 
+        this.embeddingEngine, 
+        { debugMode: this.debugMode }
+      );
+      
+      console.log('[SemanticOrchestrator] All semantic engines initialized successfully');
+    } catch (error) {
+      console.error('[SemanticOrchestrator] Failed to initialize semantic engines:', error);
+      throw error;
+    }
   }
 
   /**
@@ -105,6 +123,27 @@ export class SemanticIntelligenceOrchestrator {
       ...options
     };
 
+    // Add overall timeout to prevent entire semantic processing from hanging
+    const semanticProcessingTimeout = 5000; // 5 second timeout for entire semantic processing
+    
+    return Promise.race([
+      this.processSymbolsInternal(symbols, relationships, ast, sourceCode, filePath, config),
+      new Promise<SemanticIntelligenceResult>((_, reject) => 
+        setTimeout(() => reject(new Error(`Semantic processing timeout after ${semanticProcessingTimeout}ms`)), semanticProcessingTimeout)
+      )
+    ]);
+  }
+
+  private async processSymbolsInternal(
+    symbols: SymbolInfo[],
+    relationships: RelationshipInfo[],
+    ast: Parser.Tree,
+    sourceCode: string,
+    filePath: string,
+    config: SemanticIntelligenceOptions
+  ): Promise<SemanticIntelligenceResult> {
+    const startTime = Date.now();
+    
     if (this.debugMode) {
       console.log(`[SemanticOrchestrator] Processing ${symbols.length} symbols from ${filePath}`);
     }
@@ -124,26 +163,34 @@ export class SemanticIntelligenceOrchestrator {
     if (config.enableContextExtraction) {
       const contextStartTime = Date.now();
       
-      for (const symbol of symbols) {
-        try {
-          const context = await this.contextEngine.extractSemanticContext(
-            symbol, ast, sourceCode, relationships
-          );
-          contexts.set(symbol.qualifiedName, context);
-          stats.contextsExtracted++;
-        } catch (error) {
-          if (this.debugMode) {
-            console.error(`[SemanticOrchestrator] Context extraction failed for ${symbol.name}:`, error);
+      try {
+        for (const symbol of symbols) {
+          try {
+            const context = await this.contextEngine.extractSemanticContext(
+              symbol, ast, sourceCode, relationships
+            );
+            contexts.set(symbol.qualifiedName, context);
+            stats.contextsExtracted++;
+          } catch (error) {
+            console.warn(`[SemanticOrchestrator] Context extraction failed for ${symbol.name}:`, error);
+            // Continue with other symbols
           }
         }
+      } catch (error) {
+        console.error(`[SemanticOrchestrator] Context extraction loop failed:`, error);
+        // Continue with partial results
       }
+      
+      console.log(`[DEBUG] Context extraction completed: ${stats.contextsExtracted} contexts in ${Date.now() - contextStartTime}ms`);
       
       if (this.debugMode) {
         console.log(`[SemanticOrchestrator] Extracted ${stats.contextsExtracted} contexts in ${Date.now() - contextStartTime}ms`);
       }
     }
 
-    // Step 2: Generate embeddings
+    console.log(`[DEBUG] Moving to Step 2: Embedding generation (enabled=${config.enableEmbeddingGeneration})`);
+
+    // Step 2: Generate embeddings with timeout
     const embeddings: CodeEmbedding[] = [];
     if (config.enableEmbeddingGeneration && symbols.length > 0) {
       const embeddingStartTime = Date.now();
@@ -161,28 +208,54 @@ export class SemanticIntelligenceOrchestrator {
 
       try {
         console.log(`[SemanticOrchestrator] Attempting to generate embeddings for ${batchData.length} symbols`);
-        const batchEmbeddings = await this.embeddingEngine.generateBatchEmbeddings(batchData);
+        
+        // Add timeout for embedding generation
+        const embeddingPromise = this.embeddingEngine.generateBatchEmbeddings(batchData);
+        const embeddingTimeout = 15000; // 15 second timeout for embedding generation
+        
+        const batchEmbeddings = await Promise.race([
+          embeddingPromise,
+          new Promise<CodeEmbedding[]>((_, reject) => 
+            setTimeout(() => reject(new Error(`Embedding generation timeout after ${embeddingTimeout}ms`)), embeddingTimeout)
+          )
+        ]);
+        
         embeddings.push(...batchEmbeddings);
         stats.embeddingsGenerated = batchEmbeddings.length;
         
         console.log(`[SemanticOrchestrator] Generated ${stats.embeddingsGenerated} embeddings in ${Date.now() - embeddingStartTime}ms`);
       } catch (error) {
-        console.error('[SemanticOrchestrator] Batch embedding generation failed:', error);
-        console.error('[SemanticOrchestrator] Error stack:', error instanceof Error ? error.stack : String(error));
+        console.warn('[SemanticOrchestrator] Embedding generation failed or timed out:', error);
+        if (this.debugMode) {
+          console.error('[SemanticOrchestrator] Error stack:', error instanceof Error ? error.stack : String(error));
+        }
+        // Continue without embeddings
       }
     }
 
-    // Step 3: Perform clustering
+    console.log(`[DEBUG] Moving to Step 3: Clustering (enabled=${config.enableClustering}, embeddings=${embeddings.length})`);
+
+    // Step 3: Perform clustering with timeout
     const clusters: SemanticCluster[] = [];
     if (config.enableClustering && embeddings.length > 2) {
       const clusteringStartTime = Date.now();
       
       try {
-        const clusterResults = await this.clusteringEngine.clusterSymbols(
+        // Add timeout for clustering
+        const clusteringPromise = this.clusteringEngine.clusterSymbols(
           embeddings, 
           contexts, 
           config.clusteringOptions
         );
+        const clusteringTimeout = 10000; // 10 second timeout for clustering
+        
+        const clusterResults = await Promise.race([
+          clusteringPromise,
+          new Promise<SemanticCluster[]>((_, reject) => 
+            setTimeout(() => reject(new Error(`Clustering timeout after ${clusteringTimeout}ms`)), clusteringTimeout)
+          )
+        ]);
+        
         clusters.push(...clusterResults);
         stats.clustersCreated = clusterResults.length;
         
@@ -190,25 +263,39 @@ export class SemanticIntelligenceOrchestrator {
           console.log(`[SemanticOrchestrator] Created ${stats.clustersCreated} clusters in ${Date.now() - clusteringStartTime}ms`);
         }
       } catch (error) {
+        console.warn('[SemanticOrchestrator] Clustering failed or timed out:', error);
         if (this.debugMode) {
-          console.error('[SemanticOrchestrator] Clustering failed:', error);
+          console.error('[SemanticOrchestrator] Clustering error:', error);
         }
+        // Continue without clustering
       }
     }
 
-    // Step 4: Generate insights
+    console.log(`[DEBUG] Moving to Step 4: Insights (enabled=${config.enableInsightGeneration}, clusters=${clusters.length})`);
+
+    // Step 4: Generate insights with timeout
     const insights: SemanticInsight[] = [];
     if (config.enableInsightGeneration && clusters.length > 0) {
       const insightStartTime = Date.now();
       
       try {
-        const insightResults = await this.insightsGenerator.generateInsights(
+        // Add timeout for insight generation
+        const insightPromise = this.insightsGenerator.generateInsights(
           clusters,
           embeddings,
           contexts,
           symbols,
           config.insightOptions
         );
+        const insightTimeout = 8000; // 8 second timeout for insight generation
+        
+        const insightResults = await Promise.race([
+          insightPromise,
+          new Promise<SemanticInsight[]>((_, reject) => 
+            setTimeout(() => reject(new Error(`Insight generation timeout after ${insightTimeout}ms`)), insightTimeout)
+          )
+        ]);
+        
         insights.push(...insightResults);
         stats.insightsGenerated = insightResults.length;
         
@@ -216,13 +303,19 @@ export class SemanticIntelligenceOrchestrator {
           console.log(`[SemanticOrchestrator] Generated ${stats.insightsGenerated} insights in ${Date.now() - insightStartTime}ms`);
         }
       } catch (error) {
+        console.warn('[SemanticOrchestrator] Insight generation failed or timed out:', error);
         if (this.debugMode) {
-          console.error('[SemanticOrchestrator] Insight generation failed:', error);
+          console.error('[SemanticOrchestrator] Insight generation error:', error);
         }
+        // Continue without insights
       }
     }
 
+    console.log(`[DEBUG] All processing steps completed, calculating final stats...`);
+
     stats.totalProcessingTimeMs = Date.now() - startTime;
+    
+    console.log(`[DEBUG] Stats calculated, totalProcessingTimeMs=${stats.totalProcessingTimeMs}`);
 
     if (this.debugMode) {
       console.log(`[SemanticOrchestrator] Complete pipeline finished in ${stats.totalProcessingTimeMs}ms`);
@@ -231,6 +324,8 @@ export class SemanticIntelligenceOrchestrator {
       console.log(`  - Clusters: ${stats.clustersCreated}`);
       console.log(`  - Insights: ${stats.insightsGenerated}`);
     }
+
+    console.log(`[DEBUG] About to return semantic intelligence results...`);
 
     return {
       contexts,
