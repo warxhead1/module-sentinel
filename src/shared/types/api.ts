@@ -66,12 +66,30 @@ export interface GraphNode {
   parentGroupId?: string; // New: For explicit hierarchical grouping (e.g., namespace ID)
   size?: number;
   
+  // Rich symbol information from database
+  qualifiedName?: string;
+  filePath?: string;
+  line?: number;
+  column?: number;
+  endLine?: number;
+  endColumn?: number;
+  
+  // Type and signature information
+  signature?: string; // Full function/method signature
+  returnType?: string; // Return type for functions
+  visibility?: 'public' | 'private' | 'protected' | 'internal';
+  parentSymbolId?: number; // Direct parent symbol relationship
+  
+  // Rich semantic information
+  semanticTags?: string[]; // Cross-language semantic concepts
+  confidence?: number; // Parser confidence in symbol detection
+  isDefinition?: boolean; // True if this is the definition (not just declaration)
+  
   // Multi-language support
   language?: string; // 'cpp', 'python', 'typescript', 'javascript'
-  languageFeatures?: { // Language-specific features
+  languageFeatures?: { // Language-specific features (stored as JSON in DB)
     isAsync?: boolean; // TypeScript/JavaScript async functions
     isExported?: boolean; // Exports from modules
-    visibility?: 'public' | 'private' | 'protected'; // C++/TypeScript
     isStatic?: boolean; // Static methods/fields
     isAbstract?: boolean; // Abstract classes/methods
     decorators?: string[]; // Python/TypeScript decorators
@@ -81,15 +99,91 @@ export interface GraphNode {
     spawnsPython?: boolean; // Indicates this function spawns Python
     spawnsCpp?: boolean; // Indicates this function spawns C++
     spawnTarget?: string; // Target language/script for spawning
+    // C++ specific
+    isTemplate?: boolean; // Template function/class
+    templateParameters?: string[]; // Template parameter names
+    isVirtual?: boolean; // Virtual method
+    virtualMethods?: string[]; // List of virtual method names (for classes)
+    isInline?: boolean; // Inline function
+    hasCoroutineKeywords?: boolean; // Uses co_await, co_yield, co_return
+    executionMode?: 'cpu' | 'gpu' | 'simd'; // Detected execution mode
+    // TypeScript specific
+    tsDecorators?: string[]; // TypeScript decorators
+    genericConstraints?: string[]; // Generic type constraints
+    // Python specific
+    pythonDecorators?: string[]; // Python function decorators
+    isAsyncGenerator?: boolean; // Python async generator
   };
   
-  metrics?: { // Enhanced metrics
+  // Enhanced metrics and complexity
+  metrics?: {
     loc?: number; // Lines of Code
     cyclomaticComplexity?: number; // Cyclomatic Complexity
+    cognitiveComplexity?: number; // Cognitive complexity (nesting depth)
     callCount?: number; // How many times this is called
     crossLanguageCalls?: number; // Number of cross-language calls
     childCount?: number; // Number of child nodes (for group nodes)
-    // Add other static metrics as they become available from backend
+    parameterCount?: number; // Number of function parameters
+    nestingDepth?: number; // Maximum nesting depth
+    controlStructures?: number; // Number of if/for/while/switch/try statements
+    memberCount?: number; // Number of class members (for classes)
+    templateComplexity?: number; // Complexity of template instantiation
+  };
+  
+  // Pattern detection results
+  patterns?: {
+    detectedPatterns?: string[]; // Design patterns detected (factory, observer, etc.)
+    antiPatterns?: string[]; // Anti-patterns detected
+    architecturalRole?: string; // Role in architecture (controller, service, model, etc.)
+    codeSmells?: string[]; // Detected code smells
+    
+    // Enhanced pattern categorization
+    primaryPattern?: {
+      name: string; // Primary pattern name
+      family: 'creational' | 'structural' | 'behavioral' | 'architectural' | 'concurrency'; // Pattern family
+      strength: number; // Confidence score 0-100
+      role: 'creator' | 'consumer' | 'coordinator' | 'observer' | 'mediator' | 'subject'; // Node's role in pattern
+      health: 'healthy' | 'warning' | 'problematic' | 'anti-pattern'; // Pattern implementation quality
+    };
+    
+    secondaryPatterns?: Array<{
+      name: string;
+      family: 'creational' | 'structural' | 'behavioral' | 'architectural' | 'concurrency';
+      strength: number;
+      role: string;
+    }>;
+    
+    patternMetrics?: {
+      patternComplexity?: number; // How complex this pattern implementation is
+      patternConsistency?: number; // How consistent with standard pattern implementation (0-100)
+      refactoringPriority?: 'none' | 'low' | 'medium' | 'high' | 'critical'; // Refactoring urgency
+      evolutionStage?: 'emerging' | 'stable' | 'mature' | 'degrading' | 'legacy'; // Pattern lifecycle stage
+    };
+    
+    patternRelationships?: Array<{
+      relatedNodeId: string; // ID of related node in the same pattern
+      relationshipType: 'collaborates' | 'creates' | 'observes' | 'mediates' | 'decorates'; // How nodes relate in pattern
+      strength: number; // Strength of pattern relationship
+    }>;
+  };
+  
+  // Documentation and comments
+  documentation?: {
+    hasDocumentation?: boolean; // Has doc comments
+    docString?: string; // Brief documentation excerpt
+    parameterDocs?: Record<string, string>; // Parameter documentation
+    returnDoc?: string; // Return value documentation
+    examples?: string[]; // Code examples from docs
+  };
+  
+  // Performance characteristics
+  performance?: {
+    estimatedComplexity?: 'O(1)' | 'O(log n)' | 'O(n)' | 'O(n²)' | 'O(n!)' | 'unknown';
+    memoryUsage?: 'low' | 'medium' | 'high' | 'unknown';
+    isHotPath?: boolean; // Frequently called function
+    hasAsyncOperations?: boolean; // Contains async/await operations
+    hasFileIO?: boolean; // Contains file I/O operations
+    hasNetworkCalls?: boolean; // Contains network operations
   };
   
   // D3 simulation properties
@@ -105,16 +199,51 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
-  type: string; // 'calls', 'inherits', 'uses', 'includes', 'spawns', 'imports'
+  type: string; // 'calls', 'inherits', 'uses', 'includes', 'spawns', 'imports', 'instantiates', 'overrides'
   weight?: number;
   details?: string; // Enhanced tooltip information
+  
+  // Rich relationship context from database
+  contextLine?: number; // Line number where relationship occurs
+  contextColumn?: number; // Column number where relationship occurs
+  contextSnippet?: string; // Code snippet showing the relationship
+  confidence?: number; // Confidence in relationship detection (0.0 - 1.0)
   
   // Multi-language relationship properties
   isCrossLanguage?: boolean; // True if connecting different language nodes
   sourceLanguage?: string; // Language of source node
   targetLanguage?: string; // Language of target node
   spawnType?: 'process' | 'script' | 'module'; // Type of cross-language spawn
-  confidence?: number; // Confidence in relationship detection
+  bridgeType?: string; // How languages are bridged (FFI, subprocess, etc.)
+  
+  // Relationship semantics
+  usagePattern?: string; // How the relationship is used (parameter, return, assignment, etc.)
+  accessType?: 'read' | 'write' | 'readwrite' | 'execute'; // Type of access
+  frequency?: number; // How often this relationship occurs
+  isConditional?: boolean; // True if relationship only occurs under certain conditions
+  
+  // Performance implications
+  performanceImpact?: 'none' | 'low' | 'medium' | 'high'; // Performance cost of relationship
+  isAsynchronous?: boolean; // True for async calls
+  hasErrorHandling?: boolean; // True if relationship has proper error handling
+  
+  // Template and generic relationships
+  templateInstantiation?: {
+    templateArgs?: string[]; // Template arguments for C++ instantiations
+    genericConstraints?: string[]; // Generic type constraints
+  };
+  
+  // Inheritance specific
+  inheritanceDetails?: {
+    accessSpecifier?: 'public' | 'private' | 'protected'; // C++ inheritance access
+    isVirtual?: boolean; // Virtual inheritance
+    overrideDetails?: string; // Method override information
+  };
+  
+  // Metadata for rich visualization
+  metadata?: {
+    [key: string]: any; // Language-specific relationship metadata
+  };
 }
 
 export interface Relationship {
@@ -124,6 +253,10 @@ export interface Relationship {
   type: string;
   confidence: number;
   context?: string;
+  contextLine?: number;
+  contextColumn?: number;
+  contextSnippet?: string;
+  metadata?: Record<string, any>;
 }
 
 export interface SearchQuery {

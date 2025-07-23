@@ -22,6 +22,7 @@ import {
 import { UnifiedASTVisitor } from '../unified-ast-visitor.js';
 import { VisitorHandlers } from '../unified-ast-visitor.js';
 import { SymbolInfo, RelationshipInfo, PatternInfo, ParseOptions, ParseResult } from './parser-types.js';
+import { SemanticIntelligenceOrchestrator, SemanticIntelligenceResult } from '../../analysis/semantic-intelligence-orchestrator.js';
 
 export abstract class OptimizedTreeSitterBaseParser {
   protected parser: Parser;
@@ -30,6 +31,7 @@ export abstract class OptimizedTreeSitterBaseParser {
   protected visitor: UnifiedASTVisitor;
   protected options: ParseOptions;
   protected debugMode: boolean = false;
+  protected semanticOrchestrator: SemanticIntelligenceOrchestrator;
   
   // Parser instance pool for reuse
   private static parserPool = new Map<string, Parser>();
@@ -65,6 +67,12 @@ export abstract class OptimizedTreeSitterBaseParser {
       this.createVisitorHandlers(),
       this.getNodeTypeMap()
     );
+    
+    // Initialize semantic intelligence orchestrator
+    this.semanticOrchestrator = new SemanticIntelligenceOrchestrator(db, {
+      debugMode: this.debugMode,
+      embeddingDimensions: 256
+    });
   }
   
   /**
@@ -111,19 +119,62 @@ export abstract class OptimizedTreeSitterBaseParser {
     }
     
     let result;
+    let tree: Parser.Tree | undefined;
     
-    // Use pattern-based parsing for large files
-    if (content.length > 50 * 1024) { // 50KB threshold
-      this.debug(`Using pattern-based parsing for large file: ${filePath}`);
+    // Always try tree-sitter first (it's faster and more accurate)
+    try {
+      this.debug(`Parsing AST for ${filePath}...`);
+      tree = this.parser.parse(content);
+      this.debug(`Traversing AST for ${filePath}...`);
+      result = await this.visitor.traverse(tree, filePath, content);
+      this.debug(`AST traversal completed for ${filePath}`);
+      
+      // If tree-sitter found very few symbols, supplement with pattern-based analysis
+      if (result.symbols.length < 3 && content.length > 1000) {
+        this.debug(`Tree-sitter found only ${result.symbols.length} symbols, supplementing with patterns`);
+        const patternResult = await this.performPatternBasedExtraction(content, filePath);
+        
+        // Merge results if pattern-based found significantly more symbols
+        if (patternResult.symbols.length > result.symbols.length * 2) {
+          this.debug(`Pattern parser found ${patternResult.symbols.length} symbols vs tree-sitter's ${result.symbols.length}, using pattern results`);
+          result = patternResult;
+        }
+      }
+    } catch (error) {
+      this.debug(`Tree-sitter parsing failed, falling back to patterns: ${error}`);
       result = await this.performPatternBasedExtraction(content, filePath);
-    } else {
-      // Use tree-sitter for smaller files
+    }
+    
+    // TARGETED TEST: Enable ONLY context extraction to isolate the hang
+    // Apply semantic intelligence if enabled and we have both symbols AND a valid AST
+    // Only process semantic intelligence when tree-sitter parsing succeeded
+    if (this.options.enableSemanticAnalysis && tree && result.symbols.length > 0) {
       try {
-        const tree = this.parser.parse(content);
-        result = await this.visitor.traverse(tree, filePath, content);
+        this.debug(`Starting semantic analysis with tree-sitter AST and ${result.symbols.length} symbols`);
+        
+        const semanticResult = await this.semanticOrchestrator.processSymbols(
+          result.symbols,
+          result.relationships,
+          tree!, // Pass valid tree from tree-sitter parsing
+          content,
+          filePath,
+          {
+            enableContextExtraction: true,
+            enableEmbeddingGeneration: false,  // DISABLE for targeted test
+            enableClustering: false,           // DISABLE for targeted test
+            enableInsightGeneration: false,    // DISABLE for targeted test
+            debugMode: this.debugMode
+          }
+        );
+        
+        // Enhance the result with semantic intelligence data
+        (result as any).semanticIntelligence = semanticResult;
+        
+        this.debug(`Semantic analysis completed: ${semanticResult.stats.contextsExtracted} contexts, ${semanticResult.stats.embeddingsGenerated} embeddings, ${semanticResult.stats.clustersCreated} clusters, ${semanticResult.stats.insightsGenerated} insights`);
+        
       } catch (error) {
-        this.debug(`Tree-sitter parsing failed, falling back to patterns: ${error}`);
-        result = await this.performPatternBasedExtraction(content, filePath);
+        this.debug(`Semantic analysis failed: ${error}`);
+        // Continue without semantic analysis
       }
     }
     
@@ -131,7 +182,9 @@ export abstract class OptimizedTreeSitterBaseParser {
     this.setCachedParse(filePath, result);
     
     // Store in database
+    this.debug(`Storing parsed data for ${filePath}...`);
     await this.storeParsedData(filePath, result);
+    this.debug(`Database storage completed for ${filePath}`);
     
     const duration = Date.now() - startTime;
     this.debug(`Parsed ${filePath} in ${duration}ms`);
@@ -148,8 +201,10 @@ export abstract class OptimizedTreeSitterBaseParser {
     
     this.debug(`Storing data for ${filePath}: ${symbols?.length || 0} symbols, ${relationships?.length || 0} relationships`);
     
+    this.debug(`Starting database transaction for ${filePath}...`);
     // Start transaction for consistency
     this.db.exec('BEGIN');
+    this.debug(`Transaction started for ${filePath}`);
     
     try {
       // Get project ID (assuming it's set in options or environment)
@@ -184,9 +239,13 @@ export abstract class OptimizedTreeSitterBaseParser {
         }));
         
         // Use onConflictDoNothing to handle duplicate symbols
+        this.debug(`Inserting ${symbolRecords.length} symbols for ${filePath}...`);
         await this.drizzleDb.insert(universalSymbols)
           .values(symbolRecords)
           .onConflictDoNothing();
+        this.debug(`Symbol insertion completed for ${filePath}`);
+        
+        // Parent resolution will be done after symbol map is populated below
       }
       
       // Get symbol IDs for relationships and control flow
@@ -263,7 +322,7 @@ export abstract class OptimizedTreeSitterBaseParser {
       
       this.db.exec('COMMIT');
       this.debug(`Successfully stored data for ${filePath}`);
-    } catch (error) {
+    } catch (error: any) {
       this.db.exec('ROLLBACK');
       this.debug(`Failed to store data for ${filePath}: ${error}`);
       console.error(`Database error storing ${filePath}:`, error);

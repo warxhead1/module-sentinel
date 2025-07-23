@@ -357,7 +357,32 @@ export class GraphThemeManager {
    */
   public getNodeColor(node: GraphNode): string {
     const theme = this.getCurrentTheme();
-    return theme.colors.nodes[node.type] || theme.colors.nodes.unknown;
+    let baseColor = theme.colors.nodes[node.type] || theme.colors.nodes.unknown;
+    
+    // Adjust color based on confidence level
+    if (node.confidence !== undefined && node.confidence < 0.8) {
+      // Desaturate low confidence nodes
+      const hsl = d3.hsl(baseColor);
+      hsl.s *= node.confidence; // Reduce saturation
+      baseColor = hsl.toString();
+    }
+    
+    // Special colors for specific features
+    if (node.languageFeatures?.isAsync) {
+      // Add slight purple tint for async functions
+      const rgb = d3.rgb(baseColor);
+      rgb.b = Math.min(255, rgb.b + 30);
+      baseColor = rgb.toString();
+    }
+    
+    if (node.languageFeatures?.isExported) {
+      // Slightly brighter for exported symbols
+      const hsl = d3.hsl(baseColor);
+      hsl.l = Math.min(1, hsl.l * 1.1);
+      baseColor = hsl.toString();
+    }
+    
+    return baseColor;
   }
 
   public getNodeRadius(node: GraphNode): number {
@@ -374,8 +399,38 @@ export class GraphThemeManager {
       return Math.max(20, Math.min(40, 20 + Math.sqrt(node.metrics?.childCount || 1) * 3));
     }
     
-    const sizeMetric = node.metrics?.loc || node.metrics?.cyclomaticComplexity || node.size || 10;
-    return Math.max(theme.sizes.nodeRadius.min, Math.min(theme.sizes.nodeRadius.max, Math.sqrt(sizeMetric) * 2));
+    // Enhanced sizing based on multiple factors
+    let baseSize = theme.sizes.nodeRadius.default;
+    
+    // Factor in complexity metrics
+    const complexity = node.metrics?.cyclomaticComplexity || 0;
+    const loc = node.metrics?.loc || 0;
+    const callCount = node.metrics?.callCount || 0;
+    
+    // Combine metrics for sizing
+    const complexityFactor = Math.sqrt(complexity) * 1.5;
+    const locFactor = Math.sqrt(loc) * 0.8;
+    const callFactor = Math.sqrt(callCount) * 0.5;
+    
+    baseSize += complexityFactor + locFactor + callFactor;
+    
+    // Adjust for confidence (low confidence = smaller)
+    if (node.confidence !== undefined) {
+      baseSize *= Math.max(0.6, node.confidence);
+    }
+    
+    // Special sizing for specific symbol features
+    if (node.signature) {
+      // Larger nodes for complex signatures
+      const paramCount = (node.signature.match(/,/g) || []).length + 1;
+      baseSize += Math.min(paramCount * 0.3, 3);
+    }
+    
+    if (node.languageFeatures?.isTemplate) {
+      baseSize += 2; // Template symbols slightly larger
+    }
+    
+    return Math.max(theme.sizes.nodeRadius.min, Math.min(theme.sizes.nodeRadius.max, Math.round(baseSize)));
   }
 
   public getNodeStroke(node: GraphNode): string {
@@ -402,6 +457,28 @@ export class GraphThemeManager {
     if (node.type.includes('-group')) {
       return 'drop-shadow(0 0 8px rgba(147, 112, 219, 0.4))';
     }
+    
+    // Enhanced filtering based on node properties
+    if (node.confidence !== undefined && node.confidence < 0.5) {
+      // Low confidence nodes get a subtle red glow
+      return 'drop-shadow(0 0 4px rgba(255, 100, 100, 0.3))';
+    }
+    
+    if (node.languageFeatures?.isAsync) {
+      // Async functions get a purple glow
+      return 'drop-shadow(0 0 4px rgba(138, 43, 226, 0.4))';
+    }
+    
+    if (node.languageFeatures?.isExported) {
+      // Exported symbols get a subtle green glow
+      return 'drop-shadow(0 0 3px rgba(78, 205, 196, 0.3))';
+    }
+    
+    if (node.metrics?.cyclomaticComplexity && node.metrics.cyclomaticComplexity > 10) {
+      // High complexity nodes get an orange glow
+      return 'drop-shadow(0 0 4px rgba(255, 165, 0, 0.4))';
+    }
+    
     return 'none';
   }
 
@@ -610,5 +687,273 @@ export class GraphThemeManager {
     }
     
     return result;
+  }
+
+  /**
+   * Pattern-based styling methods
+   */
+
+  /**
+   * Get pattern-family based color scheme
+   */
+  public getPatternColor(node: GraphNode): string {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return this.getNodeColor(node); // Fallback to normal node color
+    }
+
+    const theme = this.getCurrentTheme();
+    
+    // Color families for different pattern types
+    const patternColors = {
+      'creational': {
+        'healthy': '#ff7675',      // Warm red for creational patterns
+        'warning': '#fdcb6e',      // Yellow for warnings
+        'problematic': '#d63031',  // Dark red for problems
+        'anti-pattern': '#2d3436'  // Dark gray for anti-patterns
+      },
+      'structural': {
+        'healthy': '#74b9ff',      // Cool blue for structural patterns
+        'warning': '#0984e3',      // Darker blue for warnings
+        'problematic': '#0756a3',  // Navy blue for problems
+        'anti-pattern': '#2d3436'
+      },
+      'behavioral': {
+        'healthy': '#a29bfe',      // Purple for behavioral patterns
+        'warning': '#6c5ce7',      // Darker purple for warnings
+        'problematic': '#5f3dc4',  // Deep purple for problems
+        'anti-pattern': '#2d3436'
+      },
+      'architectural': {
+        'healthy': '#00b894',      // Green for architectural patterns
+        'warning': '#00a085',      // Darker green for warnings
+        'problematic': '#006b52',  // Deep green for problems
+        'anti-pattern': '#2d3436'
+      },
+      'concurrency': {
+        'healthy': '#fd79a8',      // Pink for concurrency patterns
+        'warning': '#e84393',      // Darker pink for warnings
+        'problematic': '#d63384',  // Deep pink for problems
+        'anti-pattern': '#2d3436'
+      }
+    };
+
+    const familyColors = patternColors[primaryPattern.family];
+    if (!familyColors) {
+      return this.getNodeColor(node); // Fallback
+    }
+
+    const baseColor = familyColors[primaryPattern.health];
+    
+    // Adjust based on pattern strength
+    if (primaryPattern.strength < 60) {
+      const hsl = d3.hsl(baseColor);
+      hsl.s *= (primaryPattern.strength / 100); // Reduce saturation for low strength
+      return hsl.toString();
+    }
+
+    return baseColor;
+  }
+
+  /**
+   * Get pattern-specific node shape
+   */
+  public getPatternShape(node: GraphNode): string {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return 'circle'; // Default shape
+    }
+
+    // Shape mapping based on pattern role
+    const roleShapes = {
+      'creator': 'square',      // Creators are squares
+      'consumer': 'circle',     // Consumers are circles
+      'coordinator': 'diamond', // Coordinators are diamonds
+      'observer': 'triangle',   // Observers are triangles
+      'mediator': 'hexagon',    // Mediators are hexagons
+      'subject': 'pentagon'     // Subjects are pentagons
+    };
+
+    return roleShapes[primaryPattern.role] || 'circle';
+  }
+
+  /**
+   * Get pattern health indicator border style
+   */
+  public getPatternBorder(node: GraphNode): { color: string; width: number; style: string } {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return { color: 'none', width: 0, style: 'solid' };
+    }
+
+    const theme = this.getCurrentTheme();
+    
+    const healthStyles = {
+      'healthy': { color: '#00b894', width: 2, style: 'solid' },
+      'warning': { color: '#fdcb6e', width: 2, style: 'dashed' },
+      'problematic': { color: '#d63031', width: 3, style: 'dotted' },
+      'anti-pattern': { color: '#2d3436', width: 4, style: 'double' }
+    };
+
+    return healthStyles[primaryPattern.health] || { color: theme.colors.border, width: 1, style: 'solid' };
+  }
+
+  /**
+   * Get pattern-specific visual effects (shadows, glows)
+   */
+  public getPatternEffect(node: GraphNode): string {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return this.getNodeFilter(node); // Fallback to normal effects
+    }
+
+    // Effects based on pattern family and health
+    const familyEffects = {
+      'creational': 'drop-shadow(0 0 6px rgba(255, 118, 117, 0.6))',
+      'structural': 'drop-shadow(0 0 6px rgba(116, 185, 255, 0.6))',
+      'behavioral': 'drop-shadow(0 0 6px rgba(162, 155, 254, 0.6))',
+      'architectural': 'drop-shadow(0 0 6px rgba(0, 184, 148, 0.6))',
+      'concurrency': 'drop-shadow(0 0 6px rgba(253, 121, 168, 0.6))'
+    };
+
+    const baseEffect = familyEffects[primaryPattern.family] || 'none';
+
+    // Enhance effect for problematic patterns
+    if (primaryPattern.health === 'anti-pattern') {
+      return 'drop-shadow(0 0 8px rgba(214, 48, 49, 0.8))';
+    } else if (primaryPattern.health === 'problematic') {
+      return 'drop-shadow(0 0 6px rgba(214, 48, 49, 0.5))';
+    }
+
+    return baseEffect;
+  }
+
+  /**
+   * Get pattern strength visualization (size multiplier)
+   */
+  public getPatternSizeMultiplier(node: GraphNode): number {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return 1.0;
+    }
+
+    // Scale size based on pattern strength (80-120% of normal size)
+    const strengthMultiplier = 0.8 + (primaryPattern.strength / 100) * 0.4;
+    
+    // Larger size for important architectural roles
+    const roleMultipliers = {
+      'coordinator': 1.2,
+      'mediator': 1.15,
+      'creator': 1.1,
+      'subject': 1.05,
+      'observer': 1.0,
+      'consumer': 0.95
+    };
+
+    const roleMultiplier = roleMultipliers[primaryPattern.role] || 1.0;
+    
+    return strengthMultiplier * roleMultiplier;
+  }
+
+  /**
+   * Get pattern-specific icon or badge symbol
+   */
+  public getPatternIcon(node: GraphNode): string | null {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      return null;
+    }
+
+    // Unicode symbols for different patterns
+    const patternIcons = {
+      'Factory': '🏭',
+      'Singleton': '1️⃣',
+      'Builder': '🔨',
+      'Observer': '👁️',
+      'Command': '⚡',
+      'State': '🔄',
+      'Decorator': '🎨',
+      'Adapter': '🔌',
+      'MVC': '🏗️',
+      'Repository': '📦',
+      'Producer-Consumer': '🏃‍♂️➡️🏃‍♀️'
+    };
+
+    return (patternIcons as any)[primaryPattern.name] || '🔍';
+  }
+
+  /**
+   * Get pattern-specific tooltip color scheme
+   */
+  public getPatternTooltipTheme(node: GraphNode): { background: string; border: string; text: string } {
+    const primaryPattern = node.patterns?.primaryPattern;
+    if (!primaryPattern) {
+      const theme = this.getCurrentTheme();
+      return {
+        background: theme.colors.background,
+        border: theme.colors.border,
+        text: theme.colors.text
+      };
+    }
+
+    // Theme colors based on pattern family
+    const familyThemes = {
+      'creational': { background: '#fff5f5', border: '#ff7675', text: '#2d3436' },
+      'structural': { background: '#f0f8ff', border: '#74b9ff', text: '#2d3436' },
+      'behavioral': { background: '#f8f7ff', border: '#a29bfe', text: '#2d3436' },
+      'architectural': { background: '#f0fff4', border: '#00b894', text: '#2d3436' },
+      'concurrency': { background: '#fff0f6', border: '#fd79a8', text: '#2d3436' }
+    };
+
+    return familyThemes[primaryPattern.family] || {
+      background: '#ffffff',
+      border: '#cccccc',
+      text: '#333333'
+    };
+  }
+
+  /**
+   * Get aggregated pattern statistics for the current graph
+   */
+  public getPatternStatistics(nodes: GraphNode[]): {
+    totalPatterns: number;
+    patternsByFamily: Record<string, number>;
+    healthDistribution: Record<string, number>;
+    topPatterns: Array<{ name: string; count: number }>;
+  } {
+    const patternsByFamily: Record<string, number> = {};
+    const healthDistribution: Record<string, number> = {};
+    const patternCounts: Record<string, number> = {};
+
+    let totalPatterns = 0;
+
+    for (const node of nodes) {
+      const primaryPattern = node.patterns?.primaryPattern;
+      if (primaryPattern) {
+        totalPatterns++;
+        
+        // Count by family
+        patternsByFamily[primaryPattern.family] = (patternsByFamily[primaryPattern.family] || 0) + 1;
+        
+        // Count by health
+        healthDistribution[primaryPattern.health] = (healthDistribution[primaryPattern.health] || 0) + 1;
+        
+        // Count by pattern name
+        patternCounts[primaryPattern.name] = (patternCounts[primaryPattern.name] || 0) + 1;
+      }
+    }
+
+    // Get top 5 most common patterns
+    const topPatterns = Object.entries(patternCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }));
+
+    return {
+      totalPatterns,
+      patternsByFamily,
+      healthDistribution,
+      topPatterns
+    };
   }
 }

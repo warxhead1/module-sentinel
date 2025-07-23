@@ -36,6 +36,7 @@ export interface RelationshipInfo {
   usagePattern?: string;
   sourceText?: string;
   bridgeType?: string;
+  metadata?: Record<string, any>; // Additional metadata for enhanced analysis
 }
 
 export interface PatternInfo {
@@ -62,4 +63,5 @@ export interface ParseResult {
   patterns: PatternInfo[];
   controlFlowData: { blocks: any[]; calls: any[] };
   stats: any;
+  semanticIntelligence?: any; // SemanticIntelligenceResult
 }

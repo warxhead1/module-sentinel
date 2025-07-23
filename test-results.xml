@@ -1,104 +1,52 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Module Sentinel Test Suite" tests="37" failures="3" skipped="1" time="2.51">
-  <testsuite name="Module Sentinel" tests="37" failures="3" skipped="1" time="2.51">
-    <testcase classname="DrizzleOrmTest" name="testProjectOperations" time="5">
+<testsuites name="Module Sentinel Test Suite" tests="12" failures="3" skipped="0" time="208.062">
+  <testsuite name="Module Sentinel" tests="12" failures="3" skipped="0" time="208.062">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Language Detection Working" time="0">
     </testcase>
-    <testcase classname="DrizzleOrmTest" name="testLanguageOperations" time="5">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Essential Symbol Kinds Present" time="0">
     </testcase>
-    <testcase classname="DrizzleOrmTest" name="testSymbolOperations" time="7">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Essential Relationship Types Present" time="0">
     </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="planet_builder_method_extraction" time="1">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ module with structs, functions, and field access - Symbol Detection" time="0">
     </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="advanced_height_generator_method" time="0">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ module with structs, functions, and field access - Relationship Detection" time="0">
     </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="namespace_hierarchy_extraction" time="1">
-    </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="parameter_extraction_completeness" time="1">
-    </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="return_type_extraction" time="1">
-    </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="class_membership_extraction" time="0">
-    </testcase>
-    <testcase classname="ComprehensiveSymbolExtractionTest" name="template_parameter_extraction" time="1">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="namespace_stack_management" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="export_namespace_recognition" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="multi_level_namespace_parsing" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="scope_boundary_tracking" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="qualified_name_building" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="namespace_extraction" time="0">
-    </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="real_file_namespace_parsing" time="2">
-    </testcase>
-    <testcase classname="UniversalIndexerTest" name="testCreateIndexer" time="0">
-    </testcase>
-    <testcase classname="UniversalIndexerTest" name="testIndexProject" time="465">
-      <failure message="Indexing failed">
-Error: Indexing failed
-    at UniversalIndexerTest.testIndexProject (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/UniversalIndexerSimpleTest.ts:71:15)
-    at async UniversalIndexerTest.run (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/UniversalIndexerSimpleTest.ts:25:18)
-    at async TestRunner.runTests (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:155:29)
-    at async TestRunner.run (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:64:23)
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ factory pattern with modules and templates - Symbol Detection" time="0">
+      <failure message="1/4 symbols found">
+Error: 1/4 symbols found
+    at ComprehensiveParserCapabilitiesTest.testFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:450:45)
+    at async ComprehensiveParserCapabilitiesTest.testSpecificFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:356:5)
+    at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:121:7)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
       </failure>
     </testcase>
-    <testcase classname="UniversalIndexerTest" name="testFindSymbols" time="0">
-    </testcase>
-    <testcase classname="RelationshipExtractionTest" name="buffer_factory_parsing" time="1">
-    </testcase>
-    <testcase classname="RelationshipExtractionTest" name="pattern_based_inheritance_extraction" time="8">
-    </testcase>
-    <testcase classname="RelationshipExtractionTest" name="pattern_based_function_call_extraction" time="9">
-    </testcase>
-    <testcase classname="RelationshipExtractionTest" name="database_relationships" time="0">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testCreateAPI" time="1">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testStartStopServer" time="1">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testSymbolsEndpoint" time="11">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testStatsEndpoint" time="3">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testSymbolsEndpoint" time="2">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testRelationshipsEndpoint" time="1">
-    </testcase>
-    <testcase classname="VisualizationAPITest" name="testSQLQueries" time="4">
-    </testcase>
-    <testcase classname="ControlFlowAnalysisTest" name="testSerializeToStringControlFlow" time="0">
-      <skipped/>
-    </testcase>
-    <testcase classname="EnhancedArchitectureTest" name="testCppParserIntegration" time="1">
-      <failure message="ENOENT: no such file or directory, open &apos;/tmp/test-enhanced.ixx&apos;">
-Error: ENOENT: no such file or directory, open &apos;/tmp/test-enhanced.ixx&apos;
-    at async open (node:internal/fs/promises:639:25)
-    at async Object.readFile (node:internal/fs/promises:1243:14)
-    at async CppUniversalParser.parseRelationships (/home/warxh/cpp_mcp_master/module-sentinel/src/parsers/languages/cpp-universal-parser.ts:82:21)
-    at async EnhancedArchitectureTest.testCppParserIntegration (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/EnhancedArchitectureTest.ts:77:29)
-    at async EnhancedArchitectureTest.run (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/EnhancedArchitectureTest.ts:23:18)
-    at async TestRunner.runTests (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:155:29)
-    at async TestRunner.run (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:64:23)
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="C++ factory pattern with modules and templates - Relationship Detection" time="0">
+      <failure message="0/3 relationships found">
+Error: 0/3 relationships found
+    at ComprehensiveParserCapabilitiesTest.testFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:457:57)
+    at async ComprehensiveParserCapabilitiesTest.testSpecificFileExpectations (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:356:5)
+    at async ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:121:7)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
       </failure>
     </testcase>
-    <testcase classname="EnhancedArchitectureTest" name="testUniversalPatternEngine" time="1">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Function Signatures Completeness (>80%)" time="0">
     </testcase>
-    <testcase classname="EnhancedArchitectureTest" name="testCrossLanguageAnalyzer" time="0">
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Return Types Completeness (>70%)" time="0">
     </testcase>
-    <testcase classname="EnhancedArchitectureTest" name="testMultiLanguageReadiness" time="7">
-    </testcase>
-    <testcase classname="CrossLanguageFlowTest" name="CrossLanguageFlowTest" time="0">
-      <failure message="No files processed">
-Error: No files processed
-    at CrossLanguageFlowTest.runTest (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/CrossLanguageFlowTest.ts:82:13)
-    at async CrossLanguageFlowTest.run (/home/warxh/cpp_mcp_master/module-sentinel/test/unit/CrossLanguageFlowTest.ts:20:7)
-    at async TestRunner.runTests (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:155:29)
-    at async TestRunner.run (/home/warxh/cpp_mcp_master/module-sentinel/test/TestRunner.ts:64:23)
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Modern C++ Features Detection" time="0">
+      <failure message="No modern C++ features detected in codebase">
+Error: No modern C++ features detected in codebase
+    at ComprehensiveParserCapabilitiesTest.testModernCppFeatures (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:581:35)
+    at ComprehensiveParserCapabilitiesTest.run (/workspace/test/unit/ComprehensiveParserCapabilitiesTest.ts:127:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:193:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:81:23)
       </failure>
+    </testcase>
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Template Detection (Known Gap)" time="0">
+    </testcase>
+    <testcase classname="ComprehensiveParserCapabilitiesTest" name="Inheritance Relationships (Known Gap)" time="0">
     </testcase>
   </testsuite>
 </testsuites>

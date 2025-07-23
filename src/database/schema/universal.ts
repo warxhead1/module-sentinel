@@ -96,6 +96,13 @@ export const universalSymbols: any = sqliteTable('universal_symbols', {
   // Semantic tags for cross-language concepts  
   semanticTags: text('semantic_tags'), // JSON array
   
+  // Enhanced semantic intelligence fields
+  semanticEmbedding: text('semantic_embedding'), // Binary embedding data as base64
+  readabilityScore: real('readability_score'),
+  architecturalRole: text('architectural_role'), // 'controller', 'service', 'model', 'utility', etc.
+  complexityMetrics: text('complexity_metrics'), // JSON object with various complexity measures
+  semanticSimilarityHash: text('semantic_similarity_hash'), // For quick similarity lookups
+  
   // Analysis metadata
   confidence: real('confidence').default(1.0),
   
@@ -218,5 +225,159 @@ export const searchQueries = sqliteTable('search_queries', {
   queryTypeIdx: index('idx_search_queries_type').on(table.queryType),
   timestampIdx: index('idx_search_queries_timestamp').on(table.timestamp),
   projectIdx: index('idx_search_queries_project').on(table.projectId),
+}));
+
+// Semantic clusters - groups of semantically similar symbols
+export const semanticClusters = sqliteTable('semantic_clusters', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  clusterName: text('cluster_name').notNull(),
+  clusterType: text('cluster_type').notNull(), // 'functional', 'architectural', 'pattern-based'
+  centroidEmbedding: text('centroid_embedding'), // Base64 encoded embedding centroid
+  similarityThreshold: real('similarity_threshold').default(0.8),
+  symbolCount: integer('symbol_count').default(0),
+  quality: real('quality'), // Cluster quality metric (0-1)
+  description: text('description'), // Auto-generated cluster description
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_clusters_project_type').on(table.projectId, table.clusterType),
+  qualityIdx: index('idx_semantic_clusters_quality').on(table.quality),
+  nameIdx: index('idx_semantic_clusters_name').on(table.clusterName),
+}));
+
+// Cluster membership - many-to-many relationship between symbols and clusters
+export const clusterMembership = sqliteTable('cluster_membership', {
+  clusterId: integer('cluster_id').notNull().references(() => semanticClusters.id),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id),
+  similarity: real('similarity').notNull(), // Similarity to cluster centroid (0-1)
+  role: text('role'), // 'core', 'peripheral', 'outlier'
+  assignedAt: integer('assigned_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.clusterId, table.symbolId] }),
+  clusterIdx: index('idx_cluster_membership_cluster').on(table.clusterId),
+  symbolIdx: index('idx_cluster_membership_symbol').on(table.symbolId),
+  similarityIdx: index('idx_cluster_membership_similarity').on(table.similarity),
+}));
+
+// Semantic insights - AI-generated insights about code quality and architecture
+export const semanticInsights = sqliteTable('semantic_insights', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  insightType: text('insight_type').notNull(), // 'refactoring_opportunity', 'architectural_violation', 'performance_concern', 'code_smell'
+  category: text('category').notNull(), // 'architecture', 'performance', 'maintainability', 'quality', 'testing', 'security'
+  severity: text('severity').notNull(), // 'info', 'warning', 'error', 'critical'
+  confidence: real('confidence').notNull(), // AI confidence in the insight (0-1)
+  priority: text('priority').notNull(), // 'low', 'medium', 'high', 'critical'
+  title: text('title').notNull(), // Short descriptive title
+  description: text('description').notNull(), // Detailed description
+  affectedSymbols: text('affected_symbols'), // JSON array of symbol IDs
+  clusterId: integer('cluster_id').references(() => semanticClusters.id),
+  
+  // Metrics and analysis
+  metrics: text('metrics'), // JSON object with insight metrics
+  reasoning: text('reasoning'), // AI reasoning for the insight
+  detectedAt: integer('detected_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  
+  // User feedback and learning
+  userFeedback: integer('user_feedback').default(0), // -1 (rejected), 0 (pending), 1 (accepted)
+  feedbackComment: text('feedback_comment'), // Optional user comment
+  feedbackTimestamp: integer('feedback_timestamp', { mode: 'timestamp' }),
+  
+  // Context and metadata
+  contextLine: integer('context_line'),
+  contextFile: text('context_file'),
+  contextSnippet: text('context_snippet'),
+  relatedInsights: text('related_insights'), // JSON array of related insight IDs
+  
+  // Lifecycle
+  status: text('status').default('active'), // 'active', 'resolved', 'dismissed', 'false_positive'
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_insights_project_type').on(table.projectId, table.insightType),
+  severityIdx: index('idx_semantic_insights_severity').on(table.severity),
+  statusIdx: index('idx_semantic_insights_status').on(table.status),
+  feedbackIdx: index('idx_semantic_insights_feedback').on(table.userFeedback),
+  confidenceIdx: index('idx_semantic_insights_confidence').on(table.confidence),
+}));
+
+// Insight recommendations - specific actionable recommendations for insights
+export const insightRecommendations = sqliteTable('insight_recommendations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  insightId: integer('insight_id').notNull().references(() => semanticInsights.id),
+  action: text('action').notNull(), // Short action description
+  description: text('description').notNull(), // Detailed recommendation
+  effort: text('effort').notNull(), // 'low', 'medium', 'high'
+  impact: text('impact').notNull(), // 'low', 'medium', 'high'
+  priority: integer('priority').notNull(), // 1-10 ranking
+  codeExample: text('code_example'), // Optional code example
+  relatedSymbols: text('related_symbols'), // JSON array of related symbol IDs
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  insightIdx: index('idx_insight_recommendations_insight').on(table.insightId),
+  priorityIdx: index('idx_insight_recommendations_priority').on(table.priority),
+  effortImpactIdx: index('idx_insight_recommendations_effort_impact').on(table.effort, table.impact),
+}));
+
+// Semantic relationships - enhanced relationships with semantic meaning
+export const semanticRelationships = sqliteTable('semantic_relationships', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  
+  // Base relationship (can be null for inferred relationships)
+  baseRelationshipId: integer('base_relationship_id').references(() => universalRelationships.id),
+  
+  // Semantic relationship details
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id),
+  semanticType: text('semantic_type').notNull(), // 'semantic_similarity', 'functional_dependency', 'architectural_layer'
+  strength: real('strength').notNull(), // Relationship strength (0-1)
+  confidence: real('confidence').notNull(), // Detection confidence (0-1)
+  
+  // Semantic context
+  semanticContext: text('semantic_context'), // JSON object with semantic metadata
+  inferenceMethod: text('inference_method'), // How this relationship was discovered
+  
+  // Validation and feedback
+  isValidated: integer('is_validated', { mode: 'boolean' }).default(false),
+  validatedBy: text('validated_by'), // User or system that validated
+  validationTimestamp: integer('validation_timestamp', { mode: 'timestamp' }),
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  fromSymbolIdx: index('idx_semantic_relationships_from').on(table.fromSymbolId),
+  toSymbolIdx: index('idx_semantic_relationships_to').on(table.toSymbolId),
+  typeIdx: index('idx_semantic_relationships_type').on(table.semanticType),
+  strengthIdx: index('idx_semantic_relationships_strength').on(table.strength),
+  projectIdx: index('idx_semantic_relationships_project').on(table.projectId),
+}));
+
+// User preferences - stores user preferences for semantic analysis
+export const userPreferences = sqliteTable('user_preferences', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: text('user_id').notNull(), // User identifier
+  projectId: integer('project_id').references(() => projects.id), // Project-specific preferences
+  
+  // Semantic analysis preferences
+  semanticSensitivity: real('semantic_sensitivity').default(0.8), // Threshold for semantic insights
+  preferredInsightTypes: text('preferred_insight_types'), // JSON array of preferred insight types
+  customSemanticRules: text('custom_semantic_rules'), // JSON array of user-defined rules
+  
+  // UI preferences
+  dashboardLayout: text('dashboard_layout'), // JSON object with dashboard preferences
+  visualizationSettings: text('visualization_settings'), // JSON object with viz preferences
+  
+  // Learning preferences
+  feedbackFrequency: text('feedback_frequency').default('normal'), // 'minimal', 'normal', 'verbose'
+  learningMode: integer('learning_mode', { mode: 'boolean' }).default(true), // Enable/disable learning from feedback
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  userIdx: index('idx_user_preferences_user').on(table.userId),
+  projectIdx: index('idx_user_preferences_project').on(table.projectId),
+  userProjectIdx: index('idx_user_preferences_user_project').on(table.userId, table.projectId),
 }));
 

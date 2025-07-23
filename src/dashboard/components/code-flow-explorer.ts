@@ -2,6 +2,7 @@ import { DashboardComponent, defineComponent } from './base-component.js';
 import * as d3 from 'd3';
 import { ExecutionAnalyzer, ExecutionAnalysisResult } from '../utils/execution-analyzer.js';
 import { SymbolSelectorModal } from './symbol-selector-modal.js';
+import { MultiLanguageDetector } from '../utils/multi-language-detector.js';
 
 interface FlowNode {
   id: string | number;
@@ -60,10 +61,16 @@ export class CodeFlowExplorer extends DashboardComponent {
   private maxDepth: number = 3;
   private viewMode: 'graph' | 'paths' | 'branches' | 'unused' = 'graph';
   private symbolSelector: SymbolSelectorModal | null = null;
+  
+  // Language support
+  private languageDetector: MultiLanguageDetector;
+  private currentLanguage: string = 'unknown';
+  private crossLanguageCalls: Set<string> = new Set();
 
   constructor() {
     super();
     this.executionAnalyzer = new ExecutionAnalyzer();
+    this.languageDetector = new MultiLanguageDetector();
   }
 
   async loadData(): Promise<void> {
@@ -96,6 +103,12 @@ export class CodeFlowExplorer extends DashboardComponent {
 
       // Data is now processed by ExecutionAnalyzer
       this.selectedNode = nodeId;
+      
+      // Detect language from the selected symbol
+      if (callGraphResponse.data && callGraphResponse.data.rootSymbol) {
+        this.selectedSymbol = callGraphResponse.data.rootSymbol;
+        this.currentLanguage = this.languageDetector.detectLanguageFromPath(this.selectedSymbol.file || '');
+      }
       
       this._loading = false;
       this.render();
@@ -710,7 +723,7 @@ export class CodeFlowExplorer extends DashboardComponent {
         .action-btn:hover {
           background: rgba(78, 205, 196, 0.3);
         }
-      </style>
+        \n        /* Language badge styles */\n        .language-badge {\n          display: inline-block;\n          padding: 2px 8px;\n          border-radius: 12px;\n          font-size: 0.7rem;\n          font-weight: 600;\n          margin-right: 8px;\n          text-transform: uppercase;\n          letter-spacing: 0.5px;\n          vertical-align: middle;\n        }\n        \n        .lang-cpp { background: #0055cc; color: white; }\n        .lang-python { background: #3776ab; color: white; }\n        .lang-typescript { background: #007acc; color: white; }\n        .lang-javascript { background: #f7df1e; color: black; }\n        .lang-rust { background: #ce422b; color: white; }\n        .lang-go { background: #00add8; color: white; }\n        .lang-java { background: #ed8b00; color: white; }\n        .lang-unknown { background: #666; color: white; }\n      </style>
       
       <div class="page-header">
         <h1>Code Flow Explorer</h1>
@@ -914,10 +927,18 @@ export class CodeFlowExplorer extends DashboardComponent {
           d.fy = null;
         }));
 
-    // Add circles to nodes
+    // Add circles to nodes with language-aware coloring
+    const self = this; // Capture context for callbacks
     node.append('circle')
       .attr('r', (d: any) => Math.max(15, Math.min(35, Math.sqrt(d.callCount || 1) * 5)))
-      .attr('fill', (d: any) => this.getNodeColor(d.type));
+      .attr('fill', (d: any) => {
+        const nodeLanguage = self.detectLanguageFromFile(d.file || '');
+        return nodeLanguage !== self.currentLanguage ? self.getLanguageColor('mixed') : self.getNodeColor(d.type);
+      })
+      .attr('stroke', (d: any) => {
+        const nodeLanguage = self.detectLanguageFromFile(d.file || '');
+        return nodeLanguage !== self.currentLanguage ? '#feca57' : '#fff';
+      });
 
     // Add labels to nodes
     node.append('text')
@@ -992,7 +1013,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     return `
       <div class="paths-view">
         <div class="paths-header">
-          <h3>Execution Paths from ${this.selectedSymbol?.name || 'Unknown'}</h3>
+          <h3>${this.renderLanguageBadge(this.currentLanguage)}Execution Paths from ${this.selectedSymbol?.name || 'Unknown'}</h3>
           <p>${this.analysisResult.executionPaths.length} paths found</p>
         </div>
         <div class="paths-list">
@@ -1054,7 +1075,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     return `
       <div class="branches-view">
         <div class="branches-header">
-          <h3>Branch Analysis for ${this.selectedSymbol?.name || 'Unknown'}</h3>
+          <h3>${this.renderLanguageBadge(this.currentLanguage)}Branch Analysis for ${this.selectedSymbol?.name || 'Unknown'}</h3>
           <div class="branch-stats">
             <div class="stat">
               <span class="stat-value">${branchCoverage.total}</span>
@@ -1330,6 +1351,30 @@ export class CodeFlowExplorer extends DashboardComponent {
   }
 
   // Removed - functionality moved to ExecutionAnalyzer
+  
+  // Language support functions
+  private detectLanguageFromFile(filePath: string): string {
+    return this.languageDetector.detectLanguageFromPath(filePath);
+  }
+  
+  private renderLanguageBadge(language: string): string {
+    if (!language || language === 'unknown') return '';
+    return `<span class="language-badge lang-${language}">${language.substring(0, 3).toUpperCase()}</span>`;
+  }
+  
+  private getLanguageColor(language: string): string {
+    const colors: Record<string, string> = {
+      cpp: '#0055cc',
+      python: '#3776ab',
+      typescript: '#007acc',
+      javascript: '#f7df1e',
+      rust: '#ce422b',
+      go: '#00add8',
+      java: '#ed8b00',
+      mixed: '#ff6b6b'
+    };
+    return colors[language] || '#666';
+  }
 }
 
 defineComponent('code-flow-explorer', CodeFlowExplorer);

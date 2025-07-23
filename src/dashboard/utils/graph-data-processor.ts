@@ -417,52 +417,96 @@ export class GraphDataProcessor {
     const nodes = new Map<string, GraphNode>();
     const edges: GraphEdge[] = [];
 
-    // Extract unique symbols as nodes
+    // Extract unique symbols as nodes with rich data
     relationships.forEach(rel => {
       // Create source node if not exists
       if (!nodes.has(rel.from_symbol_id.toString())) {
-        nodes.set(rel.from_symbol_id.toString(), {
+        const sourceNode: GraphNode = {
           id: rel.from_symbol_id.toString(),
           name: rel.from_name || 'Unknown',
           type: rel.from_kind || 'unknown',
+          qualifiedName: rel.from_qualified_name,
           namespace: rel.from_namespace,
-          language: this.detectLanguageFromSymbol(rel),
-          size: 10,
+          filePath: rel.from_file_path,
+          line: rel.from_line,
+          column: rel.from_column,
+          endLine: rel.from_end_line,
+          endColumn: rel.from_end_column,
+          signature: rel.from_signature,
+          returnType: rel.from_return_type,
+          visibility: rel.from_visibility,
+          confidence: rel.from_confidence,
+          language: rel.from_language || this.detectLanguageFromSymbol(rel),
+          languageFeatures: rel.from_language_features ? JSON.parse(rel.from_language_features) : {
+            isAsync: rel.from_is_async,
+            isExported: rel.from_is_exported,
+            isAbstract: rel.from_is_abstract
+          },
+          semanticTags: rel.from_semantic_tags ? JSON.parse(rel.from_semantic_tags) : [],
+          size: this.calculateEnhancedNodeSize(rel, 'from'),
           metrics: {
-            loc: 0,
+            loc: 0, // TODO: Extract from semantic analysis if available
             callCount: 0,
-            crossLanguageCalls: 0
+            crossLanguageCalls: 0,
+            cyclomaticComplexity: 0 // TODO: Extract from pattern detection
           }
-        });
+        };
+        nodes.set(rel.from_symbol_id.toString(), sourceNode);
       }
 
       // Create target node if not exists  
       if (!nodes.has(rel.to_symbol_id.toString())) {
-        nodes.set(rel.to_symbol_id.toString(), {
+        const targetNode: GraphNode = {
           id: rel.to_symbol_id.toString(),
           name: rel.to_name || 'Unknown',
           type: rel.to_kind || 'unknown',
+          qualifiedName: rel.to_qualified_name,
           namespace: rel.to_namespace,
-          language: this.detectLanguageFromSymbol(rel, 'to'),
-          size: 10,
+          filePath: rel.to_file_path,
+          line: rel.to_line,
+          column: rel.to_column,
+          endLine: rel.to_end_line,
+          endColumn: rel.to_end_column,
+          signature: rel.to_signature,
+          returnType: rel.to_return_type,
+          visibility: rel.to_visibility,
+          confidence: rel.to_confidence,
+          language: rel.to_language || this.detectLanguageFromSymbol(rel, 'to'),
+          languageFeatures: rel.to_language_features ? JSON.parse(rel.to_language_features) : {
+            isAsync: rel.to_is_async,
+            isExported: rel.to_is_exported,
+            isAbstract: rel.to_is_abstract
+          },
+          semanticTags: rel.to_semantic_tags ? JSON.parse(rel.to_semantic_tags) : [],
+          size: this.calculateEnhancedNodeSize(rel, 'to'),
           metrics: {
-            loc: 0,
+            loc: 0, // TODO: Extract from semantic analysis if available
             callCount: 0,
-            crossLanguageCalls: 0
+            crossLanguageCalls: 0,
+            cyclomaticComplexity: 0 // TODO: Extract from pattern detection
           }
-        });
+        };
+        nodes.set(rel.to_symbol_id.toString(), targetNode);
       }
 
-      // Create edge
+      // Create enhanced edge with rich relationship data
       const metadata = rel.metadata ? JSON.parse(rel.metadata) : {};
+      const isCrossLanguage = rel.from_language !== rel.to_language;
+      
       edges.push({
         source: rel.from_symbol_id.toString(),
         target: rel.to_symbol_id.toString(),
         type: rel.type,
         weight: rel.confidence || 1,
         confidence: rel.confidence || 1,
-        isCrossLanguage: metadata.crossLanguage || false,
-        details: `${rel.type}: ${rel.from_name} → ${rel.to_name}`
+        contextLine: rel.context_line,
+        contextColumn: rel.context_column,
+        contextSnippet: rel.context_snippet,
+        isCrossLanguage,
+        sourceLanguage: rel.from_language,
+        targetLanguage: rel.to_language,
+        metadata,
+        details: this.generateEnhancedEdgeDetails(rel, isCrossLanguage)
       });
     });
 
@@ -470,6 +514,69 @@ export class GraphDataProcessor {
       nodes: Array.from(nodes.values()),
       edges
     };
+  }
+
+  /**
+   * Calculate enhanced node size based on rich symbol data
+   */
+  private calculateEnhancedNodeSize(rel: any, prefix: 'from' | 'to' = 'from'): number {
+    const signature = prefix === 'from' ? rel.from_signature : rel.to_signature;
+    const kind = prefix === 'from' ? rel.from_kind : rel.to_kind;
+    const confidence = prefix === 'from' ? rel.from_confidence : rel.to_confidence;
+    
+    // Base size by symbol type
+    let baseSize = 8;
+    switch (kind) {
+      case 'class':
+      case 'struct':
+        baseSize = 15;
+        break;
+      case 'function':
+      case 'method':
+        baseSize = 10;
+        break;
+      case 'namespace':
+        baseSize = 20;
+        break;
+      case 'variable':
+      case 'field':
+        baseSize = 6;
+        break;
+    }
+    
+    // Adjust by signature complexity (parameter count)
+    if (signature) {
+      const paramCount = (signature.match(/,/g) || []).length + 1;
+      baseSize += Math.min(paramCount * 0.5, 5);
+    }
+    
+    // Adjust by confidence (low confidence = smaller, less prominent)
+    const confidenceMultiplier = Math.max(0.6, confidence || 1);
+    
+    return Math.round(baseSize * confidenceMultiplier);
+  }
+  
+  /**
+   * Generate enhanced edge details with rich context
+   */
+  private generateEnhancedEdgeDetails(rel: any, isCrossLanguage: boolean): string {
+    const baseDetail = `${rel.type}: ${rel.from_name} → ${rel.to_name}`;
+    
+    if (isCrossLanguage && rel.from_language && rel.to_language) {
+      const fromLang = this.getLanguageDisplayName(rel.from_language);
+      const toLang = this.getLanguageDisplayName(rel.to_language);
+      return `Cross-language ${rel.type}: ${fromLang} → ${toLang}`;
+    }
+    
+    if (rel.context_snippet) {
+      return `${baseDetail} | Context: ${rel.context_snippet.substring(0, 50)}...`;
+    }
+    
+    if (rel.from_signature && rel.type === 'calls') {
+      return `Function call: ${rel.from_signature} → ${rel.to_name}`;
+    }
+    
+    return baseDetail;
   }
 
   /**

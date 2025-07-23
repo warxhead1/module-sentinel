@@ -79,6 +79,7 @@ export interface VisitorHandlers {
   
   // Pattern detection handlers
   onPattern?: (node: Parser.SyntaxNode, ctx: VisitorContext) => PatternInfo | null;
+  onTemplate?: (node: Parser.SyntaxNode, ctx: VisitorContext) => SymbolInfo | null;
   
   // Control flow handlers (only called for complex functions)
   onControlStructure?: (node: Parser.SyntaxNode, ctx: VisitorContext) => void;
@@ -169,6 +170,9 @@ export class UnifiedASTVisitor {
       .sort((a, b) => b.complexity - a.complexity)
       .slice(0, this.complexityHeuristics.maxFunctionsPerFile);
     
+    // Analyze member access patterns for all functions
+    await this.analyzeMemberAccessPatterns(symbols, content, context);
+    
     console.log(`[UnifiedVisitor] Single-pass completed in ${duration}ms:
       - Nodes visited: ${context.stats.nodesVisited}
       - Symbols extracted: ${context.stats.symbolsExtracted}
@@ -176,6 +180,54 @@ export class UnifiedASTVisitor {
       - Patterns detected: ${context.patterns.length}
       - Complex functions identified: ${complexFunctions.length}/${symbols.filter(s => s.kind === 'function').length}`);
     
+    // Analyze member access patterns for all functions
+    await this.analyzeMemberAccessPatterns(symbols, context.content, context);
+    
+    return {
+      symbols,
+      relationships: context.relationships,
+      patterns: context.patterns,
+      controlFlowData: context.controlFlowData,
+      stats: { ...context.stats, traversalTimeMs: duration }
+    };
+  }
+
+  /**
+   * Single-pass traversal with custom context (for language-specific contexts)
+   */
+  async traverseWithContext(tree: Parser.Tree, context: VisitorContext): Promise<{
+    symbols: SymbolInfo[];
+    relationships: RelationshipInfo[];
+    patterns: PatternInfo[];
+    controlFlowData: { blocks: any[]; calls: any[] };
+    stats: any;
+  }> {
+    const startTime = Date.now();
+    
+    // Start traversal from root
+    await this.visitNode(tree.rootNode, context);
+    
+    const duration = Date.now() - startTime;
+    
+    // Convert symbols map to array
+    const symbols = Array.from(context.symbols.values());
+    
+    // Sort by complexity for control flow analysis priority
+    const complexFunctions = symbols
+      .filter(s => ['function', 'method', 'constructor'].includes(s.kind))
+      .map(s => ({
+        symbol: s,
+        complexity: this.estimateComplexity(s, context.content)
+      }))
+      .filter(item => item.complexity >= this.complexityHeuristics.minComplexityScore)
+      .sort((a, b) => b.complexity - a.complexity)
+      .map(item => item.symbol);
+
+    // Stats are included in the return object
+    
+    // Analyze member access patterns for all functions
+    await this.analyzeMemberAccessPatterns(symbols, context.content, context);
+
     return {
       symbols,
       relationships: context.relationships,
@@ -501,5 +553,224 @@ export class UnifiedASTVisitor {
    */
   setComplexityHeuristics(heuristics: Partial<ComplexityHeuristics>): void {
     this.complexityHeuristics = { ...this.complexityHeuristics, ...heuristics };
+  }
+
+  /**
+   * Analyze member access patterns in function bodies for all languages
+   * This provides universal field access detection for reads_field/writes_field relationships
+   */
+  async analyzeMemberAccessPatterns(
+    symbols: SymbolInfo[], 
+    content: string, 
+    context: VisitorContext
+  ): Promise<void> {
+    const lines = content.split('\n');
+    
+    // Find all function symbols that need member access analysis
+    const functionSymbols = symbols.filter(s => 
+      s.kind === 'function' || s.kind === 'method' || s.kind === 'constructor'
+    );
+    
+    console.log(`[UnifiedASTVisitor] Analyzing member access for ${functionSymbols.length} functions`);
+    
+    for (let i = 0; i < functionSymbols.length; i++) {
+      const funcSymbol = functionSymbols[i];
+      console.log(`[UnifiedASTVisitor] Processing function ${i+1}/${functionSymbols.length}: ${funcSymbol.name} at line ${funcSymbol.line}`);
+      
+      if (funcSymbol.name === 'ToGeneric') {
+        console.log(`[UnifiedASTVisitor] Analyzing ToGeneric function at line ${funcSymbol.line}`);
+      }
+      
+      // Add timeout to prevent individual functions from hanging indefinitely
+      const functionTimeout = 5000; // 5 second timeout per function
+      try {
+        await Promise.race([
+          this.analyzeFunctionMemberAccess(funcSymbol, lines, content, context),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Function analysis timeout: ${funcSymbol.name}`)), functionTimeout)
+          )
+        ]);
+        console.log(`[UnifiedASTVisitor] Completed function ${funcSymbol.name}`);
+      } catch (error: any) {
+        console.warn(`[UnifiedASTVisitor] Failed to analyze function ${funcSymbol.name}: ${error.message}`);
+        // Continue with next function instead of hanging
+      }
+    }
+  }
+
+  /**
+   * Analyze member access patterns within a specific function
+   */
+  private async analyzeFunctionMemberAccess(
+    funcSymbol: SymbolInfo,
+    lines: string[],
+    content: string,
+    context: VisitorContext
+  ): Promise<void> {
+    // Find the function body boundaries with safer limits
+    const startLine = funcSymbol.line - 1; // Convert to 0-based
+    const maxScanLines = 50; // Limit function analysis to 50 lines max
+    const endLine = Math.min(
+      funcSymbol.endLine || startLine + maxScanLines, 
+      startLine + maxScanLines, 
+      lines.length
+    );
+    
+    if (startLine < 0 || startLine >= lines.length) {
+      return; // Invalid start line
+    }
+    
+    let braceDepth = 0;
+    let insideFunctionBody = false;
+    let linesProcessed = 0;
+    const maxLinesToProcess = 100; // Emergency brake
+    
+    // Scan through the function lines
+    for (let i = startLine; i < endLine && linesProcessed < maxLinesToProcess; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+      linesProcessed++;
+      
+      // Emergency timeout check
+      if (linesProcessed % 25 === 0) {
+        console.log(`[UnifiedASTVisitor] Processing function ${funcSymbol.name} line ${lineNum} (${linesProcessed} lines processed)`);
+      }
+      
+      // Track brace depth to know when we're inside the function body
+      const openBraces = (line.match(/{/g) || []).length;
+      const closeBraces = (line.match(/}/g) || []).length;
+      braceDepth += openBraces;
+      braceDepth -= closeBraces;
+      
+      // Start analyzing once we're inside the function body
+      if (openBraces > 0 && !insideFunctionBody) {
+        insideFunctionBody = true;
+      }
+      
+      // Only analyze lines inside the function body
+      if (insideFunctionBody && braceDepth > 0) {
+        await this.extractMemberAccessFromLine(line, lineNum, funcSymbol, context);
+      }
+      
+      // Exit when we close the function
+      if (insideFunctionBody && braceDepth <= 0) {
+        break;
+      }
+    }
+    
+    if (linesProcessed >= maxLinesToProcess) {
+      console.warn(`[UnifiedASTVisitor] Emergency brake triggered for function ${funcSymbol.name} after ${linesProcessed} lines`);
+    }
+  }
+
+  /**
+   * Extract member access patterns from a single line
+   * Language-agnostic patterns for field access detection
+   */
+  private async extractMemberAccessFromLine(
+    line: string,
+    lineNumber: number,
+    funcSymbol: SymbolInfo,
+    context: VisitorContext
+  ): Promise<void> {
+    // Safety check for extremely long lines that could cause performance issues
+    if (line.length > 1000) {
+      return; // Skip analysis of extremely long lines
+    }
+    
+    // Pattern 1: Member writes - object.member = value
+    // Use Array.from to safely handle all matches without infinite loops
+    const memberWriteMatches = Array.from(line.matchAll(/\b(\w+)\.(\w+)\s*=/g));
+    
+    for (const match of memberWriteMatches) {
+      const [fullMatch, objectName, memberName] = match;
+      
+      if (funcSymbol.name === 'ToGeneric') {
+        console.log(`[UnifiedASTVisitor] Found member write in ToGeneric: ${objectName}.${memberName} at line ${lineNumber}`);
+      }
+      
+      // Skip 'this' as it's not cross-object access
+      if (objectName !== 'this') {
+        // For now, use the member name as-is. The indexer will resolve the full qualified name.
+        context.relationships.push({
+          fromName: funcSymbol.qualifiedName,
+          toName: `${objectName}.${memberName}`, // Include object context
+          relationshipType: 'writes_field',
+          confidence: 0.8,
+          lineNumber: lineNumber,
+          columnNumber: match.index || 0,
+          crossLanguage: false,
+          sourceContext: `${objectName}.${memberName}`,
+          usagePattern: 'field_write',
+          metadata: {
+            objectName: objectName,
+            memberName: memberName,
+            accessType: 'dot_notation'
+          }
+        });
+      }
+    }
+    
+    // Pattern 2: Member reads - value = object.member or object.member in expressions  
+    // Use Array.from to safely handle all matches without infinite loops
+    const memberReadMatches = Array.from(line.matchAll(/\b(\w+)\.(\w+)(?!\s*=)/g));
+    
+    for (const match of memberReadMatches) {
+      const [fullMatch, objectName, memberName] = match;
+      const beforeMatch = line.substring(0, match.index || 0);
+      
+      // Determine if this is actually a read operation
+      const isBeingRead = 
+        beforeMatch.match(/=\s*$/) ||  // assignment: x = obj.member
+        beforeMatch.match(/return\s+$/) ||  // return obj.member
+        beforeMatch.match(/\(\s*$/) ||  // function call: func(obj.member)
+        beforeMatch.match(/,\s*$/) ||  // parameter: func(x, obj.member)
+        line.substring((match.index || 0) + fullMatch.length).match(/^\s*[;,\)\+\-\*\/\|\&<>]/);  // expression: obj.member + x
+      
+      if (isBeingRead && objectName !== 'this') {
+        context.relationships.push({
+          fromName: funcSymbol.qualifiedName,
+          toName: `${objectName}.${memberName}`, // Include object context
+          relationshipType: 'reads_field',
+          confidence: 0.8,
+          lineNumber: lineNumber,
+          columnNumber: match.index || 0,
+          crossLanguage: false,
+          sourceContext: `${objectName}.${memberName}`,
+          usagePattern: 'field_read',
+          metadata: {
+            objectName: objectName,
+            memberName: memberName,
+            accessType: 'dot_notation'
+          }
+        });
+      }
+    }
+    
+    // Pattern 3: Pointer access - obj->member (primarily for C++)
+    // Use Array.from to safely handle all matches without infinite loops
+    const pointerAccessMatches = Array.from(line.matchAll(/\b(\w+)->(\w+)/g));
+    
+    for (const match of pointerAccessMatches) {
+      const [fullMatch, objectName, memberName] = match;
+      const isWrite = line.substring((match.index || 0) + fullMatch.length).match(/^\s*=/);
+      
+      context.relationships.push({
+        fromName: funcSymbol.qualifiedName,
+        toName: `${objectName}.${memberName}`, // Normalize to dot notation for consistency
+        relationshipType: isWrite ? 'writes_field' : 'reads_field',
+        confidence: 0.8,
+        lineNumber: lineNumber,
+        columnNumber: match.index || 0,
+        crossLanguage: false,
+        sourceContext: `${objectName}->${memberName}`,
+        usagePattern: isWrite ? 'field_write' : 'field_read',
+        metadata: {
+          objectName: objectName,
+          memberName: memberName,
+          accessType: 'pointer_notation'
+        }
+      });
+    }
   }
 }

@@ -111,29 +111,61 @@ export class PatternBasedParser {
       
       // Try each relationship pattern
       for (const pattern of this.relationshipPatterns) {
-        const match = line.match(pattern.pattern);
-        if (match) {
-          const fromName = pattern.fromGroup ? match[pattern.fromGroup] : null;
-          const toName = match[pattern.toGroup];
-          
-          // Skip if we couldn't extract the required information
-          if (!toName) continue;
-          
-          const relationship = {
-            fromName: fromName || null,
-            toName: toName,
-            relationshipType: pattern.relationshipType,
-            confidence: 0.7,
-            lineNumber: lineNum,
-            columnNumber: match.index || 0,
-            crossLanguage: false
-          };
-          
-          if (this.debugMode) {
-            console.log(`Found ${pattern.relationshipType}: ${fromName || 'current'} -> ${toName} at line ${lineNum}`);
+        // Use matchAll for global patterns, or match for non-global
+        const isGlobal = pattern.pattern.flags && pattern.pattern.flags.includes('g');
+        
+        if (isGlobal) {
+          // Handle global patterns with matchAll
+          const matches = [...line.matchAll(pattern.pattern)];
+          for (const match of matches) {
+            const fromName = pattern.fromGroup ? match[pattern.fromGroup] : null;
+            const toName = match[pattern.toGroup];
+            
+            // Skip if we couldn't extract the required information
+            if (!toName) continue;
+            
+            const relationship = {
+              fromName: fromName || null,
+              toName: toName,
+              relationshipType: pattern.relationshipType,
+              confidence: 0.7,
+              lineNumber: lineNum,
+              columnNumber: match.index || 0,
+              crossLanguage: false
+            };
+            
+            if (this.debugMode) {
+              console.log(`Found ${pattern.relationshipType}: ${fromName || 'current'} -> ${toName} at line ${lineNum}`);
+            }
+            
+            relationships.push(relationship);
           }
-          
-          relationships.push(relationship);
+        } else {
+          // Handle non-global patterns with match
+          const match = line.match(pattern.pattern);
+          if (match) {
+            const fromName = pattern.fromGroup ? match[pattern.fromGroup] : null;
+            const toName = match[pattern.toGroup];
+            
+            // Skip if we couldn't extract the required information
+            if (!toName) continue;
+            
+            const relationship = {
+              fromName: fromName || null,
+              toName: toName,
+              relationshipType: pattern.relationshipType,
+              confidence: 0.7,
+              lineNumber: lineNum,
+              columnNumber: match.index || 0,
+              crossLanguage: false
+            };
+            
+            if (this.debugMode) {
+              console.log(`Found ${pattern.relationshipType}: ${fromName || 'current'} -> ${toName} at line ${lineNum}`);
+            }
+            
+            relationships.push(relationship);
+          }
         }
       }
     }

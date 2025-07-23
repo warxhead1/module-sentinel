@@ -6,6 +6,9 @@ import { NavigationTreeBuilder, NavigationContext, BreadcrumbItem } from '../uti
 import { HotspotDetector } from '../utils/hotspot-detector.js';
 import { DataFlowTracker } from '../utils/data-flow-tracker.js';
 import { SymbolSelectorModal } from './symbol-selector-modal.js';
+import { MultiLanguageDetector } from '../utils/multi-language-detector.js';
+import { stateService } from '../services/state.service.js';
+import './navigation-actions.js';
 
 // Types are now imported from the engine modules
 
@@ -23,9 +26,14 @@ export class EnhancedCodeFlow extends DashboardComponent {
   private flowEngine: ControlFlowEngine;
   private complexityAnalyzer: ComplexityAnalyzer;
   private navigationBuilder: NavigationTreeBuilder;
+  private languageDetector: MultiLanguageDetector;
   
   // Symbol selector modal
   private symbolSelector: SymbolSelectorModal;
+  
+  // Language info
+  private currentLanguage: string = 'unknown';
+  private crossLanguageCalls: Set<string> = new Set();
   
   constructor() {
     super();
@@ -34,6 +42,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
     this.flowEngine = new ControlFlowEngine();
     this.complexityAnalyzer = new ComplexityAnalyzer();
     this.navigationBuilder = new NavigationTreeBuilder();
+    this.languageDetector = new MultiLanguageDetector();
     
     // Get symbol selector instance
     this.symbolSelector = SymbolSelectorModal.getInstance();
@@ -49,13 +58,20 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
   async loadData(): Promise<void> {
     const params = new URLSearchParams(window.location.search);
-    const symbolId = params.get('symbolId');
+    const symbolId = params.get('symbolId') || params.get('symbol_id');
     
     if (symbolId) {
       this.symbolId = parseInt(symbolId);
       await this.loadEnhancedFlow();
     } else {
-      this.render();
+      // Check route data for context
+      const routeData = (this as any).routeData;
+      if (routeData?.context?.selectedSymbol) {
+        this.symbolId = routeData.context.selectedSymbol.id;
+        await this.loadEnhancedFlow();
+      } else {
+        this.render();
+      }
     }
   }
 
@@ -124,10 +140,14 @@ export class EnhancedCodeFlow extends DashboardComponent {
     
     try {
       // Use the engine to analyze the symbol
+      // Detect language from file path if available
+      this.currentLanguage = data.filePath ? 
+        this.languageDetector.detectLanguageFromPath(data.filePath) : 'unknown';
+      
       const analysis = await this.flowEngine.analyzeSymbol(data, {
         includeDataFlow: true,
         detectHotspots: true,
-        language: 'cpp'
+        language: this.currentLanguage as any
       });
 
       // Store additional data from API
@@ -164,6 +184,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
       breadcrumbItems.push(`
         <span class="breadcrumb-item current">
           <span class="breadcrumb-icon">📍</span>
+          ${this.renderLanguageBadge(this.currentLanguage)}
           ${this.controlFlow.symbol.name || this.controlFlow.symbol.qualified_name || 'Current Function'}
         </span>
       `);
@@ -222,12 +243,17 @@ export class EnhancedCodeFlow extends DashboardComponent {
                 Called by (${callers.length})
               </h4>
               <div class="relationship-list">
-                ${callers.slice(0, 5).map(caller => `
-                  <button class="relationship-item caller-item" data-action="navigate" data-symbol-id="${caller.id}">
-                    <span class="relationship-name">${caller.name}</span>
-                    <span class="relationship-meta">${caller.kind} • ${caller.call_info?.call_count || 1} calls</span>
-                  </button>
-                `).join('')}
+                ${callers.slice(0, 5).map(caller => {
+                  const callerLanguage = this.detectLanguageFromFile(caller.file || '');
+                  const isCrossLanguage = callerLanguage !== this.currentLanguage;
+                  return `
+                    <button class="relationship-item caller-item${isCrossLanguage ? ' cross-language' : ''}" data-action="navigate" data-symbol-id="${caller.id}">
+                      ${isCrossLanguage ? this.renderLanguageBadge(callerLanguage) : ''}
+                      <span class="relationship-name">${caller.name}</span>
+                      <span class="relationship-meta">${caller.kind} • ${caller.call_info?.call_count || 1} calls</span>
+                    </button>
+                  `;
+                }).join('')}
                 ${callers.length > 5 ? `
                   <button class="show-more-btn" data-action="show-callers">
                     +${callers.length - 5} more callers
@@ -244,12 +270,17 @@ export class EnhancedCodeFlow extends DashboardComponent {
                 Calls (${callees.length})
               </h4>
               <div class="relationship-list">
-                ${callees.slice(0, 5).map(callee => `
-                  <button class="relationship-item callee-item" data-action="navigate" data-symbol-id="${callee.id}">
-                    <span class="relationship-name">${callee.name}</span>
-                    <span class="relationship-meta">${callee.kind} • ${callee.call_info?.call_count || 1} calls</span>
-                  </button>
-                `).join('')}
+                ${callees.slice(0, 5).map(callee => {
+                  const calleeLanguage = this.detectLanguageFromFile(callee.file || '');
+                  const isCrossLanguage = calleeLanguage !== this.currentLanguage;
+                  return `
+                    <button class="relationship-item callee-item${isCrossLanguage ? ' cross-language' : ''}" data-action="navigate" data-symbol-id="${callee.id}">
+                      ${isCrossLanguage ? this.renderLanguageBadge(calleeLanguage) : ''}
+                      <span class="relationship-name">${callee.name}</span>
+                      <span class="relationship-meta">${callee.kind} • ${callee.call_info?.call_count || 1} calls</span>
+                    </button>
+                  `;
+                }).join('')}
                 ${callees.length > 5 ? `
                   <button class="show-more-btn" data-action="show-callees">
                     +${callees.length - 5} more callees
@@ -742,6 +773,52 @@ export class EnhancedCodeFlow extends DashboardComponent {
           font-weight: 500;
           text-anchor: middle;
           pointer-events: none;
+        }
+        
+        /* Language badges */
+        .language-badge {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          margin-right: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          vertical-align: middle;
+        }
+        
+        .lang-cpp { background: #0055cc; color: white; }
+        .lang-python { background: #3776ab; color: white; }
+        .lang-typescript { background: #007acc; color: white; }
+        .lang-javascript { background: #f7df1e; color: black; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+        
+        /* Cross-language highlighting */
+        .cross-language-call {
+          stroke: #feca57 !important;
+          stroke-width: 3px !important;
+          stroke-dasharray: 5,5;
+          animation: dash 0.5s linear infinite;
+        }
+        
+        @keyframes dash {
+          to {
+            stroke-dashoffset: -10;
+          }
+        }
+        
+        .caller-item.cross-language,
+        .callee-item.cross-language {
+          background: rgba(254, 202, 87, 0.1);
+          border-left: 3px solid #feca57;
         }
         
         .control-edge {
@@ -1244,6 +1321,8 @@ export class EnhancedCodeFlow extends DashboardComponent {
         <p class="subtitle">Deep insights into control flow, complexity, and execution patterns</p>
       </div>
       
+      <navigation-actions></navigation-actions>
+      
       <div class="flow-container">
         <div class="flow-main">
           ${this.controlFlow ? `
@@ -1720,6 +1799,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
     });
 
     // Add enhanced labels with better information
+    const self = this; // Capture context for use inside D3 callbacks
     node.each(function(this: SVGGElement, d: any) {
       const nodeData = d.data;
       const nodeG = d3Local.select(this);
@@ -1753,13 +1833,46 @@ export class EnhancedCodeFlow extends DashboardComponent {
             .text(`Condition: ${nodeData.code}`);
         }
       } else {
-        // For other blocks, show line range
+        // For other blocks, show line range and language badge
         nodeG.append('text')
           .attr('dy', '0.35em')
           .attr('text-anchor', 'middle')
           .attr('fill', 'white')
           .attr('font-size', '10px')
           .text(`L${nodeData.line}`);
+          
+        // Add language badge for nodes with function calls
+        const functionCalls = self.flowEngine.getFunctionCallsFromLine(nodeData.line, self.controlFlow!, nodeData);
+        if (functionCalls.length > 0) {
+          // Check if any calls are cross-language
+          const crossLanguageCalls = functionCalls.filter((call: string) => {
+            // For now, assume cross-language if call name suggests different language
+            const callLang = self.detectLanguageFromFunctionName(call);
+            return callLang !== self.currentLanguage;
+          });
+          
+          if (crossLanguageCalls.length > 0) {
+            // Add a small language indicator
+            nodeG.append('circle')
+              .attr('cx', 20)
+              .attr('cy', -15)
+              .attr('r', 6)
+              .attr('fill', self.getLanguageColor('mixed'))
+              .attr('stroke', '#fff')
+              .attr('stroke-width', 1)
+              .style('filter', 'drop-shadow(0 0 2px rgba(0,0,0,0.3))');
+              
+            nodeG.append('text')
+              .attr('x', 20)
+              .attr('y', -15)
+              .attr('dy', '0.35em')
+              .attr('text-anchor', 'middle')
+              .attr('fill', 'white')
+              .attr('font-size', '8px')
+              .attr('font-weight', 'bold')
+              .text('⚡');
+          }
+        }
       }
     });
     
@@ -2321,6 +2434,52 @@ export class EnhancedCodeFlow extends DashboardComponent {
     
     // TODO: Implement modal view for all callees
     alert(`All callees (${this.controlFlow.callees.length}):\n${this.controlFlow.callees.map(c => c.name).join('\n')}`);
+  }
+  
+  private detectLanguageFromFile(filePath: string): string {
+    return this.languageDetector.detectLanguageFromPath(filePath);
+  }
+  
+  private detectLanguageFromNode(node: any): string {
+    if (node.file) {
+      return this.detectLanguageFromFile(node.file);
+    }
+    if (this.controlFlow?.symbol?.file) {
+      return this.detectLanguageFromFile(this.controlFlow.symbol.file);
+    }
+    return 'unknown';
+  }
+  
+  private renderLanguageBadge(language: string): string {
+    if (!language || language === 'unknown') return '';
+    return `<span class="language-badge lang-${language}">${language.substring(0, 3).toUpperCase()}</span>`;
+  }
+  
+  private getLanguageColor = (language: string): string => {
+    const colors: Record<string, string> = {
+      cpp: '#0055cc',
+      python: '#3776ab',
+      typescript: '#007acc',
+      javascript: '#f7df1e',
+      rust: '#ce422b',
+      go: '#00add8',
+      java: '#ed8b00',
+      mixed: '#ff6b6b'
+    };
+    return colors[language] || '#666';
+  }
+  
+  private detectLanguageFromFunctionName(functionName: string): string {
+    // Simple heuristics to detect language from function call patterns
+    if (functionName.includes('::') || functionName.includes('std::')) return 'cpp';
+    if (functionName.includes('.') && !functionName.includes('()')) return 'python';
+    if (functionName.includes('await ') || functionName.includes('async ')) return 'typescript';
+    if (functionName.includes('console.') || functionName.includes('window.')) return 'javascript';
+    if (functionName.includes('println!') || functionName.includes('vec!')) return 'rust';
+    if (functionName.includes('fmt.') || functionName.includes('log.')) return 'go';
+    if (functionName.includes('System.') || functionName.includes('.class')) return 'java';
+    
+    return this.currentLanguage; // Default to current file's language
   }
 }
 

@@ -413,6 +413,7 @@ export class GraphVisualizationEngine {
     const newNodes = nodeSelection.enter()
       .append('g')
       .attr('class', 'node')
+      .attr('data-node-id', (d: GraphNode) => d.id)
       .style('opacity', 0);
 
     // Add visual elements to new nodes
@@ -439,25 +440,112 @@ export class GraphVisualizationEngine {
       .duration(this.animationController.getTransitionDuration())
       .style('opacity', 1);
 
-    // Update all nodes
+    // Update all nodes with pattern styling
     nodeSelection.merge(newNodes as any)
       .select('circle')
-      .attr('fill', (d: any) => this.themeManager.getNodeColor(d))
-      .attr('r', (d: any) => this.themeManager.getNodeRadius(d));
+      .attr('fill', (d: any) => {
+        const patternStyling = d.patternStyling;
+        return patternStyling ? patternStyling.color : this.themeManager.getNodeColor(d);
+      })
+      .attr('r', (d: any) => {
+        const baseRadius = this.themeManager.getNodeRadius(d);
+        const patternStyling = d.patternStyling;
+        return patternStyling ? baseRadius * patternStyling.sizeMultiplier : baseRadius;
+      })
+      .attr('stroke', (d: any) => {
+        const patternStyling = d.patternStyling;
+        if (patternStyling && patternStyling.border.color !== 'none') {
+          return patternStyling.border.color;
+        }
+        return this.themeManager.getNodeStroke(d);
+      })
+      .attr('stroke-width', (d: any) => {
+        const patternStyling = d.patternStyling;
+        if (patternStyling && patternStyling.border.width > 0) {
+          return patternStyling.border.width;
+        }
+        return this.themeManager.getNodeStrokeWidth(d);
+      })
+      .attr('stroke-dasharray', (d: any) => {
+        const patternStyling = d.patternStyling;
+        if (patternStyling && patternStyling.border.style === 'dashed') {
+          return '5,5';
+        } else if (patternStyling && patternStyling.border.style === 'dotted') {
+          return '2,2';
+        }
+        return null;
+      })
+      .style('filter', (d: any) => {
+        const patternStyling = d.patternStyling;
+        return patternStyling ? patternStyling.effect : this.themeManager.getNodeFilter(d);
+      });
   }
 
   /**
    * Style node elements
    */
   private styleNodes(selection: d3.Selection<any, GraphNode, any, any>): void {
-    // Add circles
+    // Add circles with pattern-based styling
     selection.append('circle')
-      .attr('r', (d: GraphNode) => this.themeManager.getNodeRadius(d))
-      .attr('fill', (d: GraphNode) => this.themeManager.getNodeColor(d))
-      .attr('stroke', (d: GraphNode) => this.themeManager.getNodeStroke(d))
-      .attr('stroke-width', (d: GraphNode) => this.themeManager.getNodeStrokeWidth(d))
-      .style('filter', (d: GraphNode) => this.themeManager.getNodeFilter(d));
+      .attr('r', (d: GraphNode) => {
+        const baseRadius = this.themeManager.getNodeRadius(d);
+        const patternStyling = (d as any).patternStyling;
+        return patternStyling ? baseRadius * patternStyling.sizeMultiplier : baseRadius;
+      })
+      .attr('fill', (d: GraphNode) => {
+        const patternStyling = (d as any).patternStyling;
+        return patternStyling ? patternStyling.color : this.themeManager.getNodeColor(d);
+      })
+      .attr('stroke', (d: GraphNode) => {
+        const patternStyling = (d as any).patternStyling;
+        if (patternStyling && patternStyling.border.color !== 'none') {
+          return patternStyling.border.color;
+        }
+        return this.themeManager.getNodeStroke(d);
+      })
+      .attr('stroke-width', (d: GraphNode) => {
+        const patternStyling = (d as any).patternStyling;
+        if (patternStyling && patternStyling.border.width > 0) {
+          return patternStyling.border.width;
+        }
+        return this.themeManager.getNodeStrokeWidth(d);
+      })
+      .attr('stroke-dasharray', (d: GraphNode) => {
+        const patternStyling = (d as any).patternStyling;
+        if (patternStyling && patternStyling.border.style === 'dashed') {
+          return '5,5';
+        } else if (patternStyling && patternStyling.border.style === 'dotted') {
+          return '2,2';
+        }
+        return null;
+      })
+      .style('filter', (d: GraphNode) => {
+        const patternStyling = (d as any).patternStyling;
+        return patternStyling ? patternStyling.effect : this.themeManager.getNodeFilter(d);
+      });
 
+    // Add expansion indicator for group nodes
+    selection.filter((d: GraphNode) => d.type?.includes('-group'))
+      .append('text')
+      .attr('class', 'expansion-indicator')
+      .attr('x', -25)
+      .attr('y', 5)
+      .attr('fill', '#4ecdc4')
+      .attr('font-size', '14px')
+      .text((d: GraphNode) => d.isExpanded ? '▼' : '▶');
+    
+    // Add pattern icons for nodes with patterns
+    selection.filter((d: GraphNode) => (d as any).patternStyling?.icon)
+      .append('text')
+      .attr('class', 'pattern-icon')
+      .attr('x', 0)
+      .attr('y', -15)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '12px')
+      .text((d: GraphNode) => (d as any).patternStyling?.icon || '')
+      .style('pointer-events', 'none')
+      .style('opacity', 0.8);
+    
     // Add labels
     selection.append('text')
       .attr('dy', '.35em')
@@ -643,6 +731,21 @@ export class GraphVisualizationEngine {
       transform: this.currentTransform,
       isSimulationRunning: this.simulation ? this.simulation.alpha() > 0 : false
     };
+  }
+
+  /**
+   * Get the theme manager instance
+   */
+  public getThemeManager(): GraphThemeManager {
+    return this.themeManager;
+  }
+
+  /**
+   * Update data and re-render
+   */
+  public updateData(data: GraphData): void {
+    this.setData(data);
+    this.render();
   }
 
   /**

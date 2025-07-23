@@ -77,6 +77,38 @@ export const CPP_RELATIONSHIP_PATTERNS: RelationshipPattern[] = [
     pattern: /^\s*(?:export\s+)?import\s+(\w+(?:\.\w+)*);/,
     relationshipType: 'imports',
     toGroup: 1
+  },
+  
+  // Field writes (object.field = value)
+  {
+    pattern: /\b(\w+)\.(\w+)\s*=/g,
+    relationshipType: 'writes_field',
+    fromGroup: 1,
+    toGroup: 2
+  },
+  
+  // Field reads (value = object.field)
+  {
+    pattern: /=\s*(\w+)\.(\w+)/g,
+    relationshipType: 'reads_field',
+    fromGroup: 1,
+    toGroup: 2
+  },
+  
+  // Pointer field writes (object->field = value)
+  {
+    pattern: /\b(\w+)->(\w+)\s*=/g,
+    relationshipType: 'writes_field',
+    fromGroup: 1,
+    toGroup: 2
+  },
+  
+  // Pointer field reads (value = object->field)
+  {
+    pattern: /=\s*(\w+)->(\w+)/g,
+    relationshipType: 'reads_field',
+    fromGroup: 1,
+    toGroup: 2
   }
 ];
 

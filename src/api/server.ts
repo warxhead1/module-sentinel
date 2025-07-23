@@ -23,6 +23,7 @@ import { CodeFlowRoutes } from './routes/code-flow.js';
 import { SearchRoutes } from './routes/search.js';
 import { CrossLanguageRoutes } from './routes/cross-language.js';
 import { AnalyticsRoutes } from './routes/analytics.js';
+import { SemanticInsightsRoutes } from './routes/semantic-insights.js';
 
 // Types
 import type { Request, Response } from './types/express.js';
@@ -51,6 +52,7 @@ export class ModernApiServer {
   private searchRoutes: SearchRoutes;
   private crossLanguageRoutes: CrossLanguageRoutes;
   private analyticsRoutes: AnalyticsRoutes;
+  private semanticInsightsRoutes: SemanticInsightsRoutes;
 
   constructor(database: Database.Database, port: number = 8080) {
     this.db = database;
@@ -74,6 +76,7 @@ export class ModernApiServer {
     this.searchRoutes = new SearchRoutes(database);
     this.crossLanguageRoutes = new CrossLanguageRoutes(this.dbService);
     this.analyticsRoutes = new AnalyticsRoutes(database);
+    this.semanticInsightsRoutes = new SemanticInsightsRoutes(database);
 
     // Create HTTP server
     this.server = http.createServer(this.handleRequest.bind(this));
@@ -292,6 +295,41 @@ export class ModernApiServer {
           req.body = await this.parseRequestBody(rawReq);
         }
         await this.analyticsRoutes.getBulkImpactAnalysis(req, res);
+      }
+      // Semantic insights routes
+      else if (apiPath === '/semantic/insights' && req.method === 'GET') {
+        await this.semanticInsightsRoutes.getInsights(req, res);
+      }
+      else if (apiPath.match(/^\/semantic\/insights\/symbol\/\d+$/) && req.method === 'GET') {
+        const symbolId = apiPath.split('/')[4];
+        await this.semanticInsightsRoutes.getSymbolInsights(req, res, symbolId);
+      }
+      else if (apiPath === '/semantic/clusters' && req.method === 'GET') {
+        await this.semanticInsightsRoutes.getClusters(req, res);
+      }
+      else if (apiPath.match(/^\/semantic\/clusters\/\d+$/) && req.method === 'GET') {
+        const clusterId = apiPath.split('/')[3];
+        await this.semanticInsightsRoutes.getClusterDetails(req, res, clusterId);
+      }
+      else if (apiPath === '/semantic/metrics' && req.method === 'GET') {
+        await this.semanticInsightsRoutes.getMetrics(req, res);
+      }
+      else if (apiPath.match(/^\/semantic\/insights\/\d+\/recommendations$/) && req.method === 'GET') {
+        const insightId = apiPath.split('/')[3];
+        await this.semanticInsightsRoutes.getRecommendations(req, res, insightId);
+      }
+      else if (apiPath.match(/^\/semantic\/insights\/\d+\/feedback$/) && req.method === 'POST') {
+        const insightId = apiPath.split('/')[3];
+        if (rawReq) {
+          req.body = await this.parseRequestBody(rawReq);
+        }
+        await this.semanticInsightsRoutes.submitFeedback(req, res, insightId);
+      }
+      else if (apiPath === '/semantic/analyze' && req.method === 'POST') {
+        if (rawReq) {
+          req.body = await this.parseRequestBody(rawReq);
+        }
+        await this.semanticInsightsRoutes.analyzeFiles(req, res);
       }
       else if (apiPath === '/rebuild-index' && req.method === 'POST') {
         await this.statsRoutes.rebuildIndex(req, res);

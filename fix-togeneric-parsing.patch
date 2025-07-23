@@ -1,0 +1,29 @@
+--- a/src/parsers/tree-sitter/optimized-cpp-parser.ts
++++ b/src/parsers/tree-sitter/optimized-cpp-parser.ts
+@@ -1365,8 +1365,24 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser
+     const typeNode = node.childForFieldName('type');
+     const returnType = typeNode ? this.getNodeText(typeNode, content) : 'void';
+     
+-    // Build qualified name using parent scope
+-    const parentScope = this.buildParentScope(functionName, context, node);
++    // Build qualified name by finding parent struct/class
++    let parentScope: string | undefined;
++    if (isMethod) {
++      // For methods, find the containing struct/class
++      let current = node.parent;
++      while (current) {
++        if (current.type === 'struct_specifier' || current.type === 'class_specifier') {
++          const structNameNode = current.childForFieldName('name');
++          if (structNameNode) {
++            const structName = this.getNodeText(structNameNode, content);
++            parentScope = this.buildParentScope(structName, context, current);
++            break;
++          }
++        }
++        current = current.parent;
++      }
++    }
++    
+     const qualifiedName = parentScope ? `${parentScope}::${functionName}` : functionName;
+     
+     // Get function signature

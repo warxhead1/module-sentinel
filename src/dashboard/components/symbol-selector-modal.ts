@@ -543,7 +543,7 @@ export class SymbolSelectorModal extends DashboardComponent {
     this.render();
 
     try {
-      const response = await dataService.fetch(`/symbols?query=${encodeURIComponent(query)}&limit=20`);
+      const response = await dataService.fetch(`/api/symbols?q=${encodeURIComponent(query)}&limit=20`);
       
       if (response.success && response.data) {
         this.searchResults = response.data;

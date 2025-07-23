@@ -2,6 +2,7 @@ import { DashboardComponent, defineComponent } from './base-component.js';
 import { dataService } from '../services/data.service.js';
 import { stateService } from '../services/state.service.js';
 import { showSymbolSelector } from './symbol-selector-modal.js';
+import { MultiLanguageDetector } from '../utils/multi-language-detector.js';
 import * as d3 from 'd3';
 
 interface ImpactNode {
@@ -10,6 +11,9 @@ interface ImpactNode {
   impactType: 'breaking' | 'modification' | 'enhancement';
   distance: number;
   confidence: number;
+  language?: string;
+  filePath?: string;
+  isCrossLanguage?: boolean;
 }
 
 interface RippleWave {
@@ -23,6 +27,11 @@ interface ImpactAnalysis {
   indirectImpact: ImpactNode[];
   rippleEffect: RippleWave[];
   severityScore: number;
+  crossLanguageImpact?: {
+    totalNodes: number;
+    languages: string[];
+    severityMultiplier: number;
+  };
 }
 
 /**
@@ -36,6 +45,8 @@ export class ImpactVisualization extends DashboardComponent {
   private currentSymbolId: string | null = null;
   private impactData: ImpactAnalysis | null = null;
   private animationTimer: any = null;
+  private languageDetector: MultiLanguageDetector = new MultiLanguageDetector();
+  private sourceLanguage: string = 'unknown';
 
   async loadData(): Promise<void> {
     // Get selected symbol from state
@@ -65,6 +76,9 @@ export class ImpactVisualization extends DashboardComponent {
 
       this.impactData = response.data;
       this.currentSymbolId = selectedSymbolId as string;
+      
+      // Enhance impact data with language information
+      this.enhanceImpactDataWithLanguages();
       
       this._loading = false;
       this.render();
@@ -337,6 +351,67 @@ export class ImpactVisualization extends DashboardComponent {
           color: var(--text-muted);
           margin-top: 2px;
         }
+
+        /* Language badge styles */
+        .language-badge {
+          display: inline-block;
+          padding: 2px 6px;
+          border-radius: 8px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          margin-left: 6px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          vertical-align: middle;
+        }
+
+        .lang-cpp { background: #0055cc; color: white; }
+        .lang-python { background: #3776ab; color: white; }
+        .lang-typescript { background: #007acc; color: white; }
+        .lang-javascript { background: #f7df1e; color: black; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+
+        /* Cross-language indicators */
+        .cross-language-warning {
+          background: rgba(254, 202, 87, 0.2);
+          border: 1px solid #feca57;
+          color: #feca57;
+          padding: 8px 12px;
+          border-radius: 6px;
+          margin: 10px 0;
+          font-size: 0.85rem;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .cross-language-stats {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+          margin-top: 10px;
+        }
+
+        .cross-language-node {
+          stroke: #feca57 !important;
+          stroke-width: 3px !important;
+        }
+
+        .language-impact-legend {
+          margin-top: 10px;
+          padding-top: 10px;
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .legend-item.cross-language {
+          background: rgba(254, 202, 87, 0.1);
+          padding: 4px 8px;
+          border-radius: 4px;
+          border: 1px solid rgba(254, 202, 87, 0.3);
+        }
       </style>
 
       <div class="container">
@@ -344,6 +419,7 @@ export class ImpactVisualization extends DashboardComponent {
           <div class="header-top">
             <h3>
               Impact Analysis
+              ${this.sourceLanguage !== 'unknown' ? this.renderLanguageBadge(this.sourceLanguage) : ''}
               ${this.impactData ? this.renderSeverityBadge(this.impactData.severityScore) : ''}
             </h3>
             ${this.currentSymbolId ? `
@@ -353,6 +429,7 @@ export class ImpactVisualization extends DashboardComponent {
             ` : ''}
           </div>
           ${this.impactData ? this.renderStats() : ''}
+          ${this.impactData?.crossLanguageImpact ? this.renderCrossLanguageWarning() : ''}
         </div>
 
         <div class="visualization-container">
@@ -388,6 +465,14 @@ export class ImpactVisualization extends DashboardComponent {
                 <div class="legend-color" style="background: #4444ff;"></div>
                 <span>Source Symbol</span>
               </div>
+              ${this.impactData?.crossLanguageImpact ? `
+                <div class="language-impact-legend">
+                  <div class="legend-item cross-language">
+                    <div class="legend-color" style="background: #feca57; border: 2px solid #feca57;"></div>
+                    <span>Cross-Language Impact</span>
+                  </div>
+                </div>
+              ` : ''}
             </div>
           ` : ''}
         </div>
@@ -432,11 +517,47 @@ export class ImpactVisualization extends DashboardComponent {
     return `<span class="severity-badge severity-${level}">Severity: ${label} (${score})</span>`;
   }
 
+  private renderLanguageBadge(language: string): string {
+    if (!language || language === 'unknown') return '';
+    const displayName = language === 'cpp' ? 'C++' : language.charAt(0).toUpperCase() + language.slice(1);
+    return `<span class="language-badge lang-${language}">${displayName}</span>`;
+  }
+
+  private renderCrossLanguageWarning(): string {
+    if (!this.impactData?.crossLanguageImpact) return '';
+
+    const { totalNodes, languages, severityMultiplier } = this.impactData.crossLanguageImpact;
+    
+    return `
+      <div class="cross-language-warning">
+        <span>⚠️</span>
+        <div>
+          <strong>Cross-Language Impact Detected</strong>
+          <div class="cross-language-stats">
+            <div class="stat-item">
+              <div class="stat-value">${totalNodes}</div>
+              <div class="stat-label">Cross-Language Nodes</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-value">${languages.length}</div>
+              <div class="stat-label">Languages Affected</div>
+            </div>
+          </div>
+          <div style="margin-top: 8px; font-size: 0.8rem;">
+            Languages: ${languages.map(lang => this.renderLanguageBadge(lang)).join(' ')}
+            <br>Severity multiplier: ${severityMultiplier.toFixed(1)}x
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private renderStats(): string {
     if (!this.impactData) return '';
 
     const totalImpacted = this.impactData.directImpact.length + this.impactData.indirectImpact.length;
     const maxDistance = Math.max(...this.impactData.rippleEffect.map(w => w.distance), 0);
+    const crossLanguageNodes = this.impactData.crossLanguageImpact?.totalNodes || 0;
 
     return `
       <div class="stats">
@@ -452,8 +573,71 @@ export class ImpactVisualization extends DashboardComponent {
           <div class="stat-value">${maxDistance}</div>
           <div class="stat-label">Max Distance</div>
         </div>
+        ${crossLanguageNodes > 0 ? `
+          <div class="stat-item">
+            <div class="stat-value" style="color: #feca57;">${crossLanguageNodes}</div>
+            <div class="stat-label">Cross-Language</div>
+          </div>
+        ` : ''}
       </div>
     `;
+  }
+
+  // Language enhancement methods
+  private enhanceImpactDataWithLanguages(): void {
+    if (!this.impactData) return;
+
+    // Detect source language (assuming we have source file info)
+    this.sourceLanguage = 'cpp'; // Default, should be detected from selected symbol
+
+    // Enhance direct impact nodes
+    this.impactData.directImpact.forEach(node => {
+      if (node.filePath) {
+        node.language = this.languageDetector.detectLanguageFromPath(node.filePath);
+        node.isCrossLanguage = node.language !== this.sourceLanguage;
+      }
+    });
+
+    // Enhance indirect impact nodes
+    this.impactData.indirectImpact.forEach(node => {
+      if (node.filePath) {
+        node.language = this.languageDetector.detectLanguageFromPath(node.filePath);
+        node.isCrossLanguage = node.language !== this.sourceLanguage;
+      }
+    });
+
+    // Calculate cross-language impact statistics
+    this.calculateCrossLanguageImpact();
+  }
+
+  private calculateCrossLanguageImpact(): void {
+    if (!this.impactData) return;
+
+    const allNodes = [...this.impactData.directImpact, ...this.impactData.indirectImpact];
+    const crossLanguageNodes = allNodes.filter(node => node.isCrossLanguage);
+    
+    if (crossLanguageNodes.length > 0) {
+      const languagesSet = new Set(
+        crossLanguageNodes
+          .map(node => node.language)
+          .filter((lang): lang is string => Boolean(lang))
+      );
+      const languages = Array.from(languagesSet);
+      
+      // Calculate severity multiplier based on cross-language complexity
+      const languageCount = languages.length;
+      const crossLanguageRatio = crossLanguageNodes.length / allNodes.length;
+      const severityMultiplier = 1 + (languageCount * 0.3) + (crossLanguageRatio * 0.5);
+
+      this.impactData.crossLanguageImpact = {
+        totalNodes: crossLanguageNodes.length,
+        languages,
+        severityMultiplier
+      };
+
+      // Apply severity multiplier to overall score
+      this.impactData.severityScore = Math.min(100, this.impactData.severityScore * severityMultiplier);
+    }
   }
 
   private async initializeVisualization() {
@@ -519,8 +703,17 @@ export class ImpactVisualization extends DashboardComponent {
     node.append('circle')
       .attr('r', (d: any) => this.getNodeRadius(d))
       .attr('fill', (d: any) => this.getNodeColor(d))
-      .attr('stroke', (d: any) => d.distance === 0 ? '#fff' : 'none')
-      .attr('stroke-width', 2);
+      .attr('stroke', (d: any) => {
+        if (d.distance === 0) return '#fff';
+        if (d.isCrossLanguage) return '#feca57';
+        return 'none';
+      })
+      .attr('stroke-width', (d: any) => {
+        if (d.distance === 0) return 2;
+        if (d.isCrossLanguage) return 3;
+        return 0;
+      })
+      .attr('class', (d: any) => d.isCrossLanguage ? 'cross-language-node' : '');
 
     // Add labels
     node.append('text')
@@ -556,6 +749,8 @@ export class ImpactVisualization extends DashboardComponent {
       name: 'Source',
       distance: 0,
       impactType: 'source',
+      language: this.sourceLanguage,
+      isCrossLanguage: false,
       x: 0,
       y: 0
     });
@@ -569,7 +764,9 @@ export class ImpactVisualization extends DashboardComponent {
           name: node.symbolName,
           distance: node.distance,
           impactType: node.impactType,
-          confidence: node.confidence
+          confidence: node.confidence,
+          language: node.language || 'unknown',
+          isCrossLanguage: node.isCrossLanguage || false
         });
       }
     });
@@ -609,12 +806,27 @@ export class ImpactVisualization extends DashboardComponent {
   private getNodeColor(node: any): string {
     if (node.distance === 0) return '#4444ff';
     
+    // If it's a cross-language node, modify the color to indicate this
+    let baseColor: string;
     switch (node.impactType) {
-      case 'breaking': return '#ff4444';
-      case 'modification': return '#ffaa44';
-      case 'enhancement': return '#44ff44';
-      default: return '#888888';
+      case 'breaking': baseColor = '#ff4444'; break;
+      case 'modification': baseColor = '#ffaa44'; break;
+      case 'enhancement': baseColor = '#44ff44'; break;
+      default: baseColor = '#888888';
     }
+
+    // For cross-language nodes, blend with warning color
+    if (node.isCrossLanguage) {
+      return this.blendColors(baseColor, '#feca57', 0.3);
+    }
+
+    return baseColor;
+  }
+
+  private blendColors(color1: string, color2: string, ratio: number): string {
+    // Simple color blending for cross-language indication
+    // This is a simplified implementation - could be enhanced
+    return color1; // For now, just return base color, stroke handles cross-language
   }
 
   private startRippleAnimation() {

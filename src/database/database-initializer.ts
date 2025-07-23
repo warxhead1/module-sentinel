@@ -51,21 +51,13 @@ export class DatabaseInitializer {
   }
   
   /**
-   * Run migrations using the unified schema SQL file
+   * Run migrations using the SQL files in migrations folder
    */
   private async runMigrations(db: Database.Database): Promise<void> {
     const drizzleDb = drizzle(db);
     
     try {
-      // Read unified schema migration
-      const migrationPath = path.join(__dirname, 'migrations', '0001_unified_schema.sql');
-      const migrationSql = await fs.readFile(migrationPath, 'utf-8');
-      
-      // Execute migration
-      console.log('📊 Running unified schema migration...');
-      db.exec(migrationSql);
-      
-      // Mark migration as complete
+      // Create migrations tracking table
       drizzleDb.run(sql`
         CREATE TABLE IF NOT EXISTS __drizzle_migrations (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,9 +66,40 @@ export class DatabaseInitializer {
         )
       `);
       
-      drizzleDb.run(sql`
-        INSERT OR IGNORE INTO __drizzle_migrations (hash) VALUES ('0001_unified_schema')
-      `);
+      // Get list of migration files
+      const migrationsDir = path.join(__dirname, 'migrations');
+      const files = await fs.readdir(migrationsDir);
+      const migrationFiles = files
+        .filter(f => f.endsWith('.sql'))
+        .sort(); // Ensure migrations run in order
+      
+      console.log(`📊 Found ${migrationFiles.length} migration files`);
+      
+      // Run each migration if not already applied
+      for (const file of migrationFiles) {
+        const migrationName = file.replace('.sql', '');
+        
+        // Check if migration already applied
+        const existing = drizzleDb.get(sql`
+          SELECT 1 FROM __drizzle_migrations WHERE hash = ${migrationName}
+        `);
+        
+        if (!existing) {
+          console.log(`📊 Running migration: ${migrationName}...`);
+          const migrationPath = path.join(migrationsDir, file);
+          const migrationSql = await fs.readFile(migrationPath, 'utf-8');
+          
+          // Execute migration
+          db.exec(migrationSql);
+          
+          // Mark as complete
+          drizzleDb.run(sql`
+            INSERT INTO __drizzle_migrations (hash) VALUES (${migrationName})
+          `);
+          
+          console.log(`✅ Migration ${migrationName} completed`);
+        }
+      }
       
     } catch (error) {
       console.error('Failed to run migrations:', error);
@@ -101,7 +124,14 @@ export class DatabaseInitializer {
       'file_index',
       'detected_patterns',
       'semantic_tag_definitions',
-      'symbol_semantic_tags'
+      'symbol_semantic_tags',
+      // Semantic intelligence tables
+      'semantic_clusters',
+      'cluster_membership',
+      'semantic_insights',
+      'insight_recommendations',
+      'code_embeddings',
+      'semantic_relationships'
     ];
     
     const drizzleDb = drizzle(db);

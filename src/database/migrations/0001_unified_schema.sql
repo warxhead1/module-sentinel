@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS universal_symbols (
   complexity INTEGER DEFAULT 1,
   is_definition INTEGER DEFAULT 1,
   parent_scope TEXT,
+  -- Enhanced semantic intelligence fields
+  semantic_embedding TEXT,
+  readability_score REAL,
+  architectural_role TEXT,
+  complexity_metrics TEXT,
+  semantic_similarity_hash TEXT,
+  last_modified INTEGER,
+  change_frequency INTEGER DEFAULT 0,
   -- For unique constraint
   UNIQUE(project_id, language_id, qualified_name, file_path, line)
 );

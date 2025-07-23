@@ -370,7 +370,7 @@ export async function discoverVirtualOverrides(db: ReturnType<typeof drizzle>, p
       or(
         eq(universalSymbols.kind, 'method')
       ),
-      sql`${universalSymbols.parentId} IS NOT NULL` // Ensure it's a method of a class/struct
+      sql`${universalSymbols.parentSymbolId} IS NOT NULL` // Ensure it's a method of a class/struct
     ));
 
   const insertRelationship = db.insert(universalRelationships).values;

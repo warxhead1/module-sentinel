@@ -68,24 +68,51 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
   async initialize(): Promise<void> {
     try {
+      // Initialize base parser first
+      // Initialize base parser first (note: initialize is abstract, calling from constructor)
+      
       // Use native tree-sitter-cpp (Node.js API) - modern v0.23.4
       try {
-        // Load tree-sitter-cpp using correct Node.js API
-        const cppLanguage = require("tree-sitter-cpp");
+        console.log("[CppParser] Attempting to load tree-sitter-cpp...");
+        
+        // Try different import strategies for tree-sitter-cpp
+        let cppLanguage;
+        try {
+          // Strategy 1: Direct require
+          cppLanguage = require("tree-sitter-cpp");
+          console.log("[CppParser] Direct require succeeded");
+        } catch (e1: any) {
+          console.log("[CppParser] Direct require failed:", e1.message);
+          try {
+            // Strategy 2: Dynamic import
+            const module = await import("tree-sitter-cpp");
+            cppLanguage = module.default || module;
+            console.log("[CppParser] Dynamic import succeeded");
+          } catch (e2: any) {
+            console.log("[CppParser] Dynamic import failed:", e2.message);
+            throw new Error(`All import strategies failed: ${(e1 as any).message}, ${e2.message}`);
+          }
+        }
+        
         if (cppLanguage && this.parser) {
           this.parser.setLanguage(cppLanguage);
           this.useTreeSitter = true;
-          this.debug("Successfully loaded tree-sitter-cpp v0.23.4!");
+          console.log("✅ [CppParser] Successfully loaded tree-sitter-cpp v0.23.4!");
           return;
+        } else {
+          throw new Error("Language or parser is null after loading");
         }
       } catch (error) {
+        console.error("❌ [CppParser] Failed to load tree-sitter-cpp:", error);
         this.debug(`Failed to load tree-sitter-cpp: ${error}`);
       }
 
       // Fall back to pattern-based parsing
       this.useTreeSitter = false;
+      console.warn("⚠️ [CppParser] Using optimized pattern-based parsing for C++");
       this.debug("Using optimized pattern-based parsing for C++");
     } catch (error) {
+      console.error("❌ [CppParser] Failed to initialize C++ parser:", error);
       this.debug(`Failed to initialize C++ parser: ${error}`);
       this.useTreeSitter = false;
     }
@@ -107,24 +134,72 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
     let result;
 
-    // Always use pattern-based parsing if tree-sitter is not available
-    if (!this.useTreeSitter || content.length > 50 * 1024) {
-      this.debug(`Using pattern-based parsing for: ${filePath}`);
-      result = await this.performPatternBasedExtraction(content, filePath);
-    } else {
-      // Use tree-sitter for smaller files when available
+    // Always try tree-sitter first when available, regardless of file size
+    if (this.useTreeSitter) {
       try {
+        // Tree-sitter parsing enabled
+        this.debug(`Using tree-sitter parsing for: ${filePath}`);
         const tree = this.parser.parse(content);
         if (!tree) {
           throw new Error("Parser returned null tree");
         }
-        result = await this.visitor.traverse(tree, filePath, content);
+        
+        // Check for parsing errors but don't fail - tree-sitter can still extract symbols from trees with errors
+        if (tree.rootNode.hasError) {
+          this.debug(`Tree has parsing errors but continuing with symbol extraction for: ${filePath}`);
+        }
+        // Create proper C++ visitor context
+        const cppContext: CppVisitorContext = {
+          filePath,
+          content,
+          symbols: new Map(),
+          relationships: [],
+          patterns: [],
+          controlFlowData: { blocks: [], calls: [] },
+          scopeStack: [],
+          stats: {
+            nodesVisited: 0,
+            symbolsExtracted: 0,
+            complexityChecks: 0,
+            controlFlowAnalyzed: 0,
+          },
+          templateDepth: 0,
+          insideExportBlock: false,
+          currentAccessLevel: "public",
+          usingDeclarations: new Map(),
+          resolutionContext: {
+            currentFile: filePath,
+            currentNamespace: undefined,
+            importedNamespaces: new Set(),
+            typeAliases: new Map(),
+          },
+        };
+
+        result = await this.visitor.traverseWithContext(tree, cppContext);
+        
+        // Tree-sitter parsing completed successfully
       } catch (error) {
+        if (filePath.includes('RenderingTypes.ixx')) {
+          console.log(`❌ TARGETED: Tree-sitter failed for ${filePath}, falling back to patterns: ${error}`);
+        }
         this.debug(
           `Tree-sitter parsing failed, falling back to patterns: ${error}`
         );
         result = await this.performPatternBasedExtraction(content, filePath);
+        
+        // Note: Semantic intelligence will use pattern-based data only when tree-sitter fails
       }
+    } else {
+      // Only use pattern-based parsing if tree-sitter is completely unavailable
+      if (filePath.includes('RenderingTypes.ixx')) {
+        console.log(`❌ TARGETED: Tree-sitter unavailable, using pattern-based parsing for: ${filePath}`);
+      }
+      this.debug(
+        `Tree-sitter unavailable, using pattern-based parsing for: ${filePath}`
+      );
+      result = await this.performPatternBasedExtraction(content, filePath);
+      
+      // Note: Semantic intelligence will use pattern-based data only when tree-sitter unavailable
     }
 
     // Cache the result
@@ -158,6 +233,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
       // Pattern detection
       onPattern: this.handlePattern.bind(this),
+      onTemplate: this.handleTemplate.bind(this),
 
       // Scope management
       onEnterScope: this.handleEnterScope.bind(this),
@@ -202,7 +278,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       ["type_identifier", "onTypeReference"],
 
       // Patterns
-      ["template_declaration", "onPattern"],
+      ["template_declaration", "onTemplate"],
       ["lambda_expression", "onPattern"],
     ]);
   }
@@ -366,7 +442,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           isExported: line.includes("export"),
           isAsync: false,
           namespace: namespaceStack.slice(0, -1).join("::") || undefined,
-          parentScope: undefined
+          parentScope: undefined,
         };
 
         context.symbols.set(symbol.qualifiedName, symbol);
@@ -577,9 +653,21 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         );
 
         // Analyze control flow for complex functions, but always analyze for member access
-        this.debug(`    Complexity check: ${complexity} >= 2 && ${context.stats.controlFlowAnalyzed} < 10 = ${complexity >= 2 && context.stats.controlFlowAnalyzed < 10}`);
-        this.debug(`    Symbol kind check: ${symbol.kind} in [function, method, constructor] = ${symbol.kind === 'function' || symbol.kind === 'method' || symbol.kind === 'constructor'}`);
-        
+        this.debug(
+          `    Complexity check: ${complexity} >= 2 && ${
+            context.stats.controlFlowAnalyzed
+          } < 10 = ${complexity >= 2 && context.stats.controlFlowAnalyzed < 10}`
+        );
+        this.debug(
+          `    Symbol kind check: ${
+            symbol.kind
+          } in [function, method, constructor] = ${
+            symbol.kind === "function" ||
+            symbol.kind === "method" ||
+            symbol.kind === "constructor"
+          }`
+        );
+
         if (complexity >= 2 && context.stats.controlFlowAnalyzed < 10) {
           context.stats.complexityChecks++;
           this.debug(`    Analyzing control flow for ${symbol.qualifiedName}`);
@@ -588,12 +676,20 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
             (b) => b.symbolName === symbol?.qualifiedName
           ).length;
           this.debug(`    Found ${blocksFound} control flow blocks`);
-        } else if (symbol.kind === 'function' || symbol.kind === 'method' || symbol.kind === 'constructor') {
+        } else if (
+          symbol.kind === "function" ||
+          symbol.kind === "method" ||
+          symbol.kind === "constructor"
+        ) {
           // For simple functions, still analyze for member access patterns
-          this.debug(`    Analyzing member access for simple function: ${symbol.qualifiedName}`);
+          this.debug(
+            `    Analyzing member access for simple function: ${symbol.qualifiedName}`
+          );
           await this.analyzeMemberAccess(symbol, lines, i, context);
         } else {
-          this.debug(`    Skipping analysis for ${symbol.qualifiedName} (kind: ${symbol.kind}, complexity: ${complexity})`);
+          this.debug(
+            `    Skipping analysis for ${symbol.qualifiedName} (kind: ${symbol.kind}, complexity: ${complexity})`
+          );
         }
       }
 
@@ -604,7 +700,6 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
       // Member detection inside struct/class
       if (insideClass && braceDepth > insideClass.depth) {
-        
         // Member variable pattern: type name [= default_value];
         // Updated to handle types like uint32_t, std::string, etc.
         const memberMatch = line.match(
@@ -671,7 +766,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           namespaceStack.length > 0 ? namespaceStack.join("::") : undefined;
         context.resolutionContext.currentNamespace = currentNamespace;
       }
-      
+
       // Update brace depth at end of line processing
       braceDepth += openBraces;
       braceDepth -= closeBraces;
@@ -786,25 +881,35 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
   ): Promise<void> {
     let braceDepth = 0;
     let foundFunctionStart = false;
-    
-    this.debug(`    analyzeMemberAccess: Starting analysis for ${symbol.qualifiedName} at line ${startIdx + 1}`);
-    
+
+    this.debug(
+      `    analyzeMemberAccess: Starting analysis for ${
+        symbol.qualifiedName
+      } at line ${startIdx + 1}`
+    );
+
     // Find where the function body starts
     for (let i = startIdx; i < lines.length && i < startIdx + 10; i++) {
       const line = lines[i];
-      this.debug(`    analyzeMemberAccess: Checking line ${i + 1}: "${line.trim()}"`);
+      this.debug(
+        `    analyzeMemberAccess: Checking line ${i + 1}: "${line.trim()}"`
+      );
       if (line.includes("{")) {
         foundFunctionStart = true;
-        this.debug(`    analyzeMemberAccess: Found function body start at line ${i + 1}`);
+        this.debug(
+          `    analyzeMemberAccess: Found function body start at line ${i + 1}`
+        );
         break;
       }
     }
-    
+
     if (!foundFunctionStart) {
-      this.debug(`    analyzeMemberAccess: No function body found for ${symbol.qualifiedName}`);
+      this.debug(
+        `    analyzeMemberAccess: No function body found for ${symbol.qualifiedName}`
+      );
       return;
     }
-    
+
     // Scan function body for member access
     for (let i = startIdx; i < lines.length && i < startIdx + 100; i++) {
       const line = lines[i];
@@ -822,7 +927,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         const memberWriteMatches = line.matchAll(/\b(\w+)\.(\w+)\s*=/g);
         for (const match of memberWriteMatches) {
           const [, objectName, memberName] = match;
-          if (objectName !== 'this') {
+          if (objectName !== "this") {
             context.relationships.push({
               fromName: symbol.qualifiedName,
               toName: memberName,
@@ -832,22 +937,27 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: `${objectName}.${memberName}`,
-              usagePattern: "field_write"
+              usagePattern: "field_write",
             });
-            this.debug(`      Found field write: ${objectName}.${memberName} at line ${lineNum}`);
+            this.debug(
+              `      Found field write: ${objectName}.${memberName} at line ${lineNum}`
+            );
           }
         }
-        
+
         // Pattern 2: object.member in expressions (read)
         const memberAccessMatches = line.matchAll(/\b(\w+)\.(\w+)(?!\s*=)/g);
         for (const match of memberAccessMatches) {
           const [, objectName, memberName] = match;
           const beforeMatch = line.substring(0, match.index);
-          const isBeingRead = beforeMatch.match(/=\s*$/) || 
-                             line.substring(match.index! + match[0].length).match(/^\s*[;,\)\+\-\*\/\|\&<>]/) ||
-                             beforeMatch.match(/return\s+$/);
-          
-          if (isBeingRead && objectName !== 'this') {
+          const isBeingRead =
+            beforeMatch.match(/=\s*$/) ||
+            line
+              .substring(match.index! + match[0].length)
+              .match(/^\s*[;,\)\+\-\*\/\|\&<>]/) ||
+            beforeMatch.match(/return\s+$/);
+
+          if (isBeingRead && objectName !== "this") {
             context.relationships.push({
               fromName: symbol.qualifiedName,
               toName: memberName,
@@ -857,18 +967,22 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: `${objectName}.${memberName}`,
-              usagePattern: "field_read"
+              usagePattern: "field_read",
             });
-            this.debug(`      Found field read: ${objectName}.${memberName} at line ${lineNum}`);
+            this.debug(
+              `      Found field read: ${objectName}.${memberName} at line ${lineNum}`
+            );
           }
         }
-        
+
         // Pattern 3: Arrow operator obj->member
         const arrowAccessMatches = line.matchAll(/\b(\w+)->(\w+)/g);
         for (const match of arrowAccessMatches) {
           const [fullMatch, objectName, memberName] = match;
-          const isWrite = line.substring(match.index! + fullMatch.length).match(/^\s*=/);
-          
+          const isWrite = line
+            .substring(match.index! + fullMatch.length)
+            .match(/^\s*=/);
+
           context.relationships.push({
             fromName: symbol.qualifiedName,
             toName: memberName,
@@ -878,9 +992,13 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
             columnNumber: match.index || 0,
             crossLanguage: false,
             sourceContext: `${objectName}->${memberName}`,
-            usagePattern: isWrite ? "field_write" : "field_read"
+            usagePattern: isWrite ? "field_write" : "field_read",
           });
-          this.debug(`      Found field ${isWrite ? 'write' : 'read'}: ${objectName}->${memberName} at line ${lineNum}`);
+          this.debug(
+            `      Found field ${
+              isWrite ? "write" : "read"
+            }: ${objectName}->${memberName} at line ${lineNum}`
+          );
         }
       }
 
@@ -1017,7 +1135,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         // Function calls and method calls
         // Pattern 1: Regular function calls (functionName or namespace::function)
         const functionCallMatches = line.matchAll(/\b(\w+(?:::\w+)*)\s*\(/g);
-        // Pattern 2: Method calls (obj.method or obj->method)  
+        // Pattern 2: Method calls (obj.method or obj->method)
         const methodCallMatches = line.matchAll(/\b(\w+)(?:\.|\->)(\w+)\s*\(/g);
         // Process regular function calls
         for (const match of functionCallMatches) {
@@ -1041,7 +1159,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               callType: "direct",
             });
-            
+
             // Also create a relationship record for unified access
             context.relationships.push({
               fromName: symbol.qualifiedName,
@@ -1052,18 +1170,18 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: targetFunction + "(...)",
-              usagePattern: "function_call"
+              usagePattern: "function_call",
             });
           }
         }
-        
+
         // Process method calls (obj.method() or obj->method())
         for (const match of methodCallMatches) {
           const [fullMatch, objectName, methodName] = match;
           // Skip 'this' for now to avoid noise
-          if (objectName !== 'this') {
+          if (objectName !== "this") {
             const targetMethod = objectName + "." + methodName;
-            
+
             context.controlFlowData.calls.push({
               callerName: symbol.qualifiedName,
               targetFunction: targetMethod,
@@ -1071,7 +1189,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               callType: "method",
             });
-            
+
             // Create relationship record
             context.relationships.push({
               fromName: symbol.qualifiedName,
@@ -1082,18 +1200,18 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: fullMatch,
-              usagePattern: "method_call"
+              usagePattern: "method_call",
             });
           }
         }
-        
+
         // Member access tracking
         // Pattern 1: object.member = value (write)
         const memberWriteMatches = line.matchAll(/\b(\w+)\.(\w+)\s*=/g);
         for (const match of memberWriteMatches) {
           const [, objectName, memberName] = match;
           // Skip 'this' for now - focus on local variables and parameters
-          if (objectName !== 'this') {
+          if (objectName !== "this") {
             context.relationships.push({
               fromName: symbol.qualifiedName,
               toName: memberName, // We'll resolve this to actual member symbol later
@@ -1103,11 +1221,11 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: `${objectName}.${memberName}`,
-              usagePattern: "field_write"
+              usagePattern: "field_write",
             });
           }
         }
-        
+
         // Pattern 2: object.member in expressions (read)
         // Exclude assignments by checking context
         const memberAccessMatches = line.matchAll(/\b(\w+)\.(\w+)(?!\s*=)/g);
@@ -1115,11 +1233,14 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           const [, objectName, memberName] = match;
           // Check if this is part of a larger assignment (e.g., x = obj.member)
           const beforeMatch = line.substring(0, match.index);
-          const isBeingRead = beforeMatch.match(/=\s*$/) || 
-                             line.substring(match.index! + match[0].length).match(/^\s*[;,\)\+\-\*\/\|\&<>]/) ||
-                             beforeMatch.match(/return\s+$/);
-          
-          if (isBeingRead && objectName !== 'this') {
+          const isBeingRead =
+            beforeMatch.match(/=\s*$/) ||
+            line
+              .substring(match.index! + match[0].length)
+              .match(/^\s*[;,\)\+\-\*\/\|\&<>]/) ||
+            beforeMatch.match(/return\s+$/);
+
+          if (isBeingRead && objectName !== "this") {
             context.relationships.push({
               fromName: symbol.qualifiedName,
               toName: memberName, // We'll resolve this to actual member symbol later
@@ -1129,17 +1250,19 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
               columnNumber: match.index || 0,
               crossLanguage: false,
               sourceContext: `${objectName}.${memberName}`,
-              usagePattern: "field_read"
+              usagePattern: "field_read",
             });
           }
         }
-        
+
         // Pattern 3: Arrow operator obj->member
         const arrowAccessMatches = line.matchAll(/\b(\w+)->(\w+)/g);
         for (const match of arrowAccessMatches) {
           const [fullMatch, objectName, memberName] = match;
-          const isWrite = line.substring(match.index! + fullMatch.length).match(/^\s*=/);
-          
+          const isWrite = line
+            .substring(match.index! + fullMatch.length)
+            .match(/^\s*=/);
+
           context.relationships.push({
             fromName: symbol.qualifiedName,
             toName: memberName,
@@ -1149,7 +1272,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
             columnNumber: match.index || 0,
             crossLanguage: false,
             sourceContext: `${objectName}->${memberName}`,
-            usagePattern: isWrite ? "field_write" : "field_read"
+            usagePattern: isWrite ? "field_write" : "field_read",
           });
         }
       }
@@ -1191,7 +1314,10 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     if (!nameNode) return null;
 
     const name = this.getNodeText(nameNode, context.content);
-    const qualifiedName = this.buildQualifiedName(name, context);
+    // Use AST-based qualified name construction for consistency with fields
+    const qualifiedName = this.buildStructQualifiedName(name, node, context);
+
+    // Struct creation successful
 
     const symbol: SymbolInfo = {
       name,
@@ -1214,6 +1340,8 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     // Cache for fast resolution
     this.cacheSymbol(symbol);
 
+    // Don't manually manage scope stack - it's causing qualified name explosion
+
     return symbol;
   }
 
@@ -1222,9 +1350,139 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     ctx: VisitorContext
   ): SymbolInfo | null {
     const context = ctx as CppVisitorContext;
-    // Implementation similar to pattern-based but using AST node
-    // ... (abbreviated for brevity)
-    return null;
+    const content = context.content;
+    
+    // Get function name
+    const nameNode = node.childForFieldName('declarator');
+    if (!nameNode) return null;
+    
+    // Extract function name from the declarator
+    let functionName = '';
+    let isMethod = false;
+    
+    // Handle different declarator types
+    if (nameNode.type === 'function_declarator') {
+      // First try the 'declarator' field (works for methods in classes/structs)
+      const funcNameNode = nameNode.childForFieldName('declarator');
+      if (funcNameNode) {
+        if (funcNameNode.type === 'field_identifier') {
+          functionName = this.getNodeText(funcNameNode, content);
+          isMethod = true; // Function inside a class/struct
+        } else if (funcNameNode.type === 'identifier') {
+          functionName = this.getNodeText(funcNameNode, content);
+        } else {
+          // Handle other declarator types (e.g., qualified_identifier)
+          functionName = this.getNodeText(funcNameNode, content);
+        }
+      } else {
+        // Fallback: look for identifier/field_identifier in children
+        for (let i = 0; i < nameNode.childCount; i++) {
+          const child = nameNode.child(i);
+          if (child && (child.type === 'field_identifier' || child.type === 'identifier')) {
+            functionName = this.getNodeText(child, content);
+            isMethod = child.type === 'field_identifier';
+            break;
+          }
+        }
+      }
+    } else if (nameNode.type === 'identifier' || nameNode.type === 'field_identifier') {
+      // Direct identifier (simpler case)
+      functionName = this.getNodeText(nameNode, content);
+      isMethod = nameNode.type === 'field_identifier';
+    }
+    
+    if (!functionName) {
+      this.debug(`Failed to extract function name from node type: ${nameNode.type}`);
+      return null;
+    }
+    
+    // Get return type
+    const typeNode = node.childForFieldName('type');
+    const returnType = typeNode ? this.getNodeText(typeNode, content) : 'void';
+    
+    // Build qualified name by finding parent struct/class
+    let parentScope: string | undefined;
+    if (isMethod) {
+      // For methods, find the containing struct/class
+      let current = node.parent;
+      while (current) {
+        if (current.type === 'struct_specifier' || current.type === 'class_specifier') {
+          const structNameNode = current.childForFieldName('name');
+          if (structNameNode) {
+            const structName = this.getNodeText(structNameNode, content);
+            parentScope = this.buildParentScope(structName, context, current);
+            break;
+          }
+        }
+        current = current.parent;
+      }
+    } else {
+      // For non-methods, use the namespace context
+      parentScope = context.resolutionContext.currentNamespace;
+    }
+    
+    const qualifiedName = parentScope ? `${parentScope}::${functionName}` : functionName;
+    
+    // Get function signature
+    const parametersNode = nameNode.childForFieldName('parameters');
+    let signature = functionName;
+    if (parametersNode) {
+      const paramText = this.getNodeText(parametersNode, content);
+      signature = `${functionName}${paramText}`;
+    }
+    
+    // Check for const method
+    let isConst = false;
+    // Check in the declarator node for const qualifier (for methods)
+    if (nameNode.type === 'function_declarator') {
+      for (let i = 0; i < nameNode.childCount; i++) {
+        const child = nameNode.child(i);
+        if (child && child.type === 'type_qualifier' && this.getNodeText(child, content) === 'const') {
+          isConst = true;
+          break;
+        }
+      }
+    }
+    // Also check at the function definition level (for other cases)
+    if (!isConst) {
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child && child.type === 'type_qualifier' && this.getNodeText(child, content) === 'const') {
+          isConst = true;
+          break;
+        }
+      }
+    }
+    
+    if (isConst) {
+      signature += ' const';
+    }
+    
+    const symbol: SymbolInfo = {
+      name: functionName,
+      qualifiedName: qualifiedName,
+      kind: isMethod ? 'method' : 'function',
+      filePath: context.filePath,
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column,
+      signature: signature,
+      returnType: returnType,
+      semanticTags: [],
+      complexity: 1,
+      confidence: 0.9,
+      isDefinition: true,
+      isExported: false,
+      isAsync: false,
+      namespace: context.resolutionContext.currentNamespace,
+      parentScope: parentScope
+    };
+    
+    // Cache for fast resolution
+    this.cacheSymbol(symbol);
+    
+    return symbol;
   }
 
   private handleNamespace(
@@ -1262,7 +1520,121 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     node: Parser.SyntaxNode,
     ctx: VisitorContext
   ): SymbolInfo | null {
-    // Variable handling
+    const context = ctx as CppVisitorContext;
+
+    // Handle field declarations (struct/class members)
+    if (node.type === "field_declaration") {
+      // Get the declarator (variable name)
+      const declarator = node.childForFieldName("declarator");
+      if (!declarator) return null;
+
+      const name = this.getNodeText(declarator, context.content);
+
+      // Get the type from the type specifier
+      const typeNode = node.childForFieldName("type");
+      const returnType = typeNode
+        ? this.getNodeText(typeNode, context.content)
+        : "unknown";
+
+      // Find the parent scope by traversing up the AST
+      let parentScope: string | undefined;
+      let parent = node.parent;
+      while (parent) {
+        if (
+          parent.type === "class_specifier" ||
+          parent.type === "struct_specifier"
+        ) {
+          const nameNode = parent.childForFieldName("name");
+          if (nameNode) {
+            const parentName = this.getNodeText(nameNode, context.content);
+            
+            // Build parent scope manually to avoid duplication
+            // The parent struct should have the same namespace context as the field
+            parentScope = this.buildParentScope(parentName, context, parent);
+
+            // Safeguard: Log any suspicious qualified names for debugging
+            if (parentScope && (parentScope.split('::').length > 3 || parentScope.includes(parentName + '::' + parentName))) {
+              console.log(`⚠️  SAFEGUARD: Suspicious parent scope detected: ${parentScope} for field ${name}`);
+            }
+
+            break;
+          }
+        }
+        parent = parent.parent;
+      }
+      
+      // Build qualified name using the found parent scope
+      const qualifiedName = parentScope ? `${parentScope}::${name}` : name;
+
+      // More targeted logging
+      if (!parentScope && name === "width") {
+        console.log(
+          `❌ TARGETED: Field 'width' has no parentScope - AST parent chain:`,
+          node.parent?.type,
+          node.parent?.parent?.type
+        );
+      }
+
+      const symbol: SymbolInfo = {
+        name,
+        qualifiedName,
+        kind: "field",
+        filePath: context.filePath,
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1,
+        endLine: node.endPosition.row + 1,
+        endColumn: node.endPosition.column + 1,
+        returnType,
+        semanticTags: ["field", "member"],
+        complexity: 0,
+        confidence: 0.95,
+        isDefinition: true,
+        isExported: context.insideExportBlock,
+        isAsync: false,
+        namespace: context.resolutionContext.currentNamespace,
+        parentScope, // This will be resolved to parentSymbolId later
+      };
+
+      // Field symbols are now being returned correctly
+
+      return symbol;
+    }
+
+    // Handle regular variable declarations
+    if (node.type === "variable_declaration") {
+      const declarator = node.childForFieldName("declarator");
+      if (!declarator) return null;
+
+      const name = this.getNodeText(declarator, context.content);
+      const qualifiedName = this.buildQualifiedName(name, context);
+
+      const typeNode = node.childForFieldName("type");
+      const returnType = typeNode
+        ? this.getNodeText(typeNode, context.content)
+        : "unknown";
+
+      const symbol: SymbolInfo = {
+        name,
+        qualifiedName,
+        kind: "variable",
+        filePath: context.filePath,
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1,
+        endLine: node.endPosition.row + 1,
+        endColumn: node.endPosition.column + 1,
+        returnType,
+        semanticTags: ["variable"],
+        complexity: 0,
+        confidence: 0.9,
+        isDefinition: true,
+        isExported: context.insideExportBlock,
+        isAsync: false,
+        namespace: context.resolutionContext.currentNamespace,
+      };
+
+      return symbol;
+    }
+
     return null;
   }
 
@@ -1293,10 +1665,24 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     const targetName = this.getNodeText(functionNode, context.content);
 
     // Resolve the target symbol using cache
-    const resolved = OptimizedCppTreeSitterParser.symbolCache.resolveSymbol(
+    let resolved = OptimizedCppTreeSitterParser.symbolCache.resolveSymbol(
       targetName,
       context.resolutionContext
     );
+    
+    // If simple name resolution fails, try qualified name resolution
+    // This handles calls within the same class (methodA calling methodB)
+    if (!resolved && context.scopeStack.length > 0) {
+      const currentScope = context.scopeStack[context.scopeStack.length - 1];
+      if (currentScope?.qualifiedName) {
+        // Try to resolve as a method in the current scope
+        const qualifiedTargetName = `${currentScope.qualifiedName}::${targetName}`;
+        resolved = OptimizedCppTreeSitterParser.symbolCache.resolveSymbol(
+          qualifiedTargetName,
+          context.resolutionContext
+        );
+      }
+    }
 
     if (resolved) {
       const currentScope = context.scopeStack[context.scopeStack.length - 1];
@@ -1309,8 +1695,16 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         crossLanguage: false,
       };
     }
-
-    return null;
+    // Store unresolved call for resolution in Phase 4 (UniversalIndexer)
+    const currentScope = context.scopeStack[context.scopeStack.length - 1];
+    return {
+      fromName: currentScope?.qualifiedName || "unknown",
+      toName: targetName,
+      relationshipType: "calls",
+      confidence: 0.9,
+      lineNumber: node.startPosition.row + 1,
+      crossLanguage: false,
+    };
   }
 
   private handleInheritance(
@@ -1353,12 +1747,6 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           lineNumber: node.startPosition.row + 1,
           crossLanguage: false,
         });
-
-        console.log(
-          `[OPTIMIZED INHERITANCE] Found: ${className} -> ${baseSimpleName} (line ${
-            node.startPosition.row + 1
-          })`
-        );
       }
     }
 
@@ -1389,10 +1777,129 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     return null;
   }
 
+  private handleTemplate(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): SymbolInfo | null {
+    const context = ctx as CppVisitorContext;
+    const content = context.content;
+    
+    // Extract template parameters
+    const templateParams = this.extractTemplateParameters(node, content);
+    
+    // Find the template declaration (class, function, etc.)
+    let templateDeclaration: Parser.SyntaxNode | null = null;
+    let templateType = 'unknown';
+    
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child) continue;
+      if (child.type === 'class_specifier' || child.type === 'struct_specifier') {
+        templateDeclaration = child;
+        templateType = child.type === 'class_specifier' ? 'class' : 'struct';
+        break;
+      } else if (child.type === 'function_definition' || child.type === 'declaration') {
+        templateDeclaration = child;
+        templateType = 'function';
+        break;
+      }
+    }
+    
+    if (!templateDeclaration) {
+      this.debug(`Template declaration not found in template node`);
+      return null;
+    }
+    
+    // Get the name of the template
+    let name = 'UnknownTemplate';
+    if (templateType === 'class' || templateType === 'struct') {
+      const nameNode = templateDeclaration.childForFieldName('name');
+      if (nameNode) {
+        name = this.getNodeText(nameNode, content);
+      }
+    } else if (templateType === 'function') {
+      // For function templates, we need to find the function name
+      const funcDeclarator = this.findNodeByType(templateDeclaration, 'function_declarator');
+      if (funcDeclarator) {
+        const nameNode = funcDeclarator.childForFieldName('declarator') || funcDeclarator.child(0);
+        if (nameNode) {
+          name = this.getNodeText(nameNode, content);
+        }
+      }
+    }
+    
+    const qualifiedName = this.buildQualifiedName(name, context);
+    
+    // Create template symbol
+    const symbol: SymbolInfo = {
+      name,
+      qualifiedName,
+      kind: templateType === 'function' ? 'function' : templateType as any,
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column,
+      filePath: context.filePath,
+      signature: this.buildTemplateSignature(name, templateParams, templateType),
+      returnType: templateType === 'function' ? this.extractReturnType(templateDeclaration, content) : undefined,
+      complexity: templateType === 'function' ? 1 : 0,
+      semanticTags: ['template'],
+      isDefinition: true,
+      isExported: false,
+      isAsync: false,
+      namespace: context.resolutionContext.currentNamespace,
+      parentScope: this.buildParentScope('', context, node),
+      confidence: 0.95,
+      languageFeatures: {
+        isTemplate: true,
+        templateParameters: templateParams,
+        templateType: templateType
+      }
+    };
+    
+    // Store template parameters as separate symbols
+    for (const param of templateParams) {
+      const paramSymbol: SymbolInfo = {
+        name: param.name,
+        qualifiedName: `${qualifiedName}::${param.name}`,
+        kind: 'parameter',
+        line: param.line,
+        column: param.column,
+        endLine: param.line,
+        endColumn: param.column + param.name.length,
+        filePath: context.filePath,
+        signature: `${param.type} ${param.name}`,
+        complexity: 0,
+        semanticTags: ['template_parameter'],
+        isDefinition: true,
+        isExported: false,
+        isAsync: false,
+        namespace: context.resolutionContext.currentNamespace,
+        parentScope: qualifiedName,
+        confidence: 0.9,
+        languageFeatures: {
+          isTemplateParameter: true,
+          parameterType: param.type
+        }
+      };
+      
+      context.symbols.set(paramSymbol.qualifiedName, paramSymbol);
+    }
+    
+    this.debug(`✅ Detected template ${templateType}: ${qualifiedName} with ${templateParams.length} parameters`);
+    
+    context.symbols.set(symbol.qualifiedName, symbol);
+    return symbol;
+  }
+
   private handleEnterScope(scope: ScopeInfo, ctx: VisitorContext): void {
     const context = ctx as CppVisitorContext;
     if (scope.type === "namespace") {
       context.resolutionContext.currentNamespace = scope.qualifiedName;
+    }
+    // Handle class scopes (includes both C++ classes and structs)
+    if (scope.type === "class") {
+      // Scope is already on the stack, we just need to track it for parent resolution
     }
   }
 
@@ -1402,23 +1909,256 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       const parentScope = context.scopeStack[context.scopeStack.length - 2];
       context.resolutionContext.currentNamespace = parentScope?.qualifiedName;
     }
+    // Handle class scope exit (includes both C++ classes and structs)
+    if (scope.type === "class") {
+      // Scope is automatically popped by the visitor
+    }
+  }
+
+  /**
+   * Extract template parameters from template_parameter_list node
+   */
+  private extractTemplateParameters(node: Parser.SyntaxNode, content: string): Array<{
+    name: string;
+    type: string;
+    line: number;
+    column: number;
+  }> {
+    const params: Array<{ name: string; type: string; line: number; column: number }> = [];
+    
+    // Find template_parameter_list node
+    const paramListNode = this.findNodeByType(node, 'template_parameter_list');
+    if (!paramListNode) {
+      return params;
+    }
+    
+    // Process each parameter
+    for (let i = 0; i < paramListNode.childCount; i++) {
+      const child = paramListNode.child(i);
+      if (!child) continue;
+      
+      if (child.type === 'type_parameter_declaration') {
+        // Handle typename/class template parameters: typename T, class U
+        const typeKeyword = this.findNodeByType(child, 'typename') || this.findNodeByType(child, 'class');
+        const nameNode = this.findNodeByType(child, 'type_identifier');
+        
+        if (nameNode && typeKeyword) {
+          params.push({
+            name: this.getNodeText(nameNode, content),
+            type: this.getNodeText(typeKeyword, content),
+            line: nameNode.startPosition.row + 1,
+            column: nameNode.startPosition.column
+          });
+        } else if (nameNode) {
+          params.push({
+            name: this.getNodeText(nameNode, content),
+            type: 'typename',
+            line: nameNode.startPosition.row + 1,
+            column: nameNode.startPosition.column
+          });
+        }
+      } else if (child.type === 'parameter_declaration') {
+        // Handle non-type template parameters: int N, size_t Size
+        const typeNode = child.child(0); // First child is usually the type
+        const nameNode = child.child(1); // Second child is usually the name
+        
+        if (typeNode && nameNode) {
+          params.push({
+            name: this.getNodeText(nameNode, content),
+            type: this.getNodeText(typeNode, content),
+            line: nameNode.startPosition.row + 1,
+            column: nameNode.startPosition.column
+          });
+        }
+      }
+    }
+    
+    return params;
+  }
+
+  /**
+   * Build template signature
+   */
+  private buildTemplateSignature(name: string, params: Array<{ name: string; type: string }>, templateType: string): string {
+    if (params.length === 0) {
+      return `template<> ${templateType} ${name}`;
+    }
+    
+    const paramList = params.map(p => `${p.type} ${p.name}`).join(', ');
+    return `template<${paramList}> ${templateType} ${name}`;
+  }
+
+  /**
+   * Find node by type (recursive search)
+   */
+  private findNodeByType(node: Parser.SyntaxNode, type: string): Parser.SyntaxNode | null {
+    if (node.type === type) {
+      return node;
+    }
+    
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child) continue;
+      const found = this.findNodeByType(child, type);
+      if (found) return found;
+    }
+    
+    return null;
+  }
+
+  /**
+   * Extract return type from function declaration
+   */
+  private extractReturnType(node: Parser.SyntaxNode, content: string): string | undefined {
+    // Look for the return type in function declaration
+    const children = [];
+    for (let i = 0; i < node.childCount; i++) {
+      children.push(node.child(i));
+    }
+    
+    // Find the type before the function declarator
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (!child) continue;
+      if (child.type === 'function_declarator') {
+        // Look backwards for the type
+        for (let j = i - 1; j >= 0; j--) {
+          const prevChild = children[j];
+          if (!prevChild) continue;
+          if (prevChild.type === 'primitive_type' || 
+              prevChild.type === 'type_identifier' ||
+              prevChild.type === 'qualified_identifier') {
+            return this.getNodeText(prevChild, content);
+          }
+        }
+        break;
+      }
+    }
+    
+    return undefined;
   }
 
   private buildQualifiedName(name: string, context: CppVisitorContext): string {
     const parts: string[] = [];
 
-    if (context.resolutionContext.currentNamespace) {
-      parts.push(context.resolutionContext.currentNamespace);
-    }
-
+    // Build qualified name from scope stack (which includes namespace and class scopes)
     for (const scope of context.scopeStack) {
       if (scope.type === "class" || scope.type === "namespace") {
         parts.push(scope.name);
       }
     }
 
+    // If no scope stack, fall back to current namespace
+    if (parts.length === 0 && context.resolutionContext.currentNamespace) {
+      parts.push(context.resolutionContext.currentNamespace);
+    }
+
     parts.push(name);
-    return parts.join("::");
+    const result = parts.join("::");
+    
+    // Safeguard: Detect and warn about duplications
+    const nameParts = result.split('::');
+    const duplicates = nameParts.filter((part, index) => 
+      index > 0 && part === nameParts[index - 1]
+    );
+    if (duplicates.length > 0) {
+      console.log(`⚠️  SAFEGUARD: Detected duplication in qualified name: ${result} (duplicates: ${duplicates.join(', ')})`);
+    }
+
+    return result;
+  }
+
+  private buildParentScope(parentName: string, context: CppVisitorContext, parentNode: Parser.SyntaxNode): string {
+    // Build parent scope by traversing AST hierarchy, not using context scope stack
+    // This avoids duplication issues from manually managed scope stacks
+    
+    const parts: string[] = [];
+    
+    // Traverse up from the parent struct to find containing namespaces/classes
+    let current = parentNode.parent;
+    while (current) {
+      if (current.type === "namespace_definition") {
+        const nameNode = current.childForFieldName("name");
+        if (nameNode) {
+          const nsName = this.getNodeText(nameNode, context.content);
+          parts.unshift(nsName); // Add to beginning to maintain order
+        }
+      } else if (current.type === "class_specifier" || current.type === "struct_specifier") {
+        const nameNode = current.childForFieldName("name");
+        if (nameNode) {
+          const className = this.getNodeText(nameNode, context.content);
+          parts.unshift(className);
+        }
+      }
+      current = current.parent;
+    }
+    
+    // Add the parent struct name itself
+    parts.push(parentName);
+    
+    const result = parts.join("::");
+    
+    // Safeguard: Ensure no duplication in parent scope
+    const duplicateCheck = result.split('::');
+    for (let i = 1; i < duplicateCheck.length; i++) {
+      if (duplicateCheck[i] === duplicateCheck[i-1]) {
+        console.log(`⚠️  SAFEGUARD: buildParentScope detected duplication in ${result}, removing duplicate`);
+        duplicateCheck.splice(i, 1);
+        i--; // Adjust index after removal
+      }
+    }
+    
+    return duplicateCheck.join('::');
+  }
+
+  private buildStructQualifiedName(structName: string, structNode: Parser.SyntaxNode, context: CppVisitorContext): string {
+    // Build struct qualified name by traversing AST hierarchy
+    // This ensures consistency with field parent scope resolution
+    
+    const parts: string[] = [];
+    
+    // Traverse up from the struct to find containing namespaces/classes
+    let current = structNode.parent;
+    while (current) {
+      if (current.type === "namespace_definition") {
+        const nameNode = current.childForFieldName("name");
+        if (nameNode) {
+          const nsName = this.getNodeText(nameNode, context.content);
+          parts.unshift(nsName); // Add to beginning to maintain order
+        }
+      } else if (current.type === "class_specifier" || current.type === "struct_specifier") {
+        const nameNode = current.childForFieldName("name");
+        if (nameNode) {
+          const className = this.getNodeText(nameNode, context.content);
+          parts.unshift(className);
+        }
+      }
+      current = current.parent;
+    }
+    
+    // Add the struct name itself
+    parts.push(structName);
+    
+    const result = parts.join("::");
+    
+    // Safeguard: Ensure no duplication in struct qualified name
+    const duplicateCheck = result.split('::');
+    for (let i = 1; i < duplicateCheck.length; i++) {
+      if (duplicateCheck[i] === duplicateCheck[i-1]) {
+        console.log(`⚠️  SAFEGUARD: buildStructQualifiedName detected duplication in ${result}, removing duplicate`);
+        duplicateCheck.splice(i, 1);
+        i--; // Adjust index after removal
+      }
+    }
+    
+    // Additional safeguard: Verify struct and parent scope will match
+    const expectedParentScope = duplicateCheck.join('::');
+    if (structName === "GenericResourceDesc") {
+      console.log(`🔍 SAFEGUARD: Struct ${structName} will have qualifiedName: ${expectedParentScope}`);
+      console.log(`🔍 SAFEGUARD: Fields should have parentScope: ${expectedParentScope}`);
+    }
+    
+    return expectedParentScope;
   }
 
   private getNodeText(node: Parser.SyntaxNode, content: string): string {

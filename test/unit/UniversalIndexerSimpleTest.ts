@@ -68,7 +68,8 @@ export class UniversalIndexerTest {
       const result = await indexer.indexProject();
       
       if (!result.success) {
-        throw new Error('Indexing failed');
+        console.error('Indexing failed with errors:', result.errors);
+        throw new Error(`Indexing failed: ${result.errors.join(', ')}`);
       }
       
       if (result.filesIndexed === 0) {

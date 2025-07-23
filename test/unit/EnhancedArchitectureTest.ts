@@ -5,9 +5,9 @@
 
 import Database from 'better-sqlite3';
 import { TestResult } from '../helpers/JUnitReporter';
-import { CppUniversalParser } from '../../dist/parsers/languages/cpp-universal-parser.js';
-import { UniversalPatternEngine } from '../../dist/parsers/universal-pattern-engine.js';
-import { CrossLanguageAnalyzer } from '../../dist/parsers/cross-language-analyzer.js';
+// import { CppUniversalParser } from '../../dist/parsers/languages/cpp-universal-parser.js';
+// import { UniversalPatternEngine } from '../../dist/parsers/universal-pattern-engine.js';
+// import { CrossLanguageAnalyzer } from '../../dist/parsers/cross-language-analyzer.js';
 
 export class EnhancedArchitectureTest {
   private db: Database.Database;
