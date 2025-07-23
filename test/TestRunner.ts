@@ -28,6 +28,10 @@ import { MemberAccessDeepDiveTest } from "./unit/MemberAccessDeepDiveTest";
 import { ComprehensiveParserCapabilitiesTest } from "./unit/ComprehensiveParserCapabilitiesTest";
 import { SemanticIntelligenceIntegrationTest } from "./unit/SemanticIntelligenceIntegrationTest";
 import { ASTGenerationTest } from "./unit/ASTGenerationTest";
+import { TypeScriptEdgeCasesTest } from "./unit/TypeScriptEdgeCasesTest";
+import { CrossLanguageMicroservicesTest } from "./unit/CrossLanguageMicroservicesTest";
+import { DataFlowAnalysisTest } from "./unit/DataFlowAnalysisTest";
+import { CppAdvancedFeaturesTest } from "./unit/CppAdvancedFeaturesTest";
 
 export class TestRunner extends EventEmitter {
   private projectPath = process.cwd();
@@ -132,7 +136,7 @@ export class TestRunner extends EventEmitter {
       projectPath: testDataPath,
       projectName: "test-project",
       languages: ["cpp", "python", "typescript", "javascript"],
-      debugMode: false,
+      debugMode: true,
       enableSemanticAnalysis: true, // Enable control flow for all tests
       maxFiles: this.maxFiles,
     });
@@ -172,8 +176,24 @@ export class TestRunner extends EventEmitter {
         class: ComprehensiveParserCapabilitiesTest,
       },
       {
-        name: "SemanticIntelligenceIntegrationTest", 
+        name: "SemanticIntelligenceIntegrationTest",
         class: SemanticIntelligenceIntegrationTest,
+      },
+      {
+        name: "TypeScriptEdgeCasesTest",
+        class: TypeScriptEdgeCasesTest,
+      },
+      {
+        name: "CrossLanguageMicroservicesTest",
+        class: CrossLanguageMicroservicesTest,
+      },
+      {
+        name: "DataFlowAnalysisTest",
+        class: DataFlowAnalysisTest,
+      },
+      {
+        name: "CppAdvancedFeaturesTest",
+        class: CppAdvancedFeaturesTest,
       },
     ];
 

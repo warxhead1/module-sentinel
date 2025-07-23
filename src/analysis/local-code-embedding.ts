@@ -10,6 +10,7 @@ import Parser from 'tree-sitter';
 import { Database } from 'better-sqlite3';
 import { SymbolInfo, RelationshipInfo } from '../parsers/tree-sitter/parser-types.js';
 import { SemanticContext } from './semantic-context-engine.js';
+import { generateEmbeddingSymbolId, generateEmbeddingCacheKey } from './symbol-key-utils.js';
 
 export interface CodeEmbedding {
   symbolId: string | number;
@@ -127,9 +128,9 @@ export class LocalCodeEmbeddingEngine {
     // Generate embedding vector
     const embedding = this.generateEmbeddingVector(features);
 
-    // Create embedding object
+    // Create embedding object with consistent symbolId
     const codeEmbedding: CodeEmbedding = {
-      symbolId: symbol.name, // Using name as ID for now
+      symbolId: generateEmbeddingSymbolId(symbol), // Use consistent key format
       embedding,
       dimensions: this.embeddingDimensions,
       version: '1.0.0',
@@ -358,7 +359,7 @@ export class LocalCodeEmbeddingEngine {
    * Generate cache key for a symbol
    */
   private getCacheKey(symbol: SymbolInfo): string {
-    return `${symbol.filePath}:${symbol.name}:${symbol.line}:${symbol.complexity}`;
+    return generateEmbeddingCacheKey(symbol);
   }
 
   /**
@@ -410,7 +411,6 @@ class ASTFeatureExtractor {
     
     // Check if AST is valid
     if (!ast || !ast.rootNode) {
-      console.warn('[ASTFeatureExtractor] Invalid AST provided, returning empty features');
       return new Array(20).fill(0); // Return empty features array
     }
     
@@ -462,7 +462,6 @@ class ASTFeatureExtractor {
 
     // Check if AST is valid
     if (!ast || !ast.rootNode) {
-      console.warn('[ASTFeatureExtractor] Invalid AST for depth features, returning defaults');
       return [0, 0]; // Return default depth features
     }
 

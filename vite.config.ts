@@ -20,7 +20,8 @@ export default defineConfig({
     strictPort: false,
     hmr: {
       port: 6970,
-      overlay: false // Disable error overlay
+      host: 'localhost',
+      protocol: 'ws'
     },
     watch: {
       // Exclude database and build files from watching

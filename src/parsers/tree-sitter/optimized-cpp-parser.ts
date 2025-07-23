@@ -264,6 +264,9 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       ["field_declaration", "onVariable"],
       ["variable_declaration", "onVariable"],
       ["parameter_declaration", "onVariable"],
+      ["structured_binding_declaration", "onVariable"],
+      ["declaration", "onVariable"], // For structured bindings and inline variables
+      ["init_declarator", "onVariable"], // For inline variables and other declarations
 
       // Type definitions
       ["enum_specifier", "onEnum"],
@@ -1522,6 +1525,29 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
   ): SymbolInfo | null {
     const context = ctx as CppVisitorContext;
 
+    // Handle general declarations that might contain structured bindings or inline variables
+    if (node.type === "declaration") {
+      // Check if this is a structured binding by looking for structured_binding_declarator child
+      const hasStructuredBinding = this.findNodeByType(node, 'structured_binding_declarator');
+      if (hasStructuredBinding) {
+        return this.handleStructuredBindingFromDeclaration(node, ctx);
+      }
+      
+      // Check if this has inline keyword for inline variables
+      const hasInline = node.text.includes('inline');
+      if (hasInline) {
+        return this.handleInlineVariableFromDeclaration(node, ctx);
+      }
+      
+      // Handle as regular declaration
+      return this.handleRegularDeclaration(node, ctx);
+    }
+
+    // Handle structured binding declarations (C++17) - direct type
+    if (node.type === "structured_binding_declaration") {
+      return this.handleStructuredBinding(node, ctx);
+    }
+
     // Handle field declarations (struct/class members)
     if (node.type === "field_declaration") {
       // Get the declarator (variable name)
@@ -1600,6 +1626,20 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       return symbol;
     }
 
+    // Handle init_declarator nodes (which may contain inline variables)
+    if (node.type === "init_declarator") {
+      // For init_declarator, we need to find the parent declaration for context
+      let parentDeclaration = node.parent;
+      while (parentDeclaration && parentDeclaration.type !== "variable_declaration") {
+        parentDeclaration = parentDeclaration.parent;
+      }
+      
+      if (parentDeclaration) {
+        // Process this as a variable declaration with the parent context
+        return this.handleInitDeclarator(node, parentDeclaration, context);
+      }
+    }
+
     // Handle regular variable declarations
     if (node.type === "variable_declaration") {
       const declarator = node.childForFieldName("declarator");
@@ -1613,6 +1653,69 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         ? this.getNodeText(typeNode, context.content)
         : "unknown";
 
+      // Enhanced modifier detection using AST traversal and text fallback
+      let isInline = false;
+      let isConstexpr = false;
+      let isConst = false;
+      let isStatic = false;
+      let isThreadLocal = false;
+      let isExtern = false;
+      let isMutable = false;
+      
+      // First, check AST nodes for storage class specifiers and type qualifiers
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (!child) continue;
+        
+        const childText = this.getNodeText(child, context.content);
+        
+        // Check storage class specifiers
+        if (child.type === 'storage_class_specifier') {
+          switch (childText) {
+            case 'inline': isInline = true; break;
+            case 'static': isStatic = true; break;
+            case 'extern': isExtern = true; break;
+            case 'thread_local': isThreadLocal = true; break;
+          }
+        }
+        
+        // Check type qualifiers
+        if (child.type === 'type_qualifier') {
+          switch (childText) {
+            case 'const': isConst = true; break;
+            case 'mutable': isMutable = true; break;
+          }
+        }
+        
+        // Check for constexpr (which might appear as its own node type)
+        if (child.type === 'constexpr' || childText === 'constexpr') {
+          isConstexpr = true;
+        }
+      }
+      
+      // Fallback to text-based detection for cases where AST doesn't capture everything
+      const fullText = node.text;
+      if (!isInline && /\binline\b/.test(fullText)) isInline = true;
+      if (!isConstexpr && /\bconstexpr\b/.test(fullText)) isConstexpr = true;
+      if (!isConst && /\bconst\b/.test(fullText)) isConst = true;
+      if (!isStatic && /\bstatic\b/.test(fullText)) isStatic = true;
+      if (!isThreadLocal && /\bthread_local\b/.test(fullText)) isThreadLocal = true;
+      if (!isExtern && /\bextern\b/.test(fullText)) isExtern = true;
+      if (!isMutable && /\bmutable\b/.test(fullText)) isMutable = true;
+
+      // Build semantic tags based on modifiers
+      const tags = ['variable'];
+      if (isInline) {
+        tags.push('inline');
+        tags.push('modern_cpp'); // Inline variables are C++17 feature
+      }
+      if (isConstexpr) tags.push('constexpr');
+      if (isConst) tags.push('const');
+      if (isStatic) tags.push('static');
+      if (isThreadLocal) tags.push('thread_local');
+      if (isExtern) tags.push('extern');
+      if (isMutable) tags.push('mutable');
+
       const symbol: SymbolInfo = {
         name,
         qualifiedName,
@@ -1623,19 +1726,359 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         endLine: node.endPosition.row + 1,
         endColumn: node.endPosition.column + 1,
         returnType,
-        semanticTags: ["variable"],
+        signature: fullText.trim(),
+        semanticTags: tags,
         complexity: 0,
         confidence: 0.9,
         isDefinition: true,
         isExported: context.insideExportBlock,
         isAsync: false,
         namespace: context.resolutionContext.currentNamespace,
+        languageFeatures: {
+          isInline: isInline,
+          isConstexpr: isConstexpr,
+          isConst: isConst,
+          isStatic: isStatic,
+          isThreadLocal: isThreadLocal,
+          isExtern: isExtern,
+          isMutable: isMutable,
+          modifiers: tags.filter(tag => tag !== 'variable') // All modifiers except 'variable'
+        }
       };
+
+      // Enhanced debug logging for modern C++ features
+      if (isInline) {
+        this.debug(`✅ Detected inline variable: ${name} (C++17 feature)`);
+      }
+      if (isConstexpr) {
+        this.debug(`✅ Detected constexpr variable: ${name}`);
+      }
+      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
+        this.debug(`🔍 Modern C++ variable detected: ${name} with tags: [${tags.join(', ')}]`);
+      }
 
       return symbol;
     }
 
     return null;
+  }
+
+  private handleInitDeclarator(
+    node: Parser.SyntaxNode,
+    parentDeclaration: Parser.SyntaxNode,
+    context: CppVisitorContext
+  ): SymbolInfo | null {
+    try {
+      // Extract the variable name from the init_declarator
+      const declarator = node.childForFieldName("declarator") || node.child(0);
+      if (!declarator) return null;
+
+      const name = this.getNodeText(declarator, context.content);
+      if (!name) return null;
+
+      const qualifiedName = this.buildQualifiedName(name, context);
+
+      // Get type information from the parent declaration
+      const typeNode = parentDeclaration.childForFieldName("type");
+      const returnType = typeNode
+        ? this.getNodeText(typeNode, context.content)
+        : "unknown";
+
+      // Check for modifiers in both the parent declaration and the declarator
+      let isInline = false;
+      let isConstexpr = false;
+      let isConst = false;
+      let isStatic = false;
+      let isThreadLocal = false;
+      let isExtern = false;
+      let isMutable = false;
+
+      // Check parent declaration for storage class specifiers
+      for (let i = 0; i < parentDeclaration.childCount; i++) {
+        const child = parentDeclaration.child(i);
+        if (!child) continue;
+        
+        const childText = this.getNodeText(child, context.content);
+        
+        if (child.type === 'storage_class_specifier') {
+          switch (childText) {
+            case 'inline': isInline = true; break;
+            case 'static': isStatic = true; break;
+            case 'extern': isExtern = true; break;
+            case 'thread_local': isThreadLocal = true; break;
+          }
+        }
+        
+        if (child.type === 'type_qualifier') {
+          switch (childText) {
+            case 'const': isConst = true; break;
+            case 'mutable': isMutable = true; break;
+          }
+        }
+        
+        if (child.type === 'constexpr' || childText === 'constexpr') {
+          isConstexpr = true;
+        }
+      }
+
+      // Fallback to text-based detection
+      const fullText = parentDeclaration.text;
+      if (!isInline && /\binline\b/.test(fullText)) isInline = true;
+      if (!isConstexpr && /\bconstexpr\b/.test(fullText)) isConstexpr = true;
+      if (!isConst && /\bconst\b/.test(fullText)) isConst = true;
+      if (!isStatic && /\bstatic\b/.test(fullText)) isStatic = true;
+      if (!isThreadLocal && /\bthread_local\b/.test(fullText)) isThreadLocal = true;
+      if (!isExtern && /\bextern\b/.test(fullText)) isExtern = true;
+      if (!isMutable && /\bmutable\b/.test(fullText)) isMutable = true;
+
+      // Build semantic tags
+      const tags = ['variable'];
+      if (isInline) {
+        tags.push('inline');
+        tags.push('modern_cpp');
+      }
+      if (isConstexpr) tags.push('constexpr');
+      if (isConst) tags.push('const');
+      if (isStatic) tags.push('static');
+      if (isThreadLocal) tags.push('thread_local');
+      if (isExtern) tags.push('extern');
+      if (isMutable) tags.push('mutable');
+
+      const symbol: SymbolInfo = {
+        name,
+        qualifiedName,
+        kind: "variable",
+        filePath: context.filePath,
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1,
+        endLine: node.endPosition.row + 1,
+        endColumn: node.endPosition.column + 1,
+        returnType,
+        signature: parentDeclaration.text.trim(),
+        semanticTags: tags,
+        complexity: 0,
+        confidence: 0.9,
+        isDefinition: true,
+        isExported: context.insideExportBlock,
+        isAsync: false,
+        namespace: context.resolutionContext.currentNamespace,
+        languageFeatures: {
+          isInline: isInline,
+          isConstexpr: isConstexpr,
+          isConst: isConst,
+          isStatic: isStatic,
+          isThreadLocal: isThreadLocal,
+          isExtern: isExtern,
+          isMutable: isMutable,
+          modifiers: tags.filter(tag => tag !== 'variable'),
+          isInitDeclarator: true
+        }
+      };
+
+      // Debug logging
+      if (isInline) {
+        this.debug(`✅ Detected inline variable (via init_declarator): ${name} (C++17 feature)`);
+      }
+      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
+        this.debug(`🔍 Modern C++ variable (via init_declarator): ${name} with tags: [${tags.join(', ')}]`);
+      }
+
+      return symbol;
+      
+    } catch (error) {
+      this.debug(`Error in handleInitDeclarator: ${error}`);
+      return null;
+    }
+  }
+
+  private handleStructuredBindingFromDeclaration(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): SymbolInfo | null {
+    const context = ctx as CppVisitorContext;
+    try {
+      // Find the structured_binding_declarator node
+      const bindingDeclarator = this.findNodeByType(node, 'structured_binding_declarator');
+      if (!bindingDeclarator) return null;
+
+      // Extract variable names from the structured binding declarator
+      const bindingList: string[] = [];
+      for (let i = 0; i < bindingDeclarator.childCount; i++) {
+        const child = bindingDeclarator.child(i);
+        if (child && child.type === 'identifier') {
+          bindingList.push(this.getNodeText(child, context.content));
+        }
+      }
+
+      if (bindingList.length === 0) {
+        this.debug(`No identifiers found in structured binding: ${node.text}`);
+        return null;
+      }
+
+      this.debug(`🔍 Structured binding from declaration: [${bindingList.join(', ')}]`);
+
+      // Create symbols for all binding variables
+      const symbols: SymbolInfo[] = [];
+      
+      for (let i = 0; i < bindingList.length; i++) {
+        const varName = bindingList[i];
+        const qualifiedName = this.buildQualifiedName(varName, context);
+        
+        const symbol: SymbolInfo = {
+          name: varName,
+          qualifiedName,
+          kind: 'variable',
+          filePath: context.filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column + 1,
+          endLine: node.endPosition.row + 1,
+          endColumn: node.endPosition.column + 1,
+          signature: node.text.trim(),
+          returnType: 'auto', // Type is deduced from structured binding
+          namespace: context.resolutionContext.currentNamespace,
+          semanticTags: ['structured_binding', 'auto_deduced', 'modern_cpp'],
+          complexity: 0,
+          confidence: 0.95,
+          isDefinition: true,
+          isExported: context.insideExportBlock,
+          isAsync: false,
+          languageFeatures: {
+            isStructuredBinding: true,
+            bindingVariables: bindingList,
+            totalBindings: bindingList.length,
+            bindingIndex: i,
+            hasAutoKeyword: true,
+            declarationType: 'declaration_node'
+          }
+        };
+        
+        symbols.push(symbol);
+        
+        // Add all symbols except the first to context directly
+        if (i > 0) {
+          context.symbols.set(symbol.qualifiedName, symbol);
+        }
+      }
+      
+      if (symbols.length > 0) {
+        this.debug(`✅ Detected structured binding from declaration: ${bindingList.join(', ')} (${symbols.length} variables)`);
+        return symbols[0]; // Return the first symbol, others are added to context
+      }
+      
+      return null;
+      
+    } catch (error) {
+      this.debug(`Error in handleStructuredBindingFromDeclaration: ${error}`);
+      return null;
+    }
+  }
+
+  private handleInlineVariableFromDeclaration(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): SymbolInfo | null {
+    const context = ctx as CppVisitorContext;
+    try {
+      // Find init_declarator that contains the variable name
+      const initDeclarator = this.findNodeByType(node, 'init_declarator');
+      if (!initDeclarator) return null;
+
+      // Get variable name from the declarator
+      const declarator = initDeclarator.childForFieldName('declarator') || initDeclarator.child(0);
+      if (!declarator) return null;
+
+      const name = this.getNodeText(declarator, context.content);
+      if (!name) return null;
+
+      const qualifiedName = this.buildQualifiedName(name, context);
+
+      // Get type information
+      const typeNode = node.childForFieldName("type") || this.findNodeByType(node, 'primitive_type');
+      const returnType = typeNode
+        ? this.getNodeText(typeNode, context.content)
+        : "auto";
+
+      // Parse modifiers from the declaration
+      const fullText = node.text;
+      const isInline = /\binline\b/.test(fullText);
+      const isConstexpr = /\bconstexpr\b/.test(fullText);
+      const isConst = /\bconst\b/.test(fullText);
+      const isStatic = /\bstatic\b/.test(fullText);
+
+      // Build semantic tags
+      const tags = ['variable'];
+      if (isInline) {
+        tags.push('inline');
+        tags.push('modern_cpp'); // Inline variables are C++17 feature
+      }
+      if (isConstexpr) tags.push('constexpr');
+      if (isConst) tags.push('const');
+      if (isStatic) tags.push('static');
+
+      const symbol: SymbolInfo = {
+        name,
+        qualifiedName,
+        kind: "variable",
+        filePath: context.filePath,
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1,
+        endLine: node.endPosition.row + 1,
+        endColumn: node.endPosition.column + 1,
+        returnType,
+        signature: fullText.trim(),
+        semanticTags: tags,
+        complexity: 0,
+        confidence: 0.95,
+        isDefinition: true,
+        isExported: context.insideExportBlock,
+        isAsync: false,
+        namespace: context.resolutionContext.currentNamespace,
+        languageFeatures: {
+          isInline: isInline,
+          isConstexpr: isConstexpr,
+          isConst: isConst,
+          isStatic: isStatic,
+          modifiers: tags.filter(tag => tag !== 'variable'),
+          declarationType: 'declaration_node'
+        }
+      };
+
+      // Debug logging
+      if (isInline) {
+        this.debug(`✅ Detected inline variable from declaration: ${name} (C++17 feature)`);
+      }
+      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
+        this.debug(`🔍 Modern C++ variable from declaration: ${name} with tags: [${tags.join(', ')}]`);
+      }
+
+      return symbol;
+      
+    } catch (error) {
+      this.debug(`Error in handleInlineVariableFromDeclaration: ${error}`);
+      return null;
+    }
+  }
+
+  private handleRegularDeclaration(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): SymbolInfo | null {
+    const context = ctx as CppVisitorContext;
+    try {
+      // Handle regular declarations that aren't structured bindings or inline variables
+      const initDeclarator = this.findNodeByType(node, 'init_declarator');
+      if (initDeclarator) {
+        return this.handleInitDeclarator(initDeclarator, node, context);
+      }
+
+      // For other types of declarations, we might need different handling
+      this.debug(`Unhandled declaration type: ${node.text.substring(0, 100)}`);
+      return null;
+      
+    } catch (error) {
+      this.debug(`Error in handleRegularDeclaration: ${error}`);
+      return null;
+    }
   }
 
   private handleEnum(
@@ -1650,8 +2093,198 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     node: Parser.SyntaxNode,
     ctx: VisitorContext
   ): SymbolInfo | null {
-    // Typedef handling
-    return null;
+    const context = ctx as CppVisitorContext;
+    try {
+      let aliasName: string | null = null;
+      let underlyingType: string | null = null;
+      
+      // Handle different typedef/using patterns
+      if (node.type === 'alias_declaration') {
+        // Modern C++ using alias: using Name = Type;
+        for (let i = 0; i < node.childCount; i++) {
+          const child = node.child(i);
+          if (!child) continue;
+          
+          if (child.type === 'type_identifier' && i === 1) {
+            aliasName = child.text;
+          } else if (child.type === 'type_descriptor' || (child.text && child.text !== '=' && child.text !== 'using' && child.text !== ';')) {
+            if (aliasName && child.text !== aliasName && child.text.length > 1) {
+              underlyingType = child.text;
+            }
+          }
+        }
+      } else if (node.type === 'using_declaration') {
+        // using namespace or using Name = Type
+        const text = node.text;
+        const usingMatch = text.match(/using\s+(\w+)\s*=\s*(.+);/);
+        if (usingMatch) {
+          aliasName = usingMatch[1];
+          underlyingType = usingMatch[2].trim();
+        }
+      } else if (node.type === 'type_definition') {
+        // Traditional typedef: typedef Type Name;
+        const text = node.text;
+        const typedefMatch = text.match(/typedef\s+(.+?)\s+(\w+);/);
+        if (typedefMatch) {
+          underlyingType = typedefMatch[1].trim();
+          aliasName = typedefMatch[2];
+        }
+      }
+      
+      if (!aliasName) {
+        this.debug(`Could not extract alias name from ${node.type}: ${node.text}`);
+        return null;
+      }
+      
+      const qualifiedName = this.buildQualifiedName(aliasName, context);
+      
+      const symbol: SymbolInfo = {
+        name: aliasName,
+        qualifiedName,
+        kind: 'typedef',
+        filePath: context.filePath,
+        line: node.startPosition.row + 1,
+        column: node.startPosition.column + 1,
+        endLine: node.endPosition.row + 1,
+        endColumn: node.endPosition.column + 1,
+        signature: underlyingType || node.text,
+        returnType: underlyingType || undefined,
+        namespace: context.currentNamespace,
+        semanticTags: ['type_alias'],
+        complexity: 0,
+        confidence: 0.95,
+        isDefinition: true,
+        isExported: context.insideExportBlock || node.text.includes('export'),
+        isAsync: false,
+        languageFeatures: {
+          isTypeAlias: true,
+          underlyingType: underlyingType
+        }
+      };
+
+      this.debug(`✅ Detected type alias: ${aliasName} = ${underlyingType || 'unknown'}`);
+      return symbol;
+      
+    } catch (error) {
+      this.debug(`Error in handleTypedef: ${error}`);
+      return null;
+    }
+  }
+
+  private handleStructuredBinding(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): SymbolInfo | null {
+    const context = ctx as CppVisitorContext;
+    try {
+      // Use AST traversal instead of regex pattern matching for better accuracy
+      let bindingList: string[] = [];
+      let autoKeyword = false;
+      let qualifiers: string[] = [];
+      
+      // Find the binding list by traversing the AST
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (!child) continue;
+        
+        // Look for 'auto' keyword
+        if (child.type === 'auto' || child.text === 'auto') {
+          autoKeyword = true;
+        }
+        
+        // Look for qualifiers (const, &, etc.)
+        if (child.type === 'type_qualifier' || ['const', '&', '&&'].includes(child.text)) {
+          qualifiers.push(child.text);
+        }
+        
+        // Look for the binding list (usually in brackets)
+        if (child.type === 'structured_binding_declarator' || child.text.includes('[')) {
+          // Extract variable names from binding declarator
+          const bindingText = this.getNodeText(child, context.content);
+          const bracketMatch = bindingText.match(/\[([^\]]+)\]/);
+          if (bracketMatch) {
+            bindingList = bracketMatch[1]
+              .split(',')
+              .map(v => v.trim())
+              .filter(v => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v)); // Valid identifiers only
+          }
+        }
+      }
+      
+      // Fallback to pattern matching if AST traversal fails
+      if (bindingList.length === 0) {
+        const text = node.text;
+        const bindingMatch = text.match(/auto\s*(?:&|\*|const)?\s*\[([^\]]+)\]/);
+        
+        if (bindingMatch) {
+          bindingList = bindingMatch[1]
+            .split(',')
+            .map(v => v.trim())
+            .filter(v => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v));
+        }
+      }
+      
+      if (bindingList.length === 0) {
+        this.debug(`Could not parse structured binding: ${node.text}`);
+        return null;
+      }
+      
+      this.debug(`🔍 Structured binding detected: [${bindingList.join(', ')}] with qualifiers: [${qualifiers.join(', ')}]`);
+      
+      // Create symbols for all binding variables
+      const symbols: SymbolInfo[] = [];
+      
+      for (let i = 0; i < bindingList.length; i++) {
+        const varName = bindingList[i];
+        const qualifiedName = this.buildQualifiedName(varName, context);
+        
+        const symbol: SymbolInfo = {
+          name: varName,
+          qualifiedName,
+          kind: 'variable',
+          filePath: context.filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column + 1,
+          endLine: node.endPosition.row + 1,
+          endColumn: node.endPosition.column + 1,
+          signature: node.text.trim(),
+          returnType: 'auto', // Type is deduced
+          namespace: context.resolutionContext.currentNamespace,
+          semanticTags: ['structured_binding', 'auto_deduced', 'modern_cpp'],
+          complexity: 0,
+          confidence: 0.95,
+          isDefinition: true,
+          isExported: context.insideExportBlock,
+          isAsync: false,
+          languageFeatures: {
+            isStructuredBinding: true,
+            bindingVariables: bindingList,
+            totalBindings: bindingList.length,
+            bindingIndex: i,
+            qualifiers: qualifiers,
+            hasAutoKeyword: autoKeyword
+          }
+        };
+        
+        symbols.push(symbol);
+        
+        // Add all symbols except the first to context directly
+        if (i > 0) {
+          context.symbols.set(symbol.qualifiedName, symbol);
+        }
+      }
+      
+      if (symbols.length > 0) {
+        this.debug(`✅ Detected structured binding: ${bindingList.join(', ')} (${symbols.length} variables)`);
+        return symbols[0]; // Return the first symbol, others are added to context
+      }
+      
+      return null;
+      
+    } catch (error) {
+      this.debug(`Error in handleStructuredBinding: ${error}`);
+      return null;
+    }
   }
 
   private handleCall(

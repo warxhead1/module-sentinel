@@ -535,12 +535,12 @@ export class SymbolSelectorModal extends DashboardComponent {
       this.searchResults = [];
       this.selectedIndex = 0;
       this._loading = false;
-      this.render();
+      this.updateContent();
       return;
     }
 
     this._loading = true;
-    this.render();
+    this.updateContent();
 
     try {
       const response = await dataService.fetch(`/api/symbols?q=${encodeURIComponent(query)}&limit=20`);
@@ -561,11 +561,19 @@ export class SymbolSelectorModal extends DashboardComponent {
     }
 
     this._loading = false;
-    this.render();
+    this.updateContent();
   }, 300);
 
   handleSearch(value: string) {
     this.debouncedSearch(value);
+  }
+
+  private updateContent() {
+    const contentDiv = this.shadow.querySelector('.content');
+    if (!contentDiv) return;
+
+    // Only update the content area, not the entire modal
+    contentDiv.innerHTML = this._loading ? this.renderLoading() : this.renderSymbols();
   }
 
   handleKeyDown(event: KeyboardEvent) {

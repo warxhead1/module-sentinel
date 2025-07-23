@@ -14,7 +14,7 @@ import {
   universalRelationships,
   detectedPatterns,
   projectLanguages
-} from '../database/schema/universal.js';
+} from '../database/drizzle/schema.js';
 
 export interface EnrichmentStrategy {
   name: string;
@@ -387,8 +387,8 @@ export async function discoverVirtualOverrides(db: ReturnType<typeof drizzle>, p
 
     for (const inheritanceRel of inheritedFrom) {
       const parentClassId = inheritanceRel.toSymbolId;
-      const parentClassMethods = classMethods.filter(m => m.parentId === parentClassId);
-      const childClassMethods = classMethods.filter(m => m.parentId === childClass.id);
+      const parentClassMethods = classMethods.filter(m => m.parentSymbolId === parentClassId);
+      const childClassMethods = classMethods.filter(m => m.parentSymbolId === childClass.id);
 
       for (const parentMethod of parentClassMethods) {
         // Simple heuristic: method name and signature match

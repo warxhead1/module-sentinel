@@ -55,6 +55,9 @@ export interface ParseOptions {
   enablePatternDetection?: boolean;
   enableSemanticAnalysis?: boolean;
   languageId?: number;
+  semanticAnalysisTimeout?: number;
+  parseTimeout?: number;
+  cacheStrategy?: 'aggressive' | 'moderate' | 'minimal';
 }
 
 export interface ParseResult {

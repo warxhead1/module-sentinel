@@ -1,14 +1,51 @@
 
 import { OptimizedTreeSitterBaseParser } from '../tree-sitter/optimized-base-parser.js';
-import { ParseOptions, SymbolInfo, RelationshipInfo, PatternInfo } from '../tree-sitter/parser-types.js';
+import { ParseOptions, SymbolInfo, RelationshipInfo, PatternInfo, ParseResult } from '../tree-sitter/parser-types.js';
 import { UniversalSymbolKind, UniversalRelationshipType } from '../language-parser-interface.js';
 import { typescriptQueries } from '../queries/typescript-queries.js';
 import { Database } from 'better-sqlite3';
+import { CrossLanguageDetector } from '../utils/cross-language-detector.js';
+import { ParserPostProcessor } from '../utils/parser-post-processor.js';
 
 import Parser from 'tree-sitter';
 import { VisitorHandlers, VisitorContext } from '../unified-ast-visitor.js';
 
 export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
+  
+  /**
+   * Override parseFile to apply consolidated post-processing
+   */
+  async parseFile(filePath: string, content: string): Promise<ParseResult> {
+    // Call parent implementation
+    const result = await super.parseFile(filePath, content);
+    
+    // Apply consolidated post-processing (deduplication + validation + quality checks)
+    const processor = new ParserPostProcessor();
+    const processedResult = processor.process(result, filePath);
+    
+    // Log processing results
+    if (processedResult.processing.duplicatesRemoved > 0) {
+      this.debug(`🛡️ Post-processing: removed ${processedResult.processing.duplicatesRemoved} duplicates`);
+    }
+    
+    if (processedResult.processing.validationErrors.length > 0) {
+      this.debug(`🚨 Post-processing: ${processedResult.processing.validationErrors.length} errors`);
+      processedResult.processing.validationErrors.forEach(error => {
+        this.debug(`  ❌ ${error}`);
+      });
+    }
+    
+    if (processedResult.processing.validationWarnings.length > 0) {
+      this.debug(`⚠️ Post-processing: ${processedResult.processing.validationWarnings.length} warnings`);
+      processedResult.processing.validationWarnings.slice(0, 3).forEach(warning => {
+        this.debug(`  ⚠️ ${warning}`);
+      });
+    }
+    
+    this.debug(`📊 Quality score: ${processedResult.processing.qualityScore.toFixed(1)}/100`);
+    
+    return processedResult;
+  }
 
   constructor(db: Database, options: ParseOptions) {
     super(db, options);
@@ -163,55 +200,83 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
           const functionName = this.getNodeText(functionNode, context.content);
           const callerName = this.getQualifiedName(node, context.content);
           
-          // Check if this is a cross-language call
-          // 1. Direct process spawning functions
-          const isProcessSpawn = functionName.match(/\b(spawn|exec|execFile|fork|system)\b/);
-          
-          // 2. Custom Python script calls (look for .py in arguments)
-          let isPythonScriptCall = false;
-          try {
-            // Check if any child nodes contain .py file references
-            const callArgs = this.getCallArguments(node, context.content);
-            isPythonScriptCall = callArgs.some(arg => 
-              typeof arg === 'string' && arg.includes('.py')
-            );
-          } catch (e) {
-            // Fallback: check raw text for .py references
-            const nodeText = this.getNodeText(node, context.content);
-            isPythonScriptCall = nodeText.includes('.py');
-          }
-          
-          const isCrossLanguageCall = isProcessSpawn || isPythonScriptCall;
-          
-          // For Python script calls, set the target to the actual script name
-          let targetName = functionName;
-          if (isPythonScriptCall) {
-            try {
-              const callArgs = this.getCallArguments(node, context.content);
-              const pythonFile = callArgs.find(arg => arg.includes('.py'));
-              if (pythonFile) {
-                targetName = pythonFile;
+          // Check for dynamic import() calls
+          if (functionName === 'import') {
+            const argumentsNode = node.childForFieldName('arguments');
+            if (argumentsNode) {
+              const argsText = this.getNodeText(argumentsNode, context.content);
+              // Extract the module path from import('path') or import(`template`)
+              let modulePath: string | null = null;
+              
+              // Handle string literals: import('path')
+              const stringMatch = argsText.match(/['"]([^'"]+)['"]/);
+              if (stringMatch) {
+                modulePath = stringMatch[1];
+              } else {
+                // Handle template literals: import(`./modules/${moduleName}`)
+                const templateMatch = argsText.match(/`([^`]+)`/);
+                if (templateMatch) {
+                  modulePath = templateMatch[1]; // Keep full template for analysis
+                }
               }
-            } catch (e) {
-              // Fallback: extract .py filename from raw text
-              const nodeText = this.getNodeText(node, context.content);
-              const pythonMatch = nodeText.match(/['"`]([^'"`]*\.py)['"`]/);
-              if (pythonMatch) {
-                targetName = pythonMatch[1];
+              
+              if (modulePath) {
+                return {
+                  fromName: callerName,
+                  toName: modulePath,
+                  relationshipType: UniversalRelationshipType.Imports,
+                  confidence: 0.9,
+                  crossLanguage: false,
+                  lineNumber: node.startPosition.row + 1,
+                  columnNumber: node.startPosition.column,
+                  sourceContext: this.getNodeText(node, context.content),
+                  usagePattern: 'dynamic_import',
+                  metadata: {
+                    isDynamicImport: true,
+                    moduleSpecifier: modulePath
+                  }
+                };
               }
             }
           }
           
+          // Use enhanced cross-language detection
+          const line = this.getNodeText(node, context.content);
+          const crossLangCalls = CrossLanguageDetector.detectCrossLanguageCalls(
+            line,
+            node.startPosition.row + 1,
+            'typescript',
+            context.filePath
+          );
+          
+          // If cross-language call detected, create relationship
+          if (crossLangCalls.length > 0) {
+            const crossLang = crossLangCalls[0];
+            return {
+              fromName: callerName,
+              toName: crossLang.targetEndpoint || functionName,
+              relationshipType: crossLang.relationship.relationshipType || UniversalRelationshipType.Invokes,
+              confidence: crossLang.confidence,
+              crossLanguage: true,
+              lineNumber: node.startPosition.row + 1,
+              columnNumber: node.startPosition.column,
+              metadata: {
+                ...crossLang.metadata,
+                crossLanguageType: crossLang.type,
+                targetLanguage: crossLang.targetLanguage
+              }
+            };
+          }
+          
+          // Regular function call
           return {
-            fromName: callerName, // Caller
-            toName: targetName, // Target (function name or Python script)
+            fromName: callerName,
+            toName: functionName,
             relationshipType: UniversalRelationshipType.Calls,
-            confidence: isCrossLanguageCall ? 0.8 : 0.7, // Higher confidence for cross-language
-            crossLanguage: !!isCrossLanguageCall,
-            lineNumber: node.startPosition.row,
-            columnNumber: node.startPosition.column,
-            sourceContext: isCrossLanguageCall ? this.getNodeText(node, context.content) : undefined,
-            bridgeType: isPythonScriptCall ? 'python_script' : undefined
+            confidence: 0.7,
+            crossLanguage: false,
+            lineNumber: node.startPosition.row + 1,
+            columnNumber: node.startPosition.column
           };
         }
         return null;
@@ -247,6 +312,103 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         }
         return null;
       },
+      onVariable: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        // Handle variable declarations (const, let, var)
+        let nameNode: Parser.SyntaxNode | null = null;
+        let variableName: string | null = null;
+        let isArrowFunction = false;
+        let isReactComponent = false;
+        
+        
+        if (node.type === 'lexical_declaration') {
+          // lexical_declaration -> variable_declarator -> identifier
+          const declarator = node.children.find(child => child.type === 'variable_declarator');
+          if (declarator) {
+            // Try multiple ways to get the identifier name
+            nameNode = declarator.childForFieldName('name');
+            if (!nameNode) {
+              // Look for identifier in children
+              nameNode = declarator.children.find(child => child.type === 'identifier') || null;
+            }
+            if (!nameNode) {
+              // Look deeper for identifier (in case of complex patterns)
+              for (const child of declarator.children) {
+                if (child.type === 'identifier') {
+                  nameNode = child;
+                  break;
+                }
+                // Check child's children for identifier
+                for (const grandchild of child.children || []) {
+                  if (grandchild.type === 'identifier') {
+                    nameNode = grandchild;
+                    break;
+                  }
+                }
+                if (nameNode) break;
+              }
+            }
+            
+            if (nameNode) {
+              variableName = this.getNodeText(nameNode, context.content);
+              
+              // Check if this is an arrow function assignment
+              const valueNode = declarator.childForFieldName('value');
+              if (valueNode) {
+                const valueText = this.getNodeText(valueNode, context.content);
+                isArrowFunction = valueText.includes('=>') || valueText.includes('function');
+                isReactComponent = valueText.includes('React.FC') || valueText.includes('React.Component');
+              }
+            }
+          }
+        } else if (node.type === 'variable_declarator') {
+          // Direct variable_declarator
+          nameNode = node.childForFieldName('name') || node.children.find(child => child.type === 'identifier') || null;
+          if (nameNode) {
+            variableName = this.getNodeText(nameNode, context.content);
+            
+            // Check if this is an arrow function assignment
+            const valueNode = node.childForFieldName('value');
+            if (valueNode) {
+              const valueText = this.getNodeText(valueNode, context.content);
+              isArrowFunction = valueText.includes('=>') || valueText.includes('function');
+              isReactComponent = valueText.includes('React.FC') || valueText.includes('React.Component');
+            }
+          }
+        }
+        
+        if (variableName && nameNode) {
+          const qualifiedName = this.getQualifiedName(nameNode, context.content);
+          
+          // Determine symbol kind based on content
+          let symbolKind = UniversalSymbolKind.Variable;
+          if (isArrowFunction) {
+            symbolKind = UniversalSymbolKind.Function;
+          }
+          
+          return {
+            name: variableName,
+            qualifiedName: qualifiedName,
+            kind: symbolKind,
+            filePath: context.filePath,
+            line: node.startPosition.row,
+            column: node.startPosition.column,
+            endLine: node.endPosition.row,
+            endColumn: node.endPosition.column,
+            isDefinition: true,
+            confidence: 0.9,
+            semanticTags: [],
+            complexity: 1,
+            isExported: this.isExported(node, context),
+            isAsync: this.isAsyncFunction(node),
+            languageFeatures: {
+              isReactComponent,
+              isArrowFunction
+            }
+          };
+        }
+        
+        return null;
+      },
       onInheritance: (node: Parser.SyntaxNode, context: VisitorContext): RelationshipInfo[] | null => {
         const relationships: RelationshipInfo[] = [];
         const classNameNode = node.childForFieldName('name');
@@ -271,6 +433,210 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
           }
         }
         return relationships.length > 0 ? relationships : null;
+      },
+      onArrowFunction: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        // Extract arrow function name and details
+        const functionText = this.getNodeText(node, context.content);
+        
+        // Try to find the function name from parent assignment or property
+        let functionName = 'anonymous';
+        const parent = node.parent;
+        
+        if (parent?.type === 'variable_declarator') {
+          const nameNode = parent.childForFieldName('name');
+          if (nameNode) {
+            functionName = this.getNodeText(nameNode, context.content);
+          }
+        } else if (parent?.type === 'pair') {
+          // Arrow function in object property
+          const keyNode = parent.childForFieldName('key');
+          if (keyNode) {
+            functionName = this.getNodeText(keyNode, context.content);
+          }
+        } else if (parent?.type === 'assignment_expression') {
+          const leftNode = parent.childForFieldName('left');
+          if (leftNode) {
+            functionName = this.getNodeText(leftNode, context.content);
+          }
+        }
+        
+        const isAsync = functionText.includes('async');
+        const hasGenerics = functionText.includes('<') && functionText.includes('>');
+        
+        return {
+          name: functionName,
+          qualifiedName: this.getQualifiedName(node, context.content),
+          kind: UniversalSymbolKind.Function,
+          filePath: context.filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column,
+          endLine: node.endPosition.row + 1,
+          endColumn: node.endPosition.column,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: isAsync ? ['async'] : [],
+          complexity: this.calculateComplexity(functionText),
+          isExported: false,
+          isAsync,
+          languageFeatures: {
+            isArrowFunction: true,
+            hasGenerics,
+            returnType: this.extractReturnType(functionText)
+          }
+        };
+      },
+      onProperty: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        // Handle object property definitions that might contain arrow functions
+        const keyNode = node.childForFieldName('key');
+        const valueNode = node.childForFieldName('value');
+        
+        if (!keyNode || !valueNode) return null;
+        
+        const propertyName = this.getNodeText(keyNode, context.content);
+        const valueText = this.getNodeText(valueNode, context.content);
+        
+        // Check if the value is an arrow function
+        if (valueNode.type === 'arrow_function' || valueText.includes('=>')) {
+          const isAsync = valueText.includes('async');
+          const hasGenerics = valueText.includes('<') && valueText.includes('>');
+          
+          return {
+            name: propertyName,
+            qualifiedName: this.getQualifiedName(node, context.content),
+            kind: UniversalSymbolKind.Function,
+            filePath: context.filePath,
+            line: node.startPosition.row + 1,
+            column: node.startPosition.column,
+            endLine: node.endPosition.row + 1,
+            endColumn: node.endPosition.column,
+            isDefinition: true,
+            confidence: 0.9,
+            semanticTags: isAsync ? ['async'] : [],
+            complexity: this.calculateComplexity(valueText),
+            isExported: false,
+            isAsync,
+            languageFeatures: {
+              isArrowFunction: true,
+              isObjectProperty: true,
+              hasGenerics,
+              returnType: this.extractReturnType(valueText)
+            }
+          };
+        }
+        
+        // For non-function properties, return a property symbol
+        return {
+          name: propertyName,
+          qualifiedName: this.getQualifiedName(node, context.content),
+          kind: UniversalSymbolKind.Variable,
+          filePath: context.filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column,
+          endLine: node.endPosition.row + 1,
+          endColumn: node.endPosition.column,
+          isDefinition: true,
+          confidence: 0.8,
+          semanticTags: [],
+          complexity: 1,
+          isExported: false,
+          isAsync: false,
+          languageFeatures: {
+            isObjectProperty: true,
+            propertyType: this.extractPropertyType(valueText)
+          }
+        };
+      },
+      onTypeAlias: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        // Handle TypeScript type alias declarations
+        const nameNode = node.childForFieldName('name');
+        if (!nameNode) return null;
+        
+        const typeName = this.getNodeText(nameNode, context.content);
+        const typeValueNode = node.childForFieldName('value');
+        const typeValue = typeValueNode ? this.getNodeText(typeValueNode, context.content) : '';
+        
+        const isTemplateLiteral = typeValue.includes('`') && typeValue.includes('${');
+        const isUnionType = typeValue.includes(' | ');
+        const isGeneric = typeValue.includes('<') && typeValue.includes('>');
+        
+        return {
+          name: typeName,
+          qualifiedName: this.getQualifiedName(node, context.content),
+          kind: UniversalSymbolKind.TypeAlias,
+          filePath: context.filePath,
+          line: node.startPosition.row + 1,
+          column: node.startPosition.column,
+          endLine: node.endPosition.row + 1,
+          endColumn: node.endPosition.column,
+          isDefinition: true,
+          confidence: 0.95,
+          semanticTags: isTemplateLiteral ? ['template-literal'] : isUnionType ? ['union'] : [],
+          complexity: 1,
+          isExported: false,
+          isAsync: false,
+          signature: `type ${typeName} = ${typeValue}`,
+          languageFeatures: {
+            isTemplateLiteral,
+            isUnionType,
+            isGeneric,
+            typeValue: typeValue.trim()
+          }
+        };
+      },
+      onObjectPattern: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo[] | null => {
+        // Handle object destructuring patterns like { a, b: c, ...rest }
+        const symbols: SymbolInfo[] = [];
+        
+        for (const child of node.children) {
+          if (child.type === 'shorthand_property_identifier_pattern') {
+            // Simple destructuring: { a }
+            const name = this.getNodeText(child, context.content);
+            symbols.push(this.createDestructuredSymbol(name, child, context));
+          } else if (child.type === 'pair_pattern') {
+            // Renamed destructuring: { a: b }
+            const valueNode = child.childForFieldName('value');
+            if (valueNode) {
+              if (valueNode.type === 'identifier') {
+                // Simple rename: { a: b }
+                const name = this.getNodeText(valueNode, context.content);
+                symbols.push(this.createDestructuredSymbol(name, valueNode, context));
+              } else if (valueNode.type === 'object_pattern' || valueNode.type === 'array_pattern') {
+                // Nested destructuring: { a: { b } } - will be handled recursively
+                // The visitor will call the appropriate handler for the nested pattern
+              }
+            }
+          } else if (child.type === 'rest_pattern') {
+            // Rest destructuring: { ...rest }
+            const identifierNode = child.children.find(c => c.type === 'identifier');
+            if (identifierNode) {
+              const name = this.getNodeText(identifierNode, context.content);
+              symbols.push(this.createDestructuredSymbol(name, identifierNode, context, true));
+            }
+          }
+        }
+        
+        return symbols.length > 0 ? symbols : null;
+      },
+      onArrayPattern: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo[] | null => {
+        // Handle array destructuring patterns like [a, b, ...rest]
+        const symbols: SymbolInfo[] = [];
+        
+        for (const child of node.children) {
+          if (child.type === 'identifier') {
+            // Simple array destructuring: [a, b]
+            const name = this.getNodeText(child, context.content);
+            symbols.push(this.createDestructuredSymbol(name, child, context));
+          } else if (child.type === 'rest_pattern') {
+            // Rest destructuring: [...rest]
+            const identifierNode = child.children.find(c => c.type === 'identifier');
+            if (identifierNode) {
+              const name = this.getNodeText(identifierNode, context.content);
+              symbols.push(this.createDestructuredSymbol(name, identifierNode, context, true));
+            }
+          }
+        }
+        
+        return symbols.length > 0 ? symbols : null;
       }
     };
   }
@@ -284,6 +650,17 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       ['call_expression', 'onCall'],
       ['import_statement', 'onImport'],
       ['export_statement', 'onExport'],
+      // CRITICAL FIX: Add missing node types for const/let/var declarations
+      ['lexical_declaration', 'onVariable'],
+      ['variable_declarator', 'onVariable'],
+      // CRITICAL FIX: Add arrow function and property handlers
+      ['arrow_function', 'onArrowFunction'],
+      ['pair', 'onProperty'],
+      // Add type alias support for template literal types
+      ['type_alias_declaration', 'onTypeAlias'],
+      // Add destructuring pattern support
+      ['object_pattern', 'onObjectPattern'],
+      ['array_pattern', 'onArrayPattern'],
     ]);
   }
 
@@ -468,7 +845,13 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       
       // Function/Method detection
       const funcMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(?:<.*?>)?\s*\(/);
-      const arrowFuncMatch = line.match(/(?:export\s+)?const\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>/);
+      const arrowFuncMatch = line.match(/(?:export\s+)?(?:const|let|var)\s+(\w+)\s*(?::\s*[^=]+)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>/);
+      const generatorMatch = line.match(/(?:export\s+)?(?:async\s+)?function\s*\*\s*(\w+)\s*(?:<.*?>)?\s*\(/);
+      
+      // Modern pattern detection
+      const decoratorMatch = line.match(/^\s*@(\w+)(?:\([^)]*\))?\s*$/);
+      const privateFieldMatch = line.match(/^\s*#(\w+)\s*(?::\s*[^=;]+)?(?:\s*=\s*[^;]+)?;/);
+      const getterSetterMatch = line.match(/^\s*(?:get|set)\s+(\w+)\s*\(/);
       
       // Method detection - only look for methods inside classes
       let methodMatch = null;
@@ -476,19 +859,45 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         if (braceDepth >= classBraceDepth) {
           // Inside a class - look for method patterns
           // Pattern 1: async methodName(params): ReturnType {
-          methodMatch = line.match(/^\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*:\s*.*?\s*{/);
+          methodMatch = line.match(/^\s*(?:(?:public|private|protected|static|readonly|override|abstract)\s+)*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*{/);
           if (!methodMatch) {
             // Pattern 2: methodName(params) {
             methodMatch = line.match(/^\s*(?:async\s+)?(\w+)\s*\([^)]*\)\s*{/);
           }
           if (!methodMatch) {
-            // Pattern 3: With modifiers
-            methodMatch = line.match(/^\s*(?:(?:public|private|protected|static|readonly)\s+)*(?:async\s+)?(\w+)\s*\([^)]*\)\s*(?::\s*[^{]+)?\s*{/);
+            // Pattern 3: Property methods (arrow functions as class properties)
+            methodMatch = line.match(/^\s*(?:(?:public|private|protected|static|readonly)\s+)*(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=]+)\s*=>/);
+          }
+          if (!methodMatch && getterSetterMatch) {
+            // Pattern 4: Getter/Setter
+            methodMatch = getterSetterMatch;
           }
         }
       }
       
-      if (funcMatch) {
+      // Handle generators first
+      if (generatorMatch) {
+        const funcName = generatorMatch[1];
+        symbols.push({
+          name: funcName,
+          qualifiedName: currentClass ? `${currentClass}.${funcName}` : funcName,
+          kind: UniversalSymbolKind.Function,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.8,
+          semanticTags: ['generator'],
+          complexity: 1,
+          isExported: line.includes('export'),
+          isAsync: line.includes('async'),
+          languageFeatures: {
+            isGenerator: true
+          }
+        });
+      } else if (funcMatch) {
         const funcName = funcMatch[1];
         symbols.push({
           name: funcName,
@@ -660,63 +1069,57 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         });
       }
       
-      // Process spawning detection
-      const spawnMatch = line.match(/\b(spawn|exec|execFile|fork)\s*\(/);
-      const pythonCallMatch = line.match(/\b(callPythonScript|executePython|runPython)\s*\(\s*['"`]([^'"`]*\.py)['"`]/);
+      // Enhanced cross-language detection
+      const crossLangCalls = CrossLanguageDetector.detectCrossLanguageCalls(
+        line,
+        lineNum,
+        'typescript',
+        filePath
+      );
       
-      if (spawnMatch || pythonCallMatch) {
-        let targetScript = 'python_script';
-        let isSpawn = false;
-        let spawnType = 'spawn';
+      if (crossLangCalls.length > 0) {
+        // Find the current method/function we're in
+        let targetSymbol = null;
         
-        if (pythonCallMatch) {
-          // Direct Python method call with script name
-          targetScript = pythonCallMatch[2]; // Extract script name from quotes
-          isSpawn = true;
-          spawnType = pythonCallMatch[1]; // callPythonScript, executePython, etc.
-        } else if (spawnMatch) {
-          // Check if it's spawning a Python script
-          const pythonMatch = line.match(/(python3?|\.py['"])/);
-          if (pythonMatch) {
-            // Try to extract script name from spawn arguments
-            const scriptMatch = line.match(/(['"`])([^'"`]*\.py)\1/);
-            targetScript = scriptMatch ? scriptMatch[2] : 'python_script';
-            isSpawn = true;
-            spawnType = spawnMatch[1];
+        // Look backwards through symbols to find the containing method/function
+        for (let j = symbols.length - 1; j >= 0; j--) {
+          const sym = symbols[j];
+          if ((sym.kind === UniversalSymbolKind.Method || sym.kind === UniversalSymbolKind.Function) &&
+              sym.line <= lineNum) {
+            targetSymbol = sym;
+            break;
           }
         }
         
-        if (isSpawn) {
-          // Find the current method/function we're in
-          let targetSymbol = null;
-          
-          // Look backwards through symbols to find the containing method/function
-          for (let j = symbols.length - 1; j >= 0; j--) {
-            const sym = symbols[j];
-            if ((sym.kind === UniversalSymbolKind.Method || sym.kind === UniversalSymbolKind.Function) &&
-                sym.line <= lineNum) {
-              targetSymbol = sym;
-              break;
-            }
-          }
-          
-          if (targetSymbol) {
+        if (targetSymbol) {
+          // Process each cross-language call
+          for (const crossLang of crossLangCalls) {
             if (!targetSymbol.languageFeatures) {
               targetSymbol.languageFeatures = {};
             }
-            targetSymbol.languageFeatures.spawn = spawnType;
-            targetSymbol.languageFeatures.spawnsPython = true;
-            targetSymbol.semanticTags.push('cross-language-caller');
+            
+            // Add cross-language metadata
+            targetSymbol.languageFeatures.crossLanguageCalls = targetSymbol.languageFeatures.crossLanguageCalls || [];
+            targetSymbol.languageFeatures.crossLanguageCalls.push({
+              type: crossLang.type,
+              target: crossLang.targetEndpoint,
+              language: crossLang.targetLanguage
+            });
+            
+            if (!targetSymbol.semanticTags.includes('cross-language-caller')) {
+              targetSymbol.semanticTags.push('cross-language-caller');
+            }
             
             // Create cross-language relationship
             relationships.push({
               fromName: targetSymbol.qualifiedName,
-              toName: targetScript,
-              relationshipType: UniversalRelationshipType.Spawns,
-              confidence: 0.9,
+              toName: crossLang.targetEndpoint || 'unknown',
+              relationshipType: crossLang.relationship.relationshipType || UniversalRelationshipType.Invokes,
+              confidence: crossLang.confidence,
               crossLanguage: true,
               lineNumber: lineNum,
               columnNumber: 0,
+              metadata: crossLang.metadata
             });
           }
         }
@@ -742,6 +1145,52 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
           isExported: line.includes('export'),
           isAsync: false,
           languageFeatures: {}
+        });
+      }
+      
+      // Private field detection (inside classes)
+      if (currentClass && privateFieldMatch) {
+        const fieldName = privateFieldMatch[1];
+        symbols.push({
+          name: `#${fieldName}`,
+          qualifiedName: `${currentClass}.#${fieldName}`,
+          kind: UniversalSymbolKind.Field,
+          filePath,
+          line: lineNum,
+          column: 0,
+          endLine: lineNum,
+          endColumn: line.length,
+          isDefinition: true,
+          confidence: 0.9,
+          semanticTags: ['private-field'],
+          complexity: 1,
+          isExported: false,
+          isAsync: false,
+          languageFeatures: {
+            visibility: 'private',
+            isPrivateField: true
+          }
+        });
+      }
+      
+      // Re-export detection
+      const reExportMatch = line.match(/export\s*{\s*([^}]+)\s*}\s*from\s*['"]([^'"]+)['"]/);
+      if (reExportMatch) {
+        const exports = reExportMatch[1].split(',').map(e => e.trim());
+        exports.forEach(exp => {
+          // Handle renamed exports: originalName as exportedName
+          const [original, exported] = exp.split(/\s+as\s+/).map(s => s.trim());
+          relationships.push({
+            fromName: filePath,
+            toName: reExportMatch[2],
+            relationshipType: UniversalRelationshipType.ReExports,
+            confidence: 1.0,
+            crossLanguage: false,
+            metadata: {
+              originalName: original,
+              exportedName: exported || original
+            }
+          });
         });
       }
       
@@ -970,5 +1419,93 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       }
     }
     return extendsList;
+  }
+
+  /**
+   * Calculate complexity of a function based on its content
+   */
+  private calculateComplexity(functionText: string): number {
+    let complexity = 1; // Base complexity
+    
+    // Add complexity for control structures
+    const controlPatterns = [
+      /\bif\b/g, /\belse\b/g, /\bwhile\b/g, /\bfor\b/g, /\bswitch\b/g,
+      /\bcatch\b/g, /\btry\b/g, /\?\s*:/g // ternary operator
+    ];
+    
+    for (const pattern of controlPatterns) {
+      const matches = functionText.match(pattern);
+      if (matches) complexity += matches.length;
+    }
+    
+    return Math.min(complexity, 10); // Cap at 10
+  }
+
+  /**
+   * Extract return type from function signature
+   */
+  private extractReturnType(functionText: string): string | undefined {
+    // Look for explicit return type annotation
+    const returnTypeMatch = functionText.match(/:\s*([^=>{]+)\s*=>/);
+    if (returnTypeMatch) {
+      return returnTypeMatch[1].trim();
+    }
+    
+    // Try to infer from return statements
+    const returnMatch = functionText.match(/return\s+([^;}\n]+)/);
+    if (returnMatch) {
+      const returnValue = returnMatch[1].trim();
+      if (returnValue.startsWith('"') || returnValue.startsWith("'")) return 'string';
+      if (returnValue.match(/^\d+$/)) return 'number';
+      if (returnValue === 'true' || returnValue === 'false') return 'boolean';
+      if (returnValue.startsWith('{')) return 'object';
+      if (returnValue.startsWith('[')) return 'array';
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Extract property type from value
+   */
+  private extractPropertyType(valueText: string): string | undefined {
+    if (valueText.includes('=>')) return 'function';
+    if (valueText.startsWith('"') || valueText.startsWith("'")) return 'string';
+    if (valueText.match(/^\d+$/)) return 'number';
+    if (valueText === 'true' || valueText === 'false') return 'boolean';
+    if (valueText.startsWith('{')) return 'object';
+    if (valueText.startsWith('[')) return 'array';
+    return 'unknown';
+  }
+
+  /**
+   * Create a symbol for a destructured variable
+   */
+  private createDestructuredSymbol(
+    name: string, 
+    node: Parser.SyntaxNode, 
+    context: VisitorContext, 
+    isRest: boolean = false
+  ): SymbolInfo {
+    return {
+      name,
+      qualifiedName: this.getQualifiedName(node, context.content),
+      kind: UniversalSymbolKind.Variable,
+      filePath: context.filePath,
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column,
+      isDefinition: true,
+      confidence: 0.9,
+      semanticTags: isRest ? ['rest', 'destructured'] : ['destructured'],
+      complexity: 1,
+      isExported: false,
+      isAsync: false,
+      languageFeatures: {
+        isDestructured: true,
+        isRestParameter: isRest
+      }
+    };
   }
 }

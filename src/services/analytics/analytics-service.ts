@@ -310,29 +310,29 @@ export class AnalyticsService {
 
   private getSymbol(id: number): Symbol | null {
     const stmt = this.db.prepare(`
-      SELECT * FROM symbols WHERE id = ?
+      SELECT * FROM universal_symbols WHERE id = ?
     `);
     return stmt.get(id) as Symbol;
   }
 
   private getIncomingRelationships(symbolId: number): Relationship[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM relationships WHERE to_symbol_id = ?
+      SELECT * FROM universal_relationships WHERE to_symbol_id = ?
     `);
     return stmt.all(symbolId) as Relationship[];
   }
 
   private getOutgoingRelationships(symbolId: number): Relationship[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM relationships WHERE from_symbol_id = ?
+      SELECT * FROM universal_relationships WHERE from_symbol_id = ?
     `);
     return stmt.all(symbolId) as Relationship[];
   }
 
   private getDependentSymbols(symbolId: number): Symbol[] {
     const stmt = this.db.prepare(`
-      SELECT s.* FROM symbols s
-      JOIN relationships r ON s.id = r.from_symbol_id
+      SELECT s.* FROM universal_symbols s
+      JOIN universal_relationships r ON s.id = r.from_symbol_id
       WHERE r.to_symbol_id = ?
     `);
     return stmt.all(symbolId) as Symbol[];
@@ -399,10 +399,10 @@ export class AnalyticsService {
   private detectSingletonPattern(): PatternAnalysis[] {
     // Look for classes with private constructors and getInstance methods
     const stmt = this.db.prepare(`
-      SELECT s.* FROM symbols s
+      SELECT s.* FROM universal_symbols s
       WHERE s.kind = 'class'
       AND EXISTS (
-        SELECT 1 FROM symbols m
+        SELECT 1 FROM universal_symbols m
         WHERE m.parent_symbol_id = s.id
         AND m.name LIKE '%getInstance%'
       )
@@ -421,7 +421,7 @@ export class AnalyticsService {
   private detectFactoryPattern(): PatternAnalysis[] {
     // Look for classes/functions with 'create' or 'factory' in the name
     const stmt = this.db.prepare(`
-      SELECT * FROM symbols
+      SELECT * FROM universal_symbols
       WHERE (name LIKE '%Factory%' OR name LIKE '%create%')
       AND kind IN ('class', 'function')
     `);
@@ -439,12 +439,12 @@ export class AnalyticsService {
   private detectObserverPattern(): PatternAnalysis[] {
     // Look for subscribe/notify patterns
     const stmt = this.db.prepare(`
-      SELECT DISTINCT s.* FROM symbols s
+      SELECT DISTINCT s.* FROM universal_symbols s
       WHERE s.kind = 'class'
       AND (
-        EXISTS (SELECT 1 FROM symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%subscribe%')
-        OR EXISTS (SELECT 1 FROM symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%notify%')
-        OR EXISTS (SELECT 1 FROM symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%observer%')
+        EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%subscribe%')
+        OR EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%notify%')
+        OR EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%observer%')
       )
     `);
     
@@ -464,8 +464,8 @@ export class AnalyticsService {
     // God Class - classes with too many methods
     const godClassStmt = this.db.prepare(`
       SELECT s.*, COUNT(m.id) as method_count
-      FROM symbols s
-      LEFT JOIN symbols m ON m.parent_symbol_id = s.id AND m.kind = 'function'
+      FROM universal_symbols s
+      LEFT JOIN universal_symbols m ON m.parent_symbol_id = s.id AND m.kind = 'function'
       WHERE s.kind = 'class'
       GROUP BY s.id
       HAVING method_count > 20

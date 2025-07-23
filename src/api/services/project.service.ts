@@ -11,7 +11,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 
 // Import schema
-import { projects } from '../../database/schema/universal.js';
+import { projects } from '../../database/drizzle/schema.js';
 
 export interface CreateProjectData {
   name: string;
@@ -76,8 +76,6 @@ export class ProjectService {
         displayName: data.displayName || null,
         description: data.description || null,
         rootPath: data.rootPath,
-        createdAt: new Date(),
-        updatedAt: new Date(),
         isActive: true
       })
       .returning();
@@ -236,7 +234,7 @@ export class ProjectService {
       await this.db.update(projects)
         .set({ 
           isActive: false,
-          updatedAt: new Date()
+          updatedAt: new Date().toISOString()
         })
         .where(eq(projects.id, projectId));
         

@@ -14,7 +14,7 @@ import {
   universalSymbols,
   semanticInsights,
   insightRecommendations 
-} from '../database/schema/universal.js';
+} from '../database/drizzle/schema.js';
 import { SemanticCluster, ClusterInsight, SemanticClusteringEngine } from './semantic-clustering-engine.js';
 import { CodeEmbedding, LocalCodeEmbeddingEngine } from './local-code-embedding.js';
 import { SemanticContext } from './semantic-context-engine.js';
@@ -44,7 +44,7 @@ export interface InsightRecommendation {
   effort: 'low' | 'medium' | 'high';
   impact: 'low' | 'medium' | 'high';
   priority: number; // 1-10
-  codeExample?: string;
+  exampleCode?: string;
   relatedSymbols: string[];
 }
 
@@ -259,7 +259,7 @@ export class SemanticInsightsGenerator {
         effort: row.effort as any,
         impact: row.impact as any,
         priority: row.priority,
-        codeExample: row.codeExample || undefined,
+        exampleCode: row.exampleCode || undefined,
         relatedSymbols: JSON.parse(row.relatedSymbols || '[]')
       }));
 
@@ -307,7 +307,7 @@ export class SemanticInsightsGenerator {
               effort: rec.effort,
               impact: rec.impact,
               priority: rec.priority,
-              codeExample: rec.codeExample,
+              exampleCode: rec.exampleCode,
               relatedSymbols: JSON.stringify(rec.relatedSymbols)
             });
         }

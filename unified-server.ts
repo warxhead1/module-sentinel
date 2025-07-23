@@ -219,19 +219,25 @@ class UnifiedServer {
     // In development, use Vite dev server
     if (!IS_PRODUCTION) {
       const { createServer } = await import("vite");
+      
+      // Create WebSocket server for HMR on a specific port
+      const hmrPort = 6970;
+      
       this.viteServer = await createServer({
         configFile: "./vite.config.ts",
         server: {
           middlewareMode: true,
           hmr: {
-            port: 6970,
-            overlay: false
+            port: hmrPort,
+            host: 'localhost'
           }
         },
         optimizeDeps: {
           include: [] // Prevent excessive re-bundling
         }
       });
+      
+      console.log(`🔄 HMR WebSocket server configured on ws://localhost:${hmrPort}`);
     } else {
       // In production, build the dashboard first
       console.log("📦 Building dashboard for production...");

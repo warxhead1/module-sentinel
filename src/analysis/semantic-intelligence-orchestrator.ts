@@ -166,10 +166,16 @@ export class SemanticIntelligenceOrchestrator {
       try {
         for (const symbol of symbols) {
           try {
+            // Import key utilities for consistent key generation
+            const { generateSemanticContextKey } = await import('./symbol-key-utils.js');
+            
             const context = await this.contextEngine.extractSemanticContext(
               symbol, ast, sourceCode, relationships
             );
-            contexts.set(symbol.qualifiedName, context);
+            
+            // Use consistent key generation for context storage
+            const contextKey = generateSemanticContextKey(symbol, filePath);
+            contexts.set(contextKey, context);
             stats.contextsExtracted++;
           } catch (error) {
             console.warn(`[SemanticOrchestrator] Context extraction failed for ${symbol.name}:`, error);
@@ -389,7 +395,18 @@ export class SemanticIntelligenceOrchestrator {
           allContexts.set(key, context);
         }
         
-        allEmbeddings.push(...result.embeddings);
+        // Deduplicate embeddings by symbolId to prevent duplicate processing
+        for (const embedding of result.embeddings) {
+          const existingIndex = allEmbeddings.findIndex(e => e.symbolId === embedding.symbolId);
+          if (existingIndex === -1) {
+            allEmbeddings.push(embedding);
+          } else {
+            // Update existing embedding if this one is newer/better
+            if (embedding.version > allEmbeddings[existingIndex].version) {
+              allEmbeddings[existingIndex] = embedding;
+            }
+          }
+        }
         totalStats.symbolsAnalyzed += result.stats.symbolsAnalyzed;
         totalStats.contextsExtracted += result.stats.contextsExtracted;
         totalStats.embeddingsGenerated += result.stats.embeddingsGenerated;

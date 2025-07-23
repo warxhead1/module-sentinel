@@ -20,20 +20,9 @@ import {
   clusterMembership,
   semanticInsights,
   insightRecommendations,
-  semanticRelationships
-} from '../database/schema/universal.js';
-
-// We need to define the code_embeddings table reference since it's not in the universal schema yet
-const codeEmbeddings = {
-  id: 'id',
-  symbolId: 'symbol_id', 
-  embeddingType: 'embedding_type',
-  embedding: 'embedding',
-  dimensions: 'dimensions',
-  modelVersion: 'model_version',
-  createdAt: 'created_at',
-  updatedAt: 'updated_at'
-};
+  semanticRelationships,
+  codeEmbeddings
+} from '../database/drizzle/schema.js';
 
 export interface SemanticPersistenceStats {
   symbolsUpdated: number;
@@ -189,6 +178,16 @@ export class SemanticDataPersister {
         const symbolId = symbolIdMapping.get(symbolKey);
         if (!symbolId) {
           this.errors.push(`No symbol ID found for key: ${symbolKey}`);
+          
+          // Debug: Show available keys for troubleshooting
+          console.log(`[SemanticDataPersister] Context key not found: ${symbolKey}`);
+          console.log(`[SemanticDataPersister] Available keys (sample):`);
+          let count = 0;
+          for (const [key] of symbolIdMapping) {
+            if (count++ < 5) {
+              console.log(`  - ${key}`);
+            } else break;
+          }
           continue;
         }
 
@@ -263,15 +262,32 @@ export class SemanticDataPersister {
       this.debug(`Storing ${embeddings.length} code embeddings...`);
 
       for (const embedding of embeddings) {
-        const symbolId = symbolIdMapping.get(String(embedding.symbolId));
+        // The embedding.symbolId should now be in consistent format from the embedding engine
+        const lookupKey = String(embedding.symbolId);
+        const symbolId = symbolIdMapping.get(lookupKey);
         if (!symbolId) {
           this.errors.push(`No symbol ID found for embedding: ${embedding.symbolId}`);
+          if (this.options.debugMode && symbolIdMapping.size > 0) {
+            // Debug: show what keys are available
+            const availableKeys = Array.from(symbolIdMapping.keys()).filter(k => k.includes(embedding.metadata?.symbolType || 'unknown')).slice(0, 3);
+            this.debug(`Looking for key: ${lookupKey}, similar available keys: ${availableKeys.join(', ')}`);
+          }
+          
+          // Debug: Show available keys for troubleshooting
+          console.log(`[SemanticDataPersister] Embedding key not found: ${embedding.symbolId}`);
+          console.log(`[SemanticDataPersister] Available embedding keys (sample):`);
+          let count = 0;
+          for (const [key] of symbolIdMapping) {
+            if (count++ < 5) {
+              console.log(`  - ${key}`);
+            } else break;
+          }
           continue;
         }
 
         try {
-          // Convert embedding vector to base64 for storage
-          const embeddingBlob = Buffer.from(JSON.stringify(embedding.embedding)).toString('base64');
+          // Convert embedding vector to Buffer for storage
+          const embeddingBuffer = Buffer.from(JSON.stringify(embedding.embedding));
 
           // Determine embedding type from metadata
           const embeddingType = this.determineEmbeddingType(embedding.metadata);
@@ -281,8 +297,8 @@ export class SemanticDataPersister {
             INSERT OR REPLACE INTO code_embeddings (
               symbol_id, embedding_type, embedding, dimensions, model_version, created_at, updated_at
             ) VALUES (
-              ${symbolId}, ${embeddingType}, ${embeddingBlob}, ${embedding.dimensions}, 
-              ${embedding.version}, ${Date.now()}, ${Date.now()}
+              ${symbolId}, ${embeddingType}, ${embeddingBuffer}, ${embedding.dimensions}, 
+              ${embedding.version}, ${new Date()}, ${new Date()}
             )
           `);
 
@@ -360,11 +376,16 @@ export class SemanticDataPersister {
             const symbolId = symbolIdMapping.get(String(member.symbolId));
             if (!symbolId) {
               this.errors.push(`No symbol ID found for cluster member: ${member.symbolId}`);
+              
+              // Debug: Show available keys for troubleshooting
+              if (this.options.debugMode) {
+                console.log(`[SemanticDataPersister] Cluster member key not found: ${member.symbolId}`);
+              }
               continue;
             }
 
             try {
-              await dbHandle
+              const result = await dbHandle
                 .insert(clusterMembership)
                 .values({
                   clusterId,
@@ -372,11 +393,14 @@ export class SemanticDataPersister {
                   similarity: member.similarity,
                   role: member.role || 'member',
                   assignedAt: new Date()
-                });
+                })
+                .returning({ id: clusterMembership.id });
 
-              membershipsStored++;
+              if (result.length > 0) {
+                membershipsStored++;
+              }
 
-            } catch (error) {
+            } catch (error: any) {
               this.errors.push(`Failed to store cluster membership for symbol ${symbolId}: ${error}`);
             }
           }
@@ -467,7 +491,7 @@ export class SemanticDataPersister {
                   effort: recommendation.effort,
                   impact: recommendation.impact,
                   priority: index + 1,
-                  codeExample: recommendation.codeExample || null,
+                  exampleCode: recommendation.exampleCode || null,
                   relatedSymbols: JSON.stringify(relatedSymbolIds),
                   createdAt: new Date()
                 });
@@ -511,7 +535,7 @@ export class SemanticDataPersister {
 
       for (const relationship of relationships) {
         try {
-          await dbHandle
+          const result = await dbHandle
             .insert(semanticRelationships)
             .values({
               projectId: this.options.projectId,
@@ -519,13 +543,17 @@ export class SemanticDataPersister {
               toSymbolId: relationship.toSymbolId,
               semanticType: relationship.semanticType,
               strength: relationship.strength,
-              confidence: relationship.confidence,
-              semanticContext: JSON.stringify(relationship.context),
-              inferenceMethod: relationship.inferenceMethod,
-              createdAt: new Date()
-            });
+              evidence: JSON.stringify({
+                confidence: relationship.confidence,
+                context: relationship.context,
+                inferenceMethod: relationship.inferenceMethod
+              })
+            })
+            .returning({ id: semanticRelationships.id });
 
-          stored++;
+          if (result.length > 0) {
+            stored++;
+          }
 
         } catch (error) {
           this.errors.push(`Failed to store semantic relationship: ${error}`);
@@ -619,9 +647,10 @@ export class SemanticDataPersister {
     inferenceMethod: string;
   }> {
     const relationships = [];
+    const processedPairs = new Set<string>();
     const similarityThreshold = 0.8;
 
-    // Calculate pairwise similarities
+    // Calculate pairwise similarities with deduplication
     for (let i = 0; i < embeddings.length; i++) {
       for (let j = i + 1; j < embeddings.length; j++) {
         const embeddingA = embeddings[i];
@@ -630,14 +659,22 @@ export class SemanticDataPersister {
         const fromSymbolId = symbolIdMapping.get(String(embeddingA.symbolId));
         const toSymbolId = symbolIdMapping.get(String(embeddingB.symbolId));
 
-        if (!fromSymbolId || !toSymbolId) continue;
+        if (!fromSymbolId || !toSymbolId) {
+          // Skip silently for semantic relationships - this is expected for some symbols
+          continue;
+        }
+
+        // Create consistent pair key to prevent duplicates
+        const pairKey = `${Math.min(fromSymbolId, toSymbolId)}-${Math.max(fromSymbolId, toSymbolId)}`;
+        if (processedPairs.has(pairKey)) continue;
+        processedPairs.add(pairKey);
 
         const similarity = this.cosineSimilarity(embeddingA.embedding, embeddingB.embedding);
 
         if (similarity >= similarityThreshold) {
           relationships.push({
-            fromSymbolId,
-            toSymbolId,
+            fromSymbolId: Math.min(fromSymbolId, toSymbolId), // Consistent ordering
+            toSymbolId: Math.max(fromSymbolId, toSymbolId),
             semanticType: 'semantic_similarity',
             strength: similarity,
             confidence: Math.min(0.9, similarity * 1.1),
@@ -652,6 +689,7 @@ export class SemanticDataPersister {
       }
     }
 
+    this.debug(`Generated ${relationships.length} unique semantic relationships from ${embeddings.length} embeddings`);
     return relationships;
   }
 

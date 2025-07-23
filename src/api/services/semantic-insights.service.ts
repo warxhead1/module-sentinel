@@ -13,7 +13,7 @@ import {
   semanticClusters,
   clusterMembership,
   universalSymbols
-} from '../../database/schema/universal.js';
+} from '../../database/drizzle/schema.js';
 import { SemanticInsightsGenerator } from '../../analysis/semantic-insights-generator.js';
 import { SemanticIntelligenceOrchestrator } from '../../analysis/semantic-intelligence-orchestrator.js';
 
@@ -232,7 +232,7 @@ export class SemanticInsightsService {
       return {
         ...cluster,
         centroidEmbedding: cluster.centroidEmbedding ? 
-          JSON.parse(Buffer.from(cluster.centroidEmbedding, 'base64').toString()) : null,
+          JSON.parse(cluster.centroidEmbedding.toString()) : null,
         members
       };
 

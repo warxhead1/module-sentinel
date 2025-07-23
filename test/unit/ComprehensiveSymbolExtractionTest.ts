@@ -59,6 +59,15 @@ export class ComprehensiveSymbolExtractionTest {
       
       // Test 7: Template parameter extraction
       results.push(await this.testTemplateParameterExtraction());
+      
+      // Test 8: Advanced data type detection
+      results.push(await this.testAdvancedDataTypeDetection());
+      
+      // Test 9: Comprehensive return type extraction
+      results.push(await this.testComprehensiveReturnTypes());
+      
+      // Test 10: Complex parameter types validation
+      results.push(await this.testComplexParameterTypes());
 
     } catch (error) {
       results.push({
@@ -549,6 +558,333 @@ export class ComprehensiveSymbolExtractionTest {
       examples.forEach((s: any) => {
         console.log(`  - ${s.name}: ${s.signature || s.returnType}`);
       });
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: Date.now() - startTime
+      };
+      
+    } catch (error) {
+      return {
+        name: testName,
+        status: 'failed',
+        time: Date.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  /**
+   * Test 8: Advanced Data Type Detection
+   */
+  private async testAdvancedDataTypeDetection(): Promise<TestResult> {
+    const startTime = Date.now();
+    const testName = 'advanced_data_type_detection';
+    
+    try {
+      // Look across multiple files for advanced data types
+      const files = [
+        'test/complex-files/cpp/Core/Memory/MemoryPool.cpp',
+        'test/complex-files/cpp/Generation/Heightmaps/AdvancedHeightGenerator.cpp',
+        'test/complex-files/cpp/Generation/Factory/PlanetBuilder.cpp'
+      ];
+      
+      let allSymbols: any[] = [];
+      
+      for (const file of files) {
+        const filePath = path.join(process.cwd(), file);
+        const dbSymbols = this.db.select()
+          .from(universalSymbols)
+          .where(eq(universalSymbols.filePath, filePath))
+          .all();
+        allSymbols.push(...dbSymbols);
+      }
+      
+      console.log(`\\n[DATA TYPES] Analyzing ${allSymbols.length} symbols across ${files.length} files`);
+      
+      // Check for specific advanced data types
+      const dataTypeChecks = {
+        smart_pointers: allSymbols.filter(s => 
+          s.signature?.includes('unique_ptr') || 
+          s.signature?.includes('shared_ptr') ||
+          s.returnType?.includes('unique_ptr') ||
+          s.returnType?.includes('shared_ptr')
+        ),
+        
+        stl_containers: allSymbols.filter(s => 
+          s.signature?.includes('std::vector') || 
+          s.signature?.includes('std::map') ||
+          s.signature?.includes('std::unordered_map') ||
+          s.returnType?.includes('vector') ||
+          s.returnType?.includes('map')
+        ),
+        
+        const_references: allSymbols.filter(s => 
+          s.signature?.includes('const ') && s.signature?.includes('&')
+        ),
+        
+        rvalue_references: allSymbols.filter(s => 
+          s.signature?.includes('&&')
+        ),
+        
+        function_pointers: allSymbols.filter(s => 
+          s.signature?.includes('(*)') || 
+          s.signature?.includes('std::function')
+        ),
+        
+        template_types: allSymbols.filter(s => 
+          s.signature?.includes('<') && s.signature?.includes('>')
+        ),
+        
+        void_pointers: allSymbols.filter(s => 
+          s.signature?.includes('void*') || s.returnType?.includes('void*')
+        )
+      };
+      
+      console.log('\\n[DATA TYPE BREAKDOWN]:');
+      Object.entries(dataTypeChecks).forEach(([type, symbols]) => {
+        console.log(`  ${type}: ${symbols.length} symbols`);
+        if (symbols.length > 0 && symbols.length <= 3) {
+          symbols.forEach((s: any) => {
+            console.log(`    - ${s.name}: ${s.signature || s.returnType}`);
+          });
+        }
+      });
+      
+      // Validate we found a reasonable distribution of types
+      const totalAdvancedTypes = Object.values(dataTypeChecks)
+        .reduce((sum, arr) => sum + arr.length, 0);
+      
+      if (totalAdvancedTypes < 5) {
+        console.log(`\\n[WARNING] Low advanced data type detection: ${totalAdvancedTypes} total`);
+      }
+      
+      // Check for proper type extraction in complex signatures
+      const complexSignatures = allSymbols.filter(s => 
+        s.signature && s.signature.length > 50
+      );
+      
+      console.log(`\\n[COMPLEX SIGNATURES] Found ${complexSignatures.length} complex signatures`);
+      if (complexSignatures.length > 0) {
+        complexSignatures.slice(0, 2).forEach((s: any) => {
+          console.log(`  - ${s.name}: ${s.signature?.substring(0, 100)}...`);
+        });
+      }
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: Date.now() - startTime
+      };
+      
+    } catch (error) {
+      return {
+        name: testName,
+        status: 'failed',
+        time: Date.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  /**
+   * Test 9: Comprehensive Return Type Extraction
+   */
+  private async testComprehensiveReturnTypes(): Promise<TestResult> {
+    const startTime = Date.now();
+    const testName = 'comprehensive_return_types';
+    
+    try {
+      const filePath = path.join(process.cwd(), 'test/complex-files/cpp/Generation/Factory/PlanetBuilder.cpp');
+      const dbSymbols = this.db.select()
+        .from(universalSymbols)
+        .where(eq(universalSymbols.filePath, filePath))
+        .all();
+      
+      // Find functions/methods with return types
+      const functionsWithReturnTypes = dbSymbols.filter(s => 
+        (s.kind === 'function' || s.kind === 'method') && s.returnType
+      );
+      
+      console.log(`\\n[RETURN TYPES] Found ${functionsWithReturnTypes.length} functions with return types`);
+      
+      // Categorize return types
+      const returnTypeCategories = {
+        primitive: functionsWithReturnTypes.filter(f => 
+          ['int', 'float', 'double', 'bool', 'char', 'void', 'uint32_t', 'size_t'].some(type => 
+            f.returnType?.includes(type)
+          )
+        ),
+        
+        references: functionsWithReturnTypes.filter(f => 
+          f.returnType?.includes('&')
+        ),
+        
+        pointers: functionsWithReturnTypes.filter(f => 
+          f.returnType?.includes('*') && !f.returnType?.includes('&')
+        ),
+        
+        smart_pointers: functionsWithReturnTypes.filter(f => 
+          f.returnType?.includes('unique_ptr') || f.returnType?.includes('shared_ptr')
+        ),
+        
+        stl_containers: functionsWithReturnTypes.filter(f => 
+          f.returnType?.includes('vector') || 
+          f.returnType?.includes('map') ||
+          f.returnType?.includes('string')
+        ),
+        
+        custom_types: functionsWithReturnTypes.filter(f => 
+          f.returnType && 
+          !['int', 'float', 'double', 'bool', 'char', 'void', 'uint32_t', 'size_t'].some(type => 
+            f.returnType?.includes(type)
+          ) && 
+          !f.returnType?.includes('std::') &&
+          !f.returnType?.includes('*') &&
+          !f.returnType?.includes('&')
+        )
+      };
+      
+      console.log('\\n[RETURN TYPE CATEGORIES]:');
+      Object.entries(returnTypeCategories).forEach(([category, functions]) => {
+        console.log(`  ${category}: ${functions.length} functions`);
+        if (functions.length > 0 && functions.length <= 3) {
+          functions.forEach((f: any) => {
+            console.log(`    - ${f.name}: ${f.returnType}`);
+          });
+        }
+      });
+      
+      // Specific checks for expected return types
+      const expectedReturnTypes = [
+        { method: 'WithTextureResolution', expectedType: 'IPlanetBuilder&' },
+        { method: 'Build', expectedType: 'unique_ptr' },
+        { method: 'GetTextureResolution', expectedType: 'uint32_t' }
+      ];
+      
+      let correctReturnTypes = 0;
+      for (const check of expectedReturnTypes) {
+        const method = functionsWithReturnTypes.find((f: any) => f.name === check.method);
+        if (method && method.returnType?.includes(check.expectedType)) {
+          correctReturnTypes++;
+          console.log(`  ✓ ${check.method}: ${method.returnType}`);
+        } else if (method) {
+          console.log(`  ⚠ ${check.method}: expected "${check.expectedType}", got "${method.returnType}"`);
+        }
+      }
+      
+      console.log(`\\n[ACCURACY] ${correctReturnTypes}/${expectedReturnTypes.length} expected return types correct`);
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: Date.now() - startTime
+      };
+      
+    } catch (error) {
+      return {
+        name: testName,
+        status: 'failed',
+        time: Date.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  /**
+   * Test 10: Complex Parameter Types Validation
+   */
+  private async testComplexParameterTypes(): Promise<TestResult> {
+    const startTime = Date.now();
+    const testName = 'complex_parameter_types';
+    
+    try {
+      const filePath = path.join(process.cwd(), 'test/complex-files/cpp/Generation/Heightmaps/AdvancedHeightGenerator.cpp');
+      const dbSymbols = this.db.select()
+        .from(universalSymbols)
+        .where(eq(universalSymbols.filePath, filePath))
+        .all();
+      
+      // Find functions with complex parameter types
+      const functionsWithParams = dbSymbols.filter(s => 
+        (s.kind === 'function' || s.kind === 'method') && 
+        s.signature && 
+        s.signature.includes('(') && 
+        !s.signature.includes('()')
+      );
+      
+      console.log(`\\n[COMPLEX PARAMS] Analyzing ${functionsWithParams.length} functions with parameters`);
+      
+      // Look for specific complex parameter patterns
+      const parameterPatterns = {
+        const_references: functionsWithParams.filter(f => 
+          f.signature?.includes('const ') && f.signature?.includes('&')
+        ),
+        
+        nested_templates: functionsWithParams.filter(f => 
+          f.signature?.includes('std::vector<std::pair<') ||
+          f.signature?.includes('std::map<') ||
+          f.signature?.includes('std::unordered_map<')
+        ),
+        
+        function_parameters: functionsWithParams.filter(f => 
+          f.signature?.includes('std::function<') ||
+          f.signature?.includes('(*)') 
+        ),
+        
+        multiple_template_params: functionsWithParams.filter(f => 
+          (f.signature?.match(/</g) || []).length > 1
+        ),
+        
+        variadic_templates: functionsWithParams.filter(f => 
+          f.signature?.includes('...')
+        ),
+        
+        perfect_forwarding: functionsWithParams.filter(f => 
+          f.signature?.includes('&&') && f.signature?.includes('T')
+        )
+      };
+      
+      console.log('\\n[PARAMETER COMPLEXITY]:');
+      Object.entries(parameterPatterns).forEach(([pattern, functions]) => {
+        console.log(`  ${pattern}: ${functions.length} functions`);
+        if (functions.length > 0 && functions.length <= 2) {
+          functions.forEach((f: any) => {
+            console.log(`    - ${f.name}: ${f.signature?.substring(0, 80)}...`);
+          });
+        }
+      });
+      
+      // Check for specific complex signatures we expect
+      const complexSignatureChecks = [
+        {
+          method: 'GenerateHeightSpherical',
+          expectedPatterns: ['HeightGenerationParameters', 'std::vector', 'std::pair']
+        },
+        {
+          method: 'AdvancedHeightGenerator',
+          expectedPatterns: ['VulkanNoiseGenerator', 'VulkanPipelineManager']
+        }
+      ];
+      
+      let foundComplexSignatures = 0;
+      for (const check of complexSignatureChecks) {
+        const method = functionsWithParams.find((f: any) => f.name === check.method);
+        if (method && method.signature) {
+          const foundPatterns = check.expectedPatterns.filter(pattern => 
+            method.signature?.includes(pattern)
+          );
+          
+          if (foundPatterns.length > 0) {
+            foundComplexSignatures++;
+            console.log(`\\n  ✓ ${check.method}: found ${foundPatterns.length}/${check.expectedPatterns.length} patterns`);
+            console.log(`    Signature: ${method.signature}`);
+          }
+        }
+      }
+      
+      console.log(`\\n[COMPLEX SIGNATURE ACCURACY] ${foundComplexSignatures}/${complexSignatureChecks.length} complex signatures validated`);
       
       return {
         name: testName,

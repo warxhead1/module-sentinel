@@ -36,9 +36,17 @@ export abstract class OptimizedTreeSitterBaseParser {
     patterns: PatternInfo[];
     controlFlowData: any;
     timestamp: number;
+    fileHash?: string;
   }>();
   
-  private static readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  // Dynamic cache TTL based on strategy
+  private getCacheTTL(): number {
+    switch (this.options.cacheStrategy) {
+      case 'aggressive': return 30 * 60 * 1000; // 30 minutes
+      case 'minimal': return 60 * 1000; // 1 minute
+      default: return 5 * 60 * 1000; // 5 minutes (moderate)
+    }
+  }
   
   constructor(db: Database, options: ParseOptions) {
     this.db = db;
@@ -113,30 +121,60 @@ export abstract class OptimizedTreeSitterBaseParser {
     
     let result;
     let tree: Parser.Tree | undefined;
+    let parseMethod: 'tree-sitter' | 'pattern-fallback' | 'pattern-supplement' = 'tree-sitter';
+    let parseErrors: string[] = [];
     
     // Always try tree-sitter first (it's faster and more accurate)
     try {
       this.debug(`Parsing AST for ${filePath}...`);
+      
+      // Check if parser is properly initialized
+      if (!this.parser || !this.parser.getLanguage()) {
+        throw new Error('Parser not properly initialized - missing language grammar');
+      }
+      
       tree = this.parser.parse(content);
+      
+      // Validate tree parsing
+      if (!tree || tree.rootNode.hasError) {
+        const errorCount = this.countTreeErrors(tree?.rootNode);
+        parseErrors.push(`Tree contains ${errorCount} syntax errors`);
+        console.warn(`⚠️ Tree-sitter parsing detected ${errorCount} syntax errors in ${filePath}`);
+      }
+      
       this.debug(`Traversing AST for ${filePath}...`);
       result = await this.visitor.traverse(tree, filePath, content);
-      this.debug(`AST traversal completed for ${filePath}`);
+      this.debug(`AST traversal completed for ${filePath} - found ${result.symbols.length} symbols`);
       
       // If tree-sitter found very few symbols, supplement with pattern-based analysis
       if (result.symbols.length < 3 && content.length > 1000) {
-        this.debug(`Tree-sitter found only ${result.symbols.length} symbols, supplementing with patterns`);
+        parseErrors.push(`Only found ${result.symbols.length} symbols for ${content.length} bytes of content`);
+        console.warn(`⚠️ Tree-sitter found only ${result.symbols.length} symbols in ${filePath}, supplementing with patterns`);
+        
         const patternResult = await this.performPatternBasedExtraction(content, filePath);
         
         // Merge results if pattern-based found significantly more symbols
         if (patternResult.symbols.length > result.symbols.length * 2) {
-          this.debug(`Pattern parser found ${patternResult.symbols.length} symbols vs tree-sitter's ${result.symbols.length}, using pattern results`);
+          console.warn(`⚠️ Pattern parser found ${patternResult.symbols.length} symbols vs tree-sitter's ${result.symbols.length}, using pattern results for ${filePath}`);
           result = patternResult;
+          tree = undefined; // Clear tree since we're using pattern results that don't match AST
+          parseMethod = 'pattern-supplement';
+          parseErrors.push(`Pattern extraction found ${patternResult.symbols.length} symbols vs tree-sitter's ${result.symbols.length}`);
         }
       }
     } catch (error) {
-      this.debug(`Tree-sitter parsing failed, falling back to patterns: ${error}`);
+      parseMethod = 'pattern-fallback';
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      parseErrors.push(`Tree-sitter parsing failed: ${errorMessage}`);
+      console.error(`❌ Tree-sitter parsing failed for ${filePath}, falling back to patterns:`, error);
+      
       result = await this.performPatternBasedExtraction(content, filePath);
+      tree = undefined; // Clear tree since pattern extraction doesn't use AST
     }
+    
+    // Add parse metadata to result
+    (result as any).parseMethod = parseMethod;
+    (result as any).parseErrors = parseErrors;
     
     // Apply semantic intelligence if enabled and we have both symbols AND a valid AST
     // Only process semantic intelligence when tree-sitter parsing succeeded
@@ -144,7 +182,9 @@ export abstract class OptimizedTreeSitterBaseParser {
       try {
         this.debug(`Starting semantic analysis with tree-sitter AST and ${result.symbols.length} symbols`);
         
-        const semanticResult = await this.semanticOrchestrator.processSymbols(
+        // Add timeout for semantic analysis
+        const semanticTimeout = this.options.semanticAnalysisTimeout || 10000; // 10 seconds default
+        const semanticPromise = this.semanticOrchestrator.processSymbols(
           result.symbols,
           result.relationships,
           tree!, // Pass valid tree from tree-sitter parsing
@@ -159,13 +199,22 @@ export abstract class OptimizedTreeSitterBaseParser {
           }
         );
         
+        const semanticResult = await Promise.race([
+          semanticPromise,
+          new Promise<any>((_, reject) => 
+            setTimeout(() => reject(new Error(`Semantic analysis timeout after ${semanticTimeout}ms`)), semanticTimeout)
+          )
+        ]);
+        
         // Enhance the result with semantic intelligence data
         (result as any).semanticIntelligence = semanticResult;
         
         this.debug(`Semantic analysis completed: ${semanticResult.stats.contextsExtracted} contexts, ${semanticResult.stats.embeddingsGenerated} embeddings, ${semanticResult.stats.clustersCreated} clusters, ${semanticResult.stats.insightsGenerated} insights`);
         
       } catch (error) {
-        this.debug(`Semantic analysis failed: ${error}`);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        parseErrors.push(`Semantic analysis failed: ${errorMsg}`);
+        console.warn(`⚠️ Semantic analysis failed for ${filePath}: ${errorMsg}`);
         // Continue without semantic analysis
       }
     }
@@ -198,8 +247,12 @@ export abstract class OptimizedTreeSitterBaseParser {
    */
   protected getCachedParse(filePath: string): any | null {
     const cached = OptimizedTreeSitterBaseParser.parseCache.get(filePath);
-    if (cached && Date.now() - cached.timestamp < OptimizedTreeSitterBaseParser.CACHE_TTL) {
+    if (cached && Date.now() - cached.timestamp < this.getCacheTTL()) {
       return cached;
+    }
+    // Remove expired entry
+    if (cached) {
+      OptimizedTreeSitterBaseParser.parseCache.delete(filePath);
     }
     return null;
   }
@@ -208,18 +261,50 @@ export abstract class OptimizedTreeSitterBaseParser {
    * Cache parse result
    */
   protected setCachedParse(filePath: string, data: any): void {
+    // Calculate cache size limit based on strategy
+    const maxCacheSize = this.options.cacheStrategy === 'aggressive' ? 500 :
+                        this.options.cacheStrategy === 'minimal' ? 20 : 100;
+    
     OptimizedTreeSitterBaseParser.parseCache.set(filePath, {
       ...data,
       timestamp: Date.now()
     });
     
-    // Limit cache size
-    if (OptimizedTreeSitterBaseParser.parseCache.size > 100) {
-      const oldestKey = Array.from(OptimizedTreeSitterBaseParser.parseCache.keys())[0];
-      OptimizedTreeSitterBaseParser.parseCache.delete(oldestKey);
+    // Limit cache size with LRU eviction
+    if (OptimizedTreeSitterBaseParser.parseCache.size > maxCacheSize) {
+      // Find and remove oldest entries (10% of cache)
+      const entriesToRemove = Math.ceil(maxCacheSize * 0.1);
+      const entries = Array.from(OptimizedTreeSitterBaseParser.parseCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp)
+        .slice(0, entriesToRemove);
+      
+      for (const [key] of entries) {
+        OptimizedTreeSitterBaseParser.parseCache.delete(key);
+      }
     }
   }
   
+  /**
+   * Count syntax errors in the tree
+   */
+  protected countTreeErrors(node: Parser.SyntaxNode | undefined): number {
+    if (!node) return 0;
+    
+    let errorCount = 0;
+    const traverse = (n: Parser.SyntaxNode) => {
+      if (n.type === 'ERROR' || n.isMissing) {
+        errorCount++;
+      }
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (child) traverse(child);
+      }
+    };
+    
+    traverse(node);
+    return errorCount;
+  }
+
   /**
    * Debug logging
    */

@@ -136,6 +136,18 @@ export class ProjectManager extends DashboardComponent {
                 <input type="checkbox" name="languages" value="javascript">
                 <span>JavaScript (.js, .jsx)</span>
               </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="languages" value="go">
+                <span>Go (.go)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="languages" value="java">
+                <span>Java (.java)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" name="languages" value="csharp">
+                <span>C# (.cs)</span>
+              </label>
             </div>
           </div>
 
@@ -189,12 +201,33 @@ export class ProjectManager extends DashboardComponent {
         <div class="project-footer">
           <span class="project-date">Created ${lastUpdated}</span>
           <div class="project-languages">
-            <span class="language-badge cpp">C++</span>
-            <!-- More language badges will be added based on actual project content -->
+            ${this.renderLanguageBadges(project)}
           </div>
         </div>
       </div>
     `;
+  }
+
+  private renderLanguageBadges(project: any): string {
+    // Get languages from project metadata or detected languages
+    const languages = project.languages || project.detectedLanguages || ['cpp']; // fallback to cpp
+    
+    const languageNames: Record<string, string> = {
+      cpp: 'C++',
+      python: 'Python', 
+      typescript: 'TypeScript',
+      javascript: 'JavaScript',
+      go: 'Go',
+      java: 'Java',
+      csharp: 'C#'
+    };
+
+    return languages
+      .map((lang: string) => {
+        const displayName = languageNames[lang] || lang;
+        return `<span class="language-badge ${lang}">${displayName}</span>`;
+      })
+      .join('');
   }
 
   private setupEventListeners(): void {
@@ -879,6 +912,36 @@ export class ProjectManager extends DashboardComponent {
       .language-badge.cpp {
         background: rgba(255, 166, 87, 0.2);
         color: #ffa657;
+      }
+
+      .language-badge.python {
+        background: rgba(55, 118, 171, 0.2);
+        color: #3776ab;
+      }
+
+      .language-badge.typescript {
+        background: rgba(49, 120, 198, 0.2);
+        color: #3178c6;
+      }
+
+      .language-badge.javascript {
+        background: rgba(240, 219, 79, 0.2);
+        color: #f0db4f;
+      }
+
+      .language-badge.go {
+        background: rgba(0, 173, 181, 0.2);
+        color: #00add8;
+      }
+
+      .language-badge.java {
+        background: rgba(237, 117, 21, 0.2);
+        color: #ed7515;
+      }
+
+      .language-badge.csharp {
+        background: rgba(147, 112, 219, 0.2);
+        color: #9370db;
       }
 
       /* Animations */

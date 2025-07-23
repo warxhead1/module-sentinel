@@ -8,7 +8,7 @@
 import { Database } from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, and } from 'drizzle-orm';
-import { semanticClusters, clusterMembership, universalSymbols } from '../database/schema/universal.js';
+import { semanticClusters, clusterMembership, universalSymbols } from '../database/drizzle/schema.js';
 import { CodeEmbedding, SimilarityResult, LocalCodeEmbeddingEngine } from './local-code-embedding.js';
 import { SymbolInfo } from '../parsers/tree-sitter/parser-types.js';
 import { SemanticContext } from './semantic-context-engine.js';
@@ -488,7 +488,7 @@ export class SemanticClusteringEngine {
             projectId: 1, // Default project ID
             clusterName: cluster.name,
             clusterType: cluster.type,
-            centroidEmbedding: Buffer.from(JSON.stringify(cluster.centroid)).toString('base64'),
+            centroidEmbedding: Buffer.from(JSON.stringify(cluster.centroid)),
             similarityThreshold: cluster.similarityThreshold,
             symbolCount: cluster.members.length,
             quality: cluster.quality,

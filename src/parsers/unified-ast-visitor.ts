@@ -123,6 +123,26 @@ export interface VisitorHandlers {
     node: Parser.SyntaxNode,
     ctx: VisitorContext
   ) => SymbolInfo | null;
+  onArrowFunction?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => SymbolInfo | null;
+  onProperty?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => SymbolInfo | null;
+  onTypeAlias?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => SymbolInfo | null;
+  onObjectPattern?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => SymbolInfo[] | null;
+  onArrayPattern?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => SymbolInfo[] | null;
 
   // Control flow handlers (only called for complex functions)
   onControlStructure?: (node: Parser.SyntaxNode, ctx: VisitorContext) => void;
@@ -345,8 +365,17 @@ export class UnifiedASTVisitor {
 
           if (result) {
             if (Array.isArray(result)) {
-              // Relationships
-              context.relationships.push(...result);
+              // Check if it's an array of symbols or relationships
+              if (result.length > 0 && "name" in result[0] && "kind" in result[0]) {
+                // Array of symbols (from destructuring patterns)
+                for (const symbol of result as SymbolInfo[]) {
+                  context.symbols.set(symbol.qualifiedName, symbol);
+                  context.stats.symbolsExtracted++;
+                }
+              } else {
+                // Array of relationships
+                context.relationships.push(...result);
+              }
             } else if ("patternType" in result) {
               // Pattern
               context.patterns.push(result);
@@ -710,22 +739,14 @@ export class UnifiedASTVisitor {
         s.kind === "function" || s.kind === "method" || s.kind === "constructor"
     );
 
-    console.log(
-      `[UnifiedASTVisitor] Analyzing member access for ${functionSymbols.length} functions`
-    );
+    // Analyzing member access for functions
 
     for (let i = 0; i < functionSymbols.length; i++) {
       const funcSymbol = functionSymbols[i];
-      console.log(
-        `[UnifiedASTVisitor] Processing function ${i + 1}/${
-          functionSymbols.length
-        }: ${funcSymbol.name} at line ${funcSymbol.line}`
-      );
+      // Processing function
 
       if (funcSymbol.name === "ToGeneric") {
-        console.log(
-          `[UnifiedASTVisitor] Analyzing ToGeneric function at line ${funcSymbol.line}`
-        );
+        // Analyzing ToGeneric function
       }
 
       // Add timeout to prevent individual functions from hanging indefinitely
@@ -743,9 +764,7 @@ export class UnifiedASTVisitor {
             )
           ),
         ]);
-        console.log(
-          `[UnifiedASTVisitor] Completed function ${funcSymbol.name}`
-        );
+        // Completed function
       } catch (error: any) {
         console.warn(
           `[UnifiedASTVisitor] Failed to analyze function ${funcSymbol.name}: ${error.message}`
@@ -794,9 +813,7 @@ export class UnifiedASTVisitor {
 
       // Emergency timeout check
       if (linesProcessed % 25 === 0) {
-        console.log(
-          `[UnifiedASTVisitor] Processing function ${funcSymbol.name} line ${lineNum} (${linesProcessed} lines processed)`
-        );
+        // Processing function line
       }
 
       // Track brace depth to know when we're inside the function body
@@ -856,9 +873,7 @@ export class UnifiedASTVisitor {
       const [fullMatch, objectName, memberName] = match;
 
       if (funcSymbol.name === "ToGeneric") {
-        console.log(
-          `[UnifiedASTVisitor] Found member write in ToGeneric: ${objectName}.${memberName} at line ${lineNumber}`
-        );
+        // Found member write in ToGeneric
       }
 
       // Skip 'this' as it's not cross-object access

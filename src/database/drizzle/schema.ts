@@ -1076,6 +1076,133 @@ export const patternSymbolsRelations = relations(patternSymbols, ({ one }) => ({
   })
 }));
 
+// ============================================================================
+// SEMANTIC INTELLIGENCE TABLES
+// ============================================================================
+
+// Semantic clusters - groups of semantically similar symbols
+export const semanticClusters = sqliteTable('semantic_clusters', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  clusterName: text('cluster_name').notNull(),
+  clusterType: text('cluster_type').notNull(), // 'function_similarity', 'data_structure', 'pattern_based', etc.
+  quality: real('quality').notNull(), // Cluster quality score (0-1)
+  symbolCount: integer('symbol_count').notNull().default(0),
+  similarityThreshold: real('similarity_threshold').notNull(),
+  centroidEmbedding: blob('centroid_embedding', { mode: 'buffer' }), // Base64 encoded centroid embedding
+  description: text('description'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_clusters_project_type').on(table.projectId, table.clusterType),
+  qualityIdx: index('idx_semantic_clusters_quality').on(table.quality),
+  nameIdx: index('idx_semantic_clusters_name').on(table.clusterName),
+}));
+
+// Cluster membership - many-to-many relationship between symbols and clusters
+export const clusterMembership = sqliteTable('cluster_membership', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  clusterId: integer('cluster_id').notNull().references(() => semanticClusters.id),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id),
+  similarity: real('similarity').notNull(),
+  role: text('role').default('member'),
+  assignedAt: integer('assigned_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  clusterIdx: index('idx_cluster_membership_cluster').on(table.clusterId),
+  symbolIdx: index('idx_cluster_membership_symbol').on(table.symbolId),
+  similarityIdx: index('idx_cluster_membership_similarity').on(table.similarity),
+  uniqueIdx: uniqueIndex('idx_cluster_membership_unique').on(table.clusterId, table.symbolId),
+}));
+
+// Semantic insights - AI-generated insights about code quality and architecture
+export const semanticInsights = sqliteTable('semantic_insights', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  insightType: text('insight_type').notNull(), // 'refactoring_opportunity', 'architectural_violation', 'performance_concern', 'code_smell'
+  category: text('category').notNull(), // 'architecture', 'performance', 'maintainability', 'quality', 'testing', 'security'
+  severity: text('severity').notNull(), // 'low', 'medium', 'high', 'critical'
+  confidence: real('confidence').notNull(), // AI confidence in the insight (0-1)
+  priority: text('priority').notNull(), // 'low', 'medium', 'high', 'critical'
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  affectedSymbols: text('affected_symbols'), // JSON array of symbol IDs
+  clusterId: integer('cluster_id').references(() => semanticClusters.id),
+  metrics: text('metrics'), // JSON object with relevant metrics
+  sourceContext: text('source_context'), // Code context that triggered the insight
+  reasoning: text('reasoning'), // AI reasoning for the insight
+  contextLine: integer('context_line'),
+  contextFile: text('context_file'),
+  contextSnippet: text('context_snippet'),
+  relatedInsights: text('related_insights'), // JSON array of related insight IDs
+  detectedAt: integer('detected_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+  resolution: text('resolution'),
+  status: text('status').default('active'), // 'active', 'resolved', 'ignored', 'false_positive'
+  userFeedback: integer('user_feedback'), // -1: negative, 0: neutral, 1: positive
+  feedbackComment: text('feedback_comment'),
+  feedbackTimestamp: integer('feedback_timestamp', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_insights_project_type').on(table.projectId, table.insightType),
+  severityIdx: index('idx_semantic_insights_severity').on(table.severity),
+  statusIdx: index('idx_semantic_insights_status').on(table.status),
+  feedbackIdx: index('idx_semantic_insights_feedback').on(table.userFeedback),
+  confidenceIdx: index('idx_semantic_insights_confidence').on(table.confidence),
+}));
+
+// Insight recommendations - specific actionable recommendations for insights
+export const insightRecommendations = sqliteTable('insight_recommendations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  insightId: integer('insight_id').notNull().references(() => semanticInsights.id),
+  action: text('action').notNull(),
+  description: text('description').notNull(),
+  effort: text('effort').notNull(), // 'low', 'medium', 'high'
+  impact: text('impact').notNull(), // 'low', 'medium', 'high'
+  priority: integer('priority').notNull(),
+  exampleCode: text('example_code'),
+  relatedSymbols: text('related_symbols'), // JSON array of symbol IDs
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  insightIdx: index('idx_insight_recommendations_insight').on(table.insightId),
+  priorityIdx: index('idx_insight_recommendations_priority').on(table.priority),
+}));
+
+// Semantic relationships - discovered semantic relationships between symbols
+export const semanticRelationships = sqliteTable('semantic_relationships', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id),
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id),
+  semanticType: text('semantic_type').notNull(), // 'similar_purpose', 'complementary', 'alternative_implementation', etc.
+  strength: real('strength').notNull(), // Relationship strength (0-1)
+  evidence: text('evidence'), // JSON array of evidence
+  discoveredAt: integer('discovered_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  fromIdx: index('idx_semantic_relationships_from').on(table.fromSymbolId),
+  toIdx: index('idx_semantic_relationships_to').on(table.toSymbolId),
+  typeIdx: index('idx_semantic_relationships_type').on(table.semanticType),
+  strengthIdx: index('idx_semantic_relationships_strength').on(table.strength),
+  projectIdx: index('idx_semantic_relationships_project').on(table.projectId),
+  uniqueIdx: uniqueIndex('idx_semantic_relationships_unique').on(table.fromSymbolId, table.toSymbolId, table.semanticType),
+}));
+
+// Code embeddings - Vector embeddings for semantic similarity
+export const codeEmbeddings = sqliteTable('code_embeddings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id),
+  embeddingType: text('embedding_type').notNull(), // 'semantic', 'structural', 'combined'
+  embedding: blob('embedding', { mode: 'buffer' }).notNull(), // Base64 encoded vector
+  dimensions: integer('dimensions').notNull(),
+  modelVersion: text('model_version').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  symbolIdx: index('idx_code_embeddings_symbol').on(table.symbolId),
+  typeIdx: index('idx_code_embeddings_type').on(table.embeddingType),
+  uniqueIdx: uniqueIndex('idx_code_embeddings_unique').on(table.symbolId, table.embeddingType),
+}));
+
 // Export all table types for use in application
 export type Project = typeof projects.$inferSelect;
 export type NewProject = typeof projects.$inferInsert;
@@ -1087,6 +1214,18 @@ export type UniversalRelationship = typeof universalRelationships.$inferSelect;
 export type NewUniversalRelationship = typeof universalRelationships.$inferInsert;
 export type CppFeature = typeof cppFeatures.$inferSelect;
 export type NewCppFeature = typeof cppFeatures.$inferInsert;
+export type SemanticCluster = typeof semanticClusters.$inferSelect;
+export type NewSemanticCluster = typeof semanticClusters.$inferInsert;
+export type ClusterMembership = typeof clusterMembership.$inferSelect;
+export type NewClusterMembership = typeof clusterMembership.$inferInsert;
+export type SemanticInsight = typeof semanticInsights.$inferSelect;
+export type NewSemanticInsight = typeof semanticInsights.$inferInsert;
+export type InsightRecommendation = typeof insightRecommendations.$inferSelect;
+export type NewInsightRecommendation = typeof insightRecommendations.$inferInsert;
+export type SemanticRelationship = typeof semanticRelationships.$inferSelect;
+export type NewSemanticRelationship = typeof semanticRelationships.$inferInsert;
+export type CodeEmbedding = typeof codeEmbeddings.$inferSelect;
+export type NewCodeEmbedding = typeof codeEmbeddings.$inferInsert;
 export type PythonFeature = typeof pythonFeatures.$inferSelect;
 export type NewPythonFeature = typeof pythonFeatures.$inferInsert;
 export type TypescriptFeature = typeof typescriptFeatures.$inferSelect;

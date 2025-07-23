@@ -1,7 +1,7 @@
 
 import { sqliteTable, text, integer, real, primaryKey, index } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
-import { universalSymbols } from './universal.js';
+import { universalSymbols } from '../drizzle/schema.js';
 
 /**
  * Language-Specific Feature Tables

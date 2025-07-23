@@ -25,7 +25,7 @@ import {
   universalRelationships,
   detectedPatterns,
   projectLanguages,
-} from "../database/schema/universal.js";
+} from "../database/drizzle/schema.js";
 
 // Import code flow tables from drizzle schema
 import {
@@ -126,6 +126,9 @@ export class UniversalIndexer extends EventEmitter {
         "python",
         "typescript",
         "javascript",
+        "go",
+        "java",
+        "csharp",
       ],
       filePatterns: options.filePatterns || [],
       excludePatterns: options.excludePatterns || [
@@ -203,6 +206,80 @@ export class UniversalIndexer extends EventEmitter {
       parser: require("../parsers/adapters/typescript-language-parser.js")
         .TypeScriptLanguageParser,
     });
+
+    this.parsers.set("go", {
+      language: "go",
+      extensions: [".go"],
+      parser: require("../parsers/adapters/go-language-parser.js")
+        .GoLanguageParser,
+    });
+
+    // Register Java parser
+    this.parsers.set("java", {
+      language: "java",
+      extensions: [".java"],
+      parser: require("../parsers/adapters/java-language-parser.js")
+        .JavaLanguageParser,
+    });
+
+    // Register C# parser
+    this.parsers.set("csharp", {
+      language: "csharp",
+      extensions: [".cs"],
+      parser: require("../parsers/adapters/csharp-language-parser.js")
+        .CSharpLanguageParser,
+    });
+  }
+
+  /**
+   * Index a single file - useful for testing and precision analysis
+   */
+  async indexFile(projectId: number, filePath: string): Promise<ParseResult | null> {
+    try {
+      // Ensure project exists - use drizzle for consistency
+      const [project] = await this.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, projectId))
+        .limit(1);
+        
+      if (!project) {
+        throw new Error(`Project with ID ${projectId} not found`);
+      }
+
+      // Get language mappings
+      const languageMap = await this.ensureLanguages();
+
+      // Determine file language and parser
+      const language = this.detectLanguage(filePath);
+      if (!language) {
+        this.debug(`No parser available for file: ${filePath}`);
+        return null;
+      }
+
+      const parser = this.parsers.get(language);
+      if (!parser) {
+        this.debug(`No parser found for language: ${language}`);
+        return null;
+      }
+
+      // Parse the file
+      this.debug(`Parsing single file: ${filePath} (${language})`);
+      const parseResult = await this.parseFile(filePath, projectId, languageMap);
+
+      // Store results if parsing succeeded
+      if (parseResult && parseResult.symbols.length > 0) {
+        // Add filePath to parseResult for storage methods
+        const parseResultWithPath: ParseResult & { filePath: string } = { ...parseResult, filePath };
+        await this.storeSymbols(projectId, languageMap, [parseResultWithPath]);
+        await this.resolveAndStoreRelationships(projectId, [parseResultWithPath]);
+      }
+
+      return parseResult;
+    } catch (error) {
+      this.debug(`Error indexing file ${filePath}: ${error}`);
+      return null;
+    }
   }
 
   /**
@@ -298,7 +375,7 @@ export class UniversalIndexer extends EventEmitter {
         .update(projects)
         .set({
           rootPath: this.options.projectPath,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
           isActive: true,
         })
         .where(eq(projects.id, existingByName[0].id));
@@ -319,7 +396,7 @@ export class UniversalIndexer extends EventEmitter {
         .update(projects)
         .set({
           name: this.options.projectName,
-          updatedAt: new Date(),
+          updatedAt: new Date().toISOString(),
           isActive: true,
         })
         .where(eq(projects.id, existingByPath[0].id));
@@ -334,8 +411,6 @@ export class UniversalIndexer extends EventEmitter {
         name: this.options.projectName,
         rootPath: this.options.projectPath,
         description: `Indexed by Universal Indexer`,
-        createdAt: new Date(),
-        updatedAt: new Date(),
         isActive: true,
       })
       .returning({ id: projects.id });
@@ -366,7 +441,7 @@ export class UniversalIndexer extends EventEmitter {
             name: lang,
             displayName: this.getLanguageDisplayName(lang),
             parserClass: this.getParserClass(lang),
-            extensions: JSON.stringify(this.getLanguageExtensions(lang)),
+            extensions: this.getLanguageExtensions(lang),
             isEnabled: true,
           })
           .returning({ id: languages.id });
@@ -589,7 +664,7 @@ export class UniversalIndexer extends EventEmitter {
     const content = await fs.readFile(filePath, "utf-8");
 
     // Record file in file_index
-    const { fileIndex } = await import("../database/schema/universal.js");
+    const { fileIndex } = await import("../database/drizzle/schema.js");
     const fileStats = await fs.stat(filePath);
     const startParse = Date.now();
 
@@ -604,7 +679,7 @@ export class UniversalIndexer extends EventEmitter {
         languageId,
         filePath,
         fileSize: fileStats.size,
-        lastParsed: new Date(),
+        lastParsed: new Date().toISOString(),
         parseDuration: Date.now() - startParse,
         parserVersion: "1.0.0",
         symbolCount: result.symbols?.length || 0,
@@ -612,21 +687,18 @@ export class UniversalIndexer extends EventEmitter {
         patternCount: result.patterns?.length || 0,
         isIndexed: true,
         hasErrors: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
       })
       .onConflictDoUpdate({
         target: [fileIndex.projectId, fileIndex.filePath],
         set: {
           fileSize: fileStats.size,
-          lastParsed: new Date(),
+          lastParsed: new Date().toISOString(),
           parseDuration: Date.now() - startParse,
           symbolCount: result.symbols?.length || 0,
           relationshipCount: result.relationships?.length || 0,
           patternCount: result.patterns?.length || 0,
           isIndexed: true,
           hasErrors: false,
-          updatedAt: new Date(),
         },
       });
 
@@ -780,11 +852,14 @@ export class UniversalIndexer extends EventEmitter {
    */
   private async createSymbolIdMapping(
     projectId: number,
-    fileData: Array<{ symbols: any[], filePath: string }>
+    _fileData: Array<{ symbols: any[], filePath: string }>
   ): Promise<Map<string, number>> {
     const symbolIdMapping = new Map<string, number>();
     
     try {
+      // Import key utilities for consistent key generation
+      const { generateSymbolKey, generateAlternativeKey } = await import('../analysis/symbol-key-utils.js');
+      
       // Get all symbols for this project from database
       const symbolsInDb = await this.db
         .select({
@@ -799,53 +874,64 @@ export class UniversalIndexer extends EventEmitter {
         .from(universalSymbols)
         .where(eq(universalSymbols.projectId, projectId));
 
-      // Create mapping strategies for symbol resolution
+      // Create consistent mapping using standard key generation
       for (const symbol of symbolsInDb) {
-        // Strategy 1: Qualified name (most precise)
-        if (symbol.qualifiedName) {
-          symbolIdMapping.set(symbol.qualifiedName, symbol.id);
+        // Convert database row to SymbolInfo-like object for key generation
+        const symbolInfo: Partial<SymbolInfo> = {
+          name: symbol.name,
+          qualifiedName: symbol.qualifiedName || symbol.name,
+          filePath: symbol.filePath,
+          line: symbol.line,
+          column: symbol.column,
+          kind: symbol.kind as any,
+          semanticTags: [],
+          complexity: 1,
+          confidence: 1.0,
+          isDefinition: false,
+          isExported: false
+        };
+        
+        // Generate primary key using consistent format
+        const primaryKey = generateSymbolKey(symbolInfo as SymbolInfo, symbol.filePath);
+        symbolIdMapping.set(primaryKey, symbol.id);
+        
+        // Also create alternative key for backward compatibility
+        const alternativeKey = generateAlternativeKey(symbolInfo as SymbolInfo, symbol.filePath);
+        if (!symbolIdMapping.has(alternativeKey)) {
+          symbolIdMapping.set(alternativeKey, symbol.id);
         }
         
-        // Strategy 2: Name + file path (good precision)
-        const fileKey = `${symbol.name}@${symbol.filePath}`;
-        symbolIdMapping.set(fileKey, symbol.id);
-        
-        // Strategy 3: Name + line + column (precise for position-based matching)
-        const positionKey = `${symbol.name}:${symbol.line}:${symbol.column}@${symbol.filePath}`;
-        symbolIdMapping.set(positionKey, symbol.id);
-        
-        // Strategy 4: Basic name (fallback, may have conflicts)
+        // Additional keys for different access patterns
+        // Simple name key (for cases where only name is available)
         if (!symbolIdMapping.has(symbol.name)) {
           symbolIdMapping.set(symbol.name, symbol.id);
         }
         
-        // Strategy 5: For semantic analysis, create keys that match what the orchestrator uses
-        for (const fileInfo of fileData) {
-          if (fileInfo.filePath === symbol.filePath) {
-            // Look for matching symbols in the parse data
-            const matchingSymbol = fileInfo.symbols.find(s => 
-              s.name === symbol.name && 
-              s.line === symbol.line && 
-              s.column === symbol.column
-            );
-            
-            if (matchingSymbol) {
-              // Create semantic analysis compatible keys
-              const semanticKey = `${symbol.filePath}:${symbol.name}:${symbol.line}:${symbol.column}`;
-              symbolIdMapping.set(semanticKey, symbol.id);
-              
-              // Also map by symbol index if available
-              const symbolIndex = fileInfo.symbols.indexOf(matchingSymbol);
-              if (symbolIndex >= 0) {
-                const indexKey = `${symbol.filePath}:symbol:${symbolIndex}`;
-                symbolIdMapping.set(indexKey, symbol.id);
-              }
-            }
-          }
+        // Qualified name key (for semantic context lookups)
+        if (symbol.qualifiedName && !symbolIdMapping.has(symbol.qualifiedName)) {
+          symbolIdMapping.set(symbol.qualifiedName, symbol.id);
         }
       }
       
-      this.debug(`Created symbol ID mapping with ${symbolIdMapping.size} entries`);
+      this.debug(`Created symbol ID mapping with ${symbolIdMapping.size} entries using consistent key format`);
+      
+      // Debug: log a few sample keys to understand the format
+      if (symbolIdMapping.size > 0) {
+        const sampleKeys = Array.from(symbolIdMapping.keys()).slice(0, 3);
+        this.debug(`Sample mapping keys: ${sampleKeys.join(', ')}`);
+      }
+      
+      // Debug output for troubleshooting - always show this for now
+      if (symbolIdMapping.size > 0) {
+        console.log('[UniversalIndexer] Sample symbol ID mappings:');
+        let count = 0;
+        for (const [key, id] of symbolIdMapping) {
+          if (count++ < 10) {
+            console.log(`  ${key} -> ${id}`);
+          } else break;
+        }
+        console.log(`[UniversalIndexer] Total mappings: ${symbolIdMapping.size}`);
+      }
       
     } catch (error) {
       this.debug(`Failed to create symbol ID mapping: ${error}`);
@@ -917,6 +1003,11 @@ export class UniversalIndexer extends EventEmitter {
     return null;
   }
 
+  private detectLanguage(filePath: string): string | null {
+    const ext = path.extname(filePath).toLowerCase();
+    return this.getLanguageForExtension(ext);
+  }
+
   private getLanguageDisplayName(lang: string): string {
     const displayNames: Record<string, string> = {
       cpp: "C++",
@@ -934,6 +1025,9 @@ export class UniversalIndexer extends EventEmitter {
       python: "PythonTreeSitterParser",
       typescript: "TypeScriptTreeSitterParser",
       javascript: "JavaScriptTreeSitterParser",
+      go: "GoLanguageParser",
+      java: "JavaLanguageParser",
+      csharp: "CSharpLanguageParser",
     };
 
     return parserClasses[lang] || "UnknownParser";
@@ -945,6 +1039,9 @@ export class UniversalIndexer extends EventEmitter {
       python: [".py", ".pyx", ".pyi"],
       typescript: [".ts", ".tsx"],
       javascript: [".js", ".jsx"],
+      go: [".go"],
+      java: [".java"],
+      csharp: [".cs"],
     };
 
     return extensionMap[lang] || [];
@@ -1031,15 +1128,15 @@ export class UniversalIndexer extends EventEmitter {
           signature: symbol.signature,
           returnType: symbol.returnType,
           complexity: symbol.complexity || 1,
-          semanticTags: JSON.stringify(symbol.semanticTags || []),
-          isDefinition: symbol.isDefinition ? 1 : 0,
-          isExported: symbol.isExported ? 1 : 0,
-          isAsync: symbol.isAsync ? 1 : 0,
-          isAbstract: 0, // Not part of SymbolInfo type
+          semanticTags: symbol.semanticTags || [],
+          isDefinition: symbol.isDefinition || false,
+          isExported: symbol.isExported || false,
+          isAsync: symbol.isAsync || false,
+          isAbstract: false, // Not part of SymbolInfo type
           namespace: symbol.namespace,
           parentScope: symbol.parentScope,
           confidence: symbol.confidence || 1.0,
-          languageFeatures: symbol.languageFeatures ? JSON.stringify(symbol.languageFeatures) : null
+          languageFeatures: symbol.languageFeatures || null
         }));
         
         if (symbolRecords.length > 0) {
@@ -1192,7 +1289,7 @@ export class UniversalIndexer extends EventEmitter {
 
     // Now that all symbols are stored, resolve relationships
     const { universalSymbols, universalRelationships, fileIndex } =
-      await import("../database/schema/universal.js");
+      await import("../database/drizzle/schema.js");
 
     // Optimize: Build focused symbol maps with only needed data
     const symbolMap = new Map<string, number>();
@@ -1464,7 +1561,7 @@ export class UniversalIndexer extends EventEmitter {
 
     this.debug(`Creating file symbols for ${files.length} files`);
     const { universalSymbols } = await import(
-      "../database/schema/universal.js"
+      "../database/drizzle/schema.js"
     );
 
     for (const file of files) {
@@ -1491,12 +1588,9 @@ export class UniversalIndexer extends EventEmitter {
             filePath: file.filePath,
             line: 0,
             column: 0,
-            visibility: "public",
             isExported: false,
             confidence: 1.0,
-            semanticTags: JSON.stringify(["file"]),
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            semanticTags: ["file"],
           });
 
           // Created file symbol (debug spam reduced)
@@ -1518,7 +1612,7 @@ export class UniversalIndexer extends EventEmitter {
 
     this.debug(`Creating virtual symbols for ${moduleNames.size} modules`);
     const { universalSymbols } = await import(
-      "../database/schema/universal.js"
+      "../database/drizzle/schema.js"
     );
 
     for (const moduleName of moduleNames) {
@@ -1552,14 +1646,9 @@ export class UniversalIndexer extends EventEmitter {
             filePath: isExternal ? `<external>/${moduleName}` : moduleName,
             line: 0,
             column: 0,
-            visibility: "public",
             isExported: true,
             confidence: 1.0,
-            semanticTags: JSON.stringify(
-              isExternal ? ["external", "dependency"] : ["internal", "module"]
-            ),
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            semanticTags: isExternal ? ["external", "dependency"] : ["internal", "module"],
           });
 
           this.debug(`Created ${kind} symbol for: ${moduleName}`);
@@ -1576,7 +1665,7 @@ export class UniversalIndexer extends EventEmitter {
   private resolveCallTarget(
     relationship: RelationshipInfo,
     symbolMap: Map<string, number>,
-    allSymbols: Array<{ id: number; name: string; qualifiedName: string; filePath: string; kind: string; isExported: boolean }>
+    allSymbols: Array<{ id: number; name: string; qualifiedName: string; filePath: string; kind: string; isExported: boolean | null }>
   ): number | undefined {
     const targetName = relationship.toName;
     const fromName = relationship.fromName;
@@ -1652,7 +1741,7 @@ export class UniversalIndexer extends EventEmitter {
         // This could be enhanced by passing filePath context through the relationship resolution
         
         // Prefer exported functions for cross-file calls
-        if (symbol.isExported) {
+        if (symbol.isExported === true) {
           score += 30;
         }
         

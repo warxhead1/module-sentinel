@@ -113,6 +113,7 @@ export enum UniversalRelationshipType {
   // Module relationships
   Imports = 'imports',
   Exports = 'exports',
+  ReExports = 're_exports',
   Depends = 'depends',
   
   // Pattern relationships
