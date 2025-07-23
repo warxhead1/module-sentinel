@@ -1,11 +1,11 @@
 {
   "summary": {
     "totalSymbolsExpected": 200,
-    "totalSymbolsFound": 6146,
-    "symbolCoverage": 3073,
+    "totalSymbolsFound": 7745,
+    "symbolCoverage": 3872.5,
     "totalRelationshipsExpected": 100,
-    "totalRelationshipsFound": 2715,
-    "relationshipCoverage": 2715,
+    "totalRelationshipsFound": 2723,
+    "relationshipCoverage": 2723,
     "criticalGaps": 3,
     "testsPassed": 0,
     "testsFailed": 0
@@ -29,32 +29,12 @@
       "missingSymbols": []
     },
     {
-      "kind": "variable",
-      "expected": 1,
-      "found": 0,
-      "priority": "medium",
-      "examples": [
-        "Example variable"
-      ],
-      "missingSymbols": []
-    },
-    {
       "kind": "enum",
       "expected": 1,
       "found": 0,
       "priority": "low",
       "examples": [
         "Example enum"
-      ],
-      "missingSymbols": []
-    },
-    {
-      "kind": "typedef",
-      "expected": 1,
-      "found": 0,
-      "priority": "low",
-      "examples": [
-        "Example typedef"
       ],
       "missingSymbols": []
     },

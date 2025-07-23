@@ -1,171 +1,288 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# Module Sentinel - AI Agent Guide
 
 ## Project Overview
 
-Module Sentinel is an MCP (Model Context Protocol) server that provides intelligent C++ module analysis and architectural insights for the Planet ProcGen project. It uses tree-sitter for parsing C++23 modules (.ixx files) and provides tools to help maintain architectural boundaries, prevent code duplication, and guide proper module integration.
+Module Sentinel is a multi-language code analysis and visualization tool supporting C++, Python, TypeScript, and more. It uses tree-sitter parsing with a universal schema design to provide semantic intelligence and code visualization capabilities.
 
-## Key Commands
-
-### Building and Running
+## Quick Command Reference
 
 ```bash
-# Core build commands:
-  npm run build         # Build TypeScript sources
-  npm run clean         # Clean build artifacts
-
-# Test runner (automatically builds first):
-  npm run test          # Run all tests
-  npm run test:filter <pattern>  # Run tests matching pattern (fuzzy)
-  npm run test:comparison  # Run parser comparison test specifically
-  
-# Test runner with tsx directly (for more control):
-  tsx run-tests.ts               # Build and run all tests
-  tsx run-tests.ts --filter parser  # Fuzzy match: runs ParserComparisonTest
-  tsx run-tests.ts --filter semantic # Fuzzy match: runs SemanticSearchTest, RichSemanticAnalysisTest
-  tsx run-tests.ts --rebuild     # Force rebuild database before tests
-  tsx run-tests.ts --include-new-parsers  # Include experimental parser tests
-
-# Dashboard:
-  npm run dashboard     # Start the visualization dashboard
+npm run dev          # Start development server (port 6969)
+npm test            # Run tests and create sample database
+npm run build       # Production build
+npm run dashboard   # Start visualization dashboard only
 ```
 
-### Test Filtering Examples
-
-The test runner uses case-insensitive partial matching:
-- `--filter parser` matches: ParserComparisonTest, ParserSupremacyTest
-- `--filter semantic` matches: SemanticSearchTest, RichSemanticAnalysisTest
-- `--filter api` matches: APIEndpointsTest
-- `--filter tool` matches: ToolsIntegrationTest
-
-## Architecture Overview
+## Architecture Essentials
 
 ### Core Components
 
-1. **StreamingCppParser** (`src/parsers/streaming-cpp-parser.ts`)
+- **unified-server.ts**: Main entry point serving both API and dashboard
+- **src/api/**: RESTful API with modular services (database, indexing, semantic insights)
+- **src/parsers/**: Tree-sitter based multi-language parsing with unified AST visitor
+- **src/analysis/**: Semantic intelligence orchestration, embeddings, clustering
+- **src/dashboard/**: Web components with D3.js visualizations
 
-   - Handles C++23 module syntax (`export module`, `import`, etc.)
-   - Falls back to line-based parsing for large files (>50KB)
-   - Returns `ModuleSymbols` with Sets of exports, imports, functions, classes
+### Data Flow
 
-2. **PatternAwareIndexer** (`src/indexing/pattern-aware-indexer.ts`)
+1. **Parsing**: Source files � Language parser � Universal AST � Symbol extraction � Database
+2. **Analysis**: Stored symbols � Semantic analysis � Embeddings � Insights
+3. **Visualization**: API request � Service layer � Database � Dashboard component � D3.js
 
-   - Creates SQLite database with `enhanced_symbols` table
-   - Detects patterns: GPU/CPU execution, factory patterns, anti-patterns
-   - Builds semantic tags and relationships between symbols
-   - Critical: Must be initialized before other tools can query the database
+## Critical Development Patterns
 
-3. **ModuleSentinel** (`src/module-sentinel.ts`)
+### File Naming Convention
 
-   - Main orchestrator class
-   - Uses lazy database initialization for ModuleIndexer
-   - Manages caching and parallel processing
-   - Identifies pipeline stages based on file paths
+- Use **kebab-case** for all files: `semantic-intelligence-orchestrator.ts`
+- Service files end with `.service.ts`
+- Type definitions end with `.types.ts`
 
-4. **Priority Tools** (`src/tools/`)
-   - Priority1Tools: find_implementations, find_similar_code
-   - Priority2Tools: get_api_surface, analyze_impact (requires additional tables)
-   - UnifiedSearch: Natural language search interface
+### Error Handling
 
-### Database Schema
+```typescript
+// Always use emoji prefixes for console logging
+console.log(` Operation succeeded`);
+console.error(`L Operation failed:`, error);
+console.warn(`� Warning message`);
+```
 
-The system uses SQLite databases with these key tables:
+### Database Queries
 
-- `enhanced_symbols`: Main symbol storage with semantic tags
-- `semantic_connections`: Relationships between symbols
-- `pattern_cache`: Cached pattern search results
-- `module_index`: File-level module information
+```typescript
+// Use Drizzle ORM for type safety
+const result = await this.db
+  .select()
+  .from(universalSymbols)
+  .where(eq(universalSymbols.projectId, projectId))
+  .limit(100);
 
-### Pipeline Stages
+// Use raw SQL only for complex operations with parameters
+db.prepare("DELETE FROM table WHERE id = ?").run(id);
+```
 
-The project uses a defined pipeline architecture:
+### API Response Pattern
 
-- `noise_generation`: Noise algorithms and generators
-- `terrain_formation`: Terrain generation and orchestration
-- `atmospheric_dynamics`: Weather and atmosphere
-- `geological_processes`: Geological features
-- `ecosystem_simulation`: Ecosystem and life
-- `weather_systems`: Weather patterns
-- `final_rendering`: Vulkan rendering pipeline
+```typescript
+// Success
+res.json({ success: true, data: result });
 
-### Test Architecture
+// Error
+res.status(500).json({
+  success: false,
+  error: error instanceof Error ? error.message : "Operation failed",
+});
+```
 
-Tests follow SOLID principles with:
+## Key Workflows
 
-- `BaseTest`: Abstract base for all tests
-- `TestDatabaseManager`: Handles database lifecycle
-- `TestRunner`: Builds index once, runs all tests
-- Tests share a common database in `.test-db/main/`
+### Adding a New Language Parser
 
-## Important Implementation Details
+1. Install tree-sitter grammar: `npm install tree-sitter-{language}` (tree-sitter v0.25 base required)
+2. Create adapter in `src/parsers/adapters/{language}-language-parser.ts`
+3. Implement `LanguageParser` interface
+4. Register in `ParserRegistry`
+5. Add test cases in `test/unit/`
 
-### C++23 Module Support
+### Database Schema Changes
 
-- The parser detects `export module X;` and `import Y;` statements
-- Module files use `.ixx` extension
-- Export detection includes namespaces, classes, and functions
-- The parser does NOT currently add `module:` prefix to exports (known issue)
+1. Create migration in `src/database/migrations/00X_description.sql`
+2. Update Drizzle schema in `src/database/drizzle/schema.ts`
+3. Migrations auto-apply on server startup
 
-### Database Management
+### Component Development
 
-- Uses lazy initialization pattern to handle connection failures
-- `getDatabase()` method recreates connections if closed
-- Pattern-aware indexer must run before querying enhanced_symbols
-- Different tools expect different database schemas (some incompatibility)
+```typescript
+// Web components extend BaseComponent
+export class MyComponent extends BaseComponent {
+  async loadData(): Promise<void> {
+    /* fetch from API */
+  }
+  render(): void {
+    /* update shadow DOM */
+  }
+}
+// Register: defineComponent('my-component', MyComponent);
+```
 
-### Common Issues and Solutions
+## Testing Strategy
 
-1. **"no such table: enhanced_symbols"**
-
-   - Ensure PatternAwareIndexer has run first
-   - Check database path consistency
-   - Verify table creation in initDatabase()
-
-2. **Database connection errors**
-
-   - ModuleIndexer uses lazy initialization
-   - Check for premature close() calls
-   - Ensure shared database paths in tests
-
-3. **Missing semantic tags**
-   - Current coverage ~70%
-   - Anti-pattern detection needs improvement
-   - Some patterns not detected in .ixx files
-
-## Configuration
-
-The system uses `module-sentinel.config.json` to specify:
-
-- Project path: `/home/warxh/planet_procgen`
-- Scan paths for indexing
-- File patterns for C++ source and headers
-- Stage mapping for architectural organization
+- Run specific tests: `npm test -- --filter drizzle`
+- Test database location: `~/.module-sentinel/test/test.db`
+- Tests use custom assertion framework with emoji feedback
+- Always run `npm test` before commits to validate changes
 
 ## Performance Considerations
 
-- Streaming parser used for files >50KB
-- Parallel processing via worker threads
-- SQLite indices on key columns for fast queries
-- Cache hit rate target: >95%
-- Module analysis target: <50ms per module
+- Parser instances are pooled and reused
+- Symbol resolution uses LRU cache with Bloom filters
+- Database operations are batched when possible
+- Large file parsing has fallback to pattern-based extraction
 
-## Build Process & File Guidelines
+## Common Gotchas
 
-### NEVER EDIT THESE GENERATED FILES:
-- `/workspace/dashboard/dist/**/*` - Auto-generated from TypeScript sources
-- Files with build timestamps in headers
+1. **Port conflicts**: Default ports are 6969 (main) and 6970 (HMR)
+2. **Database permissions**: Ensure `~/.module-sentinel/` has proper permissions
+3. **Parser memory**: Large files may need `--max-old-space-size` adjustment
+4. **Build order**: TypeScript must compile before server starts in dev mode
 
-### EDIT THESE SOURCE FILES INSTEAD:
-- `/workspace/src/dashboard/components/*.ts` - TypeScript component sources  
-- `/workspace/dashboard/spa/index.html` - HTML template source
-- `/workspace/src/api/visualization-api.ts` - API endpoint definitions
+## Integration Points
 
-### Build Commands:
-- `npm run build:dashboard` - Rebuilds dashboard from TypeScript sources
-- Generated files get automatically overwritten on build
+- **Tree-sitter**: Language parsers with pooling for performance
+- **SQLite + Drizzle**: Type-safe database with automatic migrations
+- **D3.js**: Force-directed graphs and interactive visualizations
+- **Vite**: Fast development server with HMR
 
-## Memories and Insights
+## Environment Variables
 
-### Project Philosophy
-- GROUND FLOOR. FRESH START. NO LEGACY CRAP.
+```bash
+GEMINI_API_KEY=your-key        # For AI features (planned)
+NODE_ENV=development|test|production
+DEV_DB=/custom/path/to/dev.db  # Optional custom DB paths
+PROD_DB=/custom/path/to/prod.db
+```
+
+## Parser Pitfalls and Testing
+
+### Parser Improvements (Recent Updates)
+
+1. **Enhanced Error Reporting**
+   - Parser now reports when falling back to pattern-based extraction
+   - Syntax errors are counted and logged with warnings
+   - Parse method and errors available in result metadata
+   ```typescript
+   if ((result as any).parseMethod === 'pattern-fallback') {
+     console.warn('Parser fell back to patterns');
+   }
+   ```
+
+2. **Modern Syntax Support**
+   - ✅ Generators: `function* gen() { }`
+   - ✅ Private fields: `class C { #private = 1; }`
+   - ✅ Re-exports: `export { MyClass as MC } from './mod'`
+   - ✅ Arrow function methods in classes
+   - ✅ Getter/setter detection
+
+3. **Advanced Cross-Language Detection**
+   - REST APIs: `fetch()`, `axios.post()`
+   - gRPC: Proto imports and client creation
+   - FFI: `ffi-napi`, `ctypes`
+   - WebSockets: `new WebSocket()`
+   - Subprocess with language detection
+   ```typescript
+   // New cross-language detector usage
+   import { CrossLanguageDetector } from './parsers/utils/cross-language-detector.js';
+   ```
+
+4. **Performance Optimizations**
+   - Configurable cache strategies: `aggressive`, `moderate`, `minimal`
+   - Timeout protection for semantic analysis (10s default)
+   - LRU cache eviction for memory efficiency
+   - Dynamic cache TTL based on strategy
+
+### Testing Parsers Efficiently
+
+#### Test Individual Files Without Full Indexing
+```typescript
+import Database from 'better-sqlite3';
+import { TypeScriptLanguageParser } from './src/parsers/adapters/typescript-language-parser.js';
+import { DatabaseInitializer } from './src/database/db-init.js';
+
+// Create in-memory database for testing
+const db = new Database(':memory:');
+const initializer = new DatabaseInitializer(db);
+await initializer.initialize();
+
+// Test a single file
+const parser = new TypeScriptLanguageParser(db, { 
+  debugMode: true,
+  enableSemanticAnalysis: false  // Skip expensive operations
+});
+await parser.initialize();
+
+const testCode = `
+class TestClass {
+  async method() { return 42; }
+}
+`;
+
+const result = await parser.parseFile('test.ts', testCode);
+console.log('Found symbols:', result.symbols.map(s => s.name));
+console.log('Found relationships:', result.relationships.length);
+```
+
+#### Common Test Cases to Verify
+```typescript
+// Test edge cases that often fail
+const edgeCases = {
+  // Modern syntax
+  decorators: '@decorator class C {}',
+  privateFields: 'class C { #field = 1; }',
+  optionalChaining: 'obj?.prop?.method?.()',
+  
+  // Complex patterns
+  nestedClasses: 'class Outer { class Inner {} }',
+  dynamicImports: 'const mod = await import("./mod")',
+  templateLiterals: 'type T = `prefix${string}`',
+  
+  // Cross-language
+  subprocess: 'exec("python script.py")',
+  ffi: 'require("ffi-napi")',
+};
+```
+
+### Parser Accuracy Verification
+
+1. **Check Symbol Counts**
+   ```bash
+   # Quick validation - parser should find roughly same count as grep
+   grep -E "class|function|interface" file.ts | wc -l
+   ```
+
+2. **Validate Relationships**
+   - Every import should create a relationship
+   - Class inheritance should be tracked
+   - Method calls within same file should be detected
+
+3. **Monitor Parse Failures**
+   ```typescript
+   if (result.parseMethod === 'pattern-fallback') {
+     console.warn('⚠️ Tree-sitter parsing failed, using regex fallback');
+   }
+   ```
+
+### Known Parser Bugs
+
+1. **TypeScript**: Arrow functions in object literals missed
+2. **Python**: Decorators not linked to decorated items  
+3. **C++**: Template specializations create duplicate symbols
+4. **All**: Unicode in identifiers may cause parsing errors
+
+### Testing Best Practices
+
+1. **Use In-Memory Database**: Avoid expensive disk I/O
+2. **Disable Semantic Analysis**: Skip for parser-only tests
+3. **Test Small Code Snippets**: Focus on specific patterns
+4. **Compare Against Expected**: Maintain expected symbol counts
+5. **Run Parser Directly**: Bypass indexing orchestration
+
+### Parser Validation Utility
+
+Use the new `ParserValidator` for comprehensive testing:
+
+```typescript
+import { ParserValidator } from './parsers/utils/parser-validator.js';
+
+const validator = new ParserValidator();
+const testCases = ParserValidator.getTypeScriptTestCases();
+const results = await validator.runTestSuite(parser, testCases);
+```
+
+Run validation: `npm run build && node dist/test-parser-validation.js`
+
+## Debugging Tips
+
+- Enable debug mode: Set `debugMode: true` in components
+- Check test results: `test-results.xml` for CI/CD
+- Database issues: Run `scripts/check-db-schema.ts`
+- Parser issues: Check cache in `OptimizedBaseParser`
+- Parse failures: Look for "pattern-fallback" in logs

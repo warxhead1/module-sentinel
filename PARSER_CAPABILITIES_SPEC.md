@@ -1,8 +1,12 @@
-# Module Sentinel Parser Capabilities Specification
+# C++ Parser Feature-Complete Specification
 
-## Overview
+## Executive Summary
 
-This specification defines the comprehensive requirements for Module Sentinel's multi-language parser system. It serves as both a reference for expected capabilities and a test specification for validating parser coverage.
+This specification defines the requirements to achieve **feature-complete C++ parsing** for Module Sentinel. Based on recent test analysis showing 77.8% success rate, this document outlines the critical gaps that must be addressed to reach 95%+ coverage of advanced C++ constructs.
+
+## Compliance Validation
+
+**REUSE CONFIRMATION**: All implementations extend existing components in `src/parsers/tree-sitter/optimized-cpp-parser.ts` without creating new files.
 
 ## Database Schema Reference
 
