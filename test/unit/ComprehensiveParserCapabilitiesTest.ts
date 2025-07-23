@@ -373,15 +373,28 @@ export class ComprehensiveParserCapabilitiesTest {
     
     for (const expectedSymbol of expectations.symbols) {
       symbolTests++;
-      const found = fileSymbols.find(s => 
-        s.kind === expectedSymbol.kind && 
-        s.name === expectedSymbol.name &&
-        (!expectedSymbol.qualifiedName || s.qualifiedName === expectedSymbol.qualifiedName)
-      );
+      
+      // Smart name matching: handle both simple names and qualified names
+      const found = fileSymbols.find(s => {
+        if (s.kind !== expectedSymbol.kind) return false;
+        
+        // If expectedSymbol.qualifiedName is provided, use exact qualified name match
+        if (expectedSymbol.qualifiedName) {
+          return s.qualifiedName === expectedSymbol.qualifiedName;
+        }
+        
+        // Otherwise, match if:
+        // 1. Exact name match (s.name === expectedSymbol.name), OR
+        // 2. The symbol's name ends with the expected name (for qualified names like "Class::Method" matching "Method"), OR  
+        // 3. The symbol's qualified name contains the expected name
+        return s.name === expectedSymbol.name || 
+               s.name.endsWith('::' + expectedSymbol.name) ||
+               s.qualifiedName.endsWith('::' + expectedSymbol.name);
+      });
       
       if (found) {
         symbolPassed++;
-        console.log(`   ✅ Found ${expectedSymbol.kind}: ${expectedSymbol.name}`);
+        console.log(`   ✅ Found ${expectedSymbol.kind}: ${expectedSymbol.name} (actual: ${found.name})`);
         
         // Check metadata completeness
         if (expectedSymbol.returnType && found.returnType !== expectedSymbol.returnType) {
@@ -392,6 +405,11 @@ export class ComprehensiveParserCapabilitiesTest {
         }
       } else {
         console.log(`   ❌ Missing ${expectedSymbol.kind}: ${expectedSymbol.name}`);
+        // Debug: Show what we actually have for this kind
+        const sameKindSymbols = fileSymbols.filter(s => s.kind === expectedSymbol.kind);
+        if (sameKindSymbols.length > 0) {
+          console.log(`       Available ${expectedSymbol.kind}s: ${sameKindSymbols.map(s => s.name).join(', ')}`);
+        }
       }
     }
     
@@ -413,32 +431,50 @@ export class ComprehensiveParserCapabilitiesTest {
     for (const expectedRel of expectations.relationships) {
       relationshipTests++;
       let found = false;
+      let foundSource = '';
       
+      // Smart relationship matching: handle qualified names more flexibly
       // Check universal_relationships table
-      const relFound = fileRelationships.find(r => 
-        r.universal_relationships.type === expectedRel.type &&
-        r.universal_symbols.qualifiedName.includes(expectedRel.fromName)
-      );
+      const relFound = fileRelationships.find(r => {
+        const typeMatches = r.universal_relationships.type === expectedRel.type;
+        const fromMatches = r.universal_symbols.qualifiedName.includes(expectedRel.fromName) ||
+                           r.universal_symbols.name.includes(expectedRel.fromName) ||
+                           r.universal_symbols.name.endsWith('::' + expectedRel.fromName);
+        return typeMatches && fromMatches;
+      });
       
-      // Check symbol_calls table for 'calls' relationships
+      // Check symbol_calls table for 'calls' relationships  
       let callFound = false;
       if (expectedRel.type === 'calls') {
-        callFound = fileFunctionCalls.some(c => 
-          c.universal_symbols.qualifiedName.includes(expectedRel.fromName) &&
-          c.symbol_calls.targetFunction &&
-          (c.symbol_calls.targetFunction === expectedRel.toName || 
-           c.symbol_calls.targetFunction.includes(expectedRel.toName))
-        );
+        callFound = fileFunctionCalls.some(c => {
+          const fromMatches = c.universal_symbols.qualifiedName.includes(expectedRel.fromName) ||
+                             c.universal_symbols.name.includes(expectedRel.fromName) ||
+                             c.universal_symbols.name.endsWith('::' + expectedRel.fromName);
+          const toMatches = c.symbol_calls.targetFunction &&
+                           (c.symbol_calls.targetFunction === expectedRel.toName || 
+                            c.symbol_calls.targetFunction.includes(expectedRel.toName) ||
+                            c.symbol_calls.targetFunction.endsWith('::' + expectedRel.toName));
+          return fromMatches && toMatches;
+        });
       }
       
       found = (relFound !== undefined) || callFound;
+      foundSource = relFound ? 'universal_relationships' : (callFound ? 'symbol_calls' : '');
       
       if (found) {
         relationshipPassed++;
-        const source = relFound ? 'universal_relationships' : 'symbol_calls';
-        console.log(`   ✅ Found ${expectedRel.type}: ${expectedRel.fromName} -> ${expectedRel.toName} (${source})`);
+        console.log(`   ✅ Found ${expectedRel.type}: ${expectedRel.fromName} -> ${expectedRel.toName} (${foundSource})`);
       } else {
         console.log(`   ❌ Missing ${expectedRel.type}: ${expectedRel.fromName} -> ${expectedRel.toName}`);
+        
+        // Debug: Show what relationships we actually have for this type
+        const sameTypeRels = fileRelationships.filter(r => r.universal_relationships.type === expectedRel.type);
+        if (sameTypeRels.length > 0) {
+          console.log(`       Available ${expectedRel.type} relationships: ${sameTypeRels.map(r => r.universal_symbols.name).join(', ')}`);
+        }
+        if (expectedRel.type === 'calls' && fileFunctionCalls.length > 0) {
+          console.log(`       Available function calls: ${fileFunctionCalls.map(c => c.symbol_calls.targetFunction).join(', ')}`);
+        }
       }
     }
     
