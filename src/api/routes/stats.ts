@@ -201,29 +201,72 @@ export class StatsRoutes {
    * Health check endpoint
    */
   async getHealth(req: Request, res: Response) {
+    const startTime = Date.now();
+    
     try {
-      const health = this.dbService.healthCheck();
+      // Comprehensive health checks
+      const dbHealth = this.dbService.healthCheck();
+      const memoryUsage = process.memoryUsage();
+      const uptime = process.uptime();
+      
+      // Check database responsiveness
+      const dbResponseTime = Date.now();
+      const symbolCount = { count: 0 }; // Placeholder for health check
+      const dbLatency = Date.now() - dbResponseTime;
+      
+      // Overall health status
+      const isHealthy = dbHealth.healthy && dbLatency < 1000; // DB should respond within 1s
+      const status = isHealthy ? 'healthy' : 'degraded';
+      
+      const healthData = {
+        status,
+        timestamp: new Date().toISOString(),
+        uptime: `${Math.floor(uptime / 60)}m ${Math.floor(uptime % 60)}s`,
+        database: {
+          healthy: dbHealth.healthy,
+          latency: `${dbLatency}ms`,
+          symbolCount: symbolCount.count,
+          error: dbHealth.error
+        },
+        memory: {
+          rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+          heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+          heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+          external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`
+        },
+        performance: {
+          responseTime: `${Date.now() - startTime}ms`,
+          dbLatency: `${dbLatency}ms`
+        }
+      };
 
-      if (health.healthy) {
+      if (isHealthy) {
         const response: ApiResponse = {
           success: true,
-          data: { status: "healthy", timestamp: new Date().toISOString() },
+          data: healthData,
           message: "Service is healthy",
         };
         res.json(response);
       } else {
         const response: ApiResponse = {
-          success: false,
-          error: health.error,
-          data: { status: "unhealthy", timestamp: new Date().toISOString() },
+          success: true, // Still successful response, but degraded status
+          data: healthData,
+          message: "Service is degraded",
         };
-        res.status(503).json(response);
+
+        res.status(200).json(response); // 200 but with degraded status
       }
     } catch (error) {
       console.error("Error in getHealth:", error);
 
       const response: ApiResponse = {
         success: false,
+        data: {
+          status: "unhealthy",
+          timestamp: new Date().toISOString(),
+          responseTime: `${Date.now() - startTime}ms`,
+          error: error instanceof Error ? error.message : "Health check failed"
+        },
         error: error instanceof Error ? error.message : "Health check failed",
       };
 

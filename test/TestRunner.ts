@@ -28,6 +28,7 @@ import { MemberAccessDeepDiveTest } from "./unit/MemberAccessDeepDiveTest";
 import { ComprehensiveParserCapabilitiesTest } from "./unit/ComprehensiveParserCapabilitiesTest";
 import { SemanticIntelligenceIntegrationTest } from "./unit/SemanticIntelligenceIntegrationTest";
 import { ASTGenerationTest } from "./unit/ASTGenerationTest";
+import { ComprehensiveAPITest } from "./unit/ComprehensiveAPITest";
 import { TypeScriptEdgeCasesTest } from "./unit/TypeScriptEdgeCasesTest";
 import { CrossLanguageMicroservicesTest } from "./unit/CrossLanguageMicroservicesTest";
 import { DataFlowAnalysisTest } from "./unit/DataFlowAnalysisTest";
@@ -179,6 +180,7 @@ export class TestRunner extends EventEmitter {
       { name: "UniversalIndexerTest", class: UniversalIndexerTest },
       { name: "RelationshipExtractionTest", class: RelationshipExtractionTest },
       { name: "VisualizationAPITest", class: VisualizationAPITest },
+      { name: "ComprehensiveAPITest", class: ComprehensiveAPITest },
       { name: "ControlFlowAnalysisTest", class: ControlFlowAnalysisTest },
       { name: "EnhancedArchitectureTest", class: EnhancedArchitectureTest },
       { name: "CrossLanguageFlowTest", class: CrossLanguageFlowTest },

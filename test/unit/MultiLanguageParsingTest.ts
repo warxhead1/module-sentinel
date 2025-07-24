@@ -1,5 +1,6 @@
-import { BaseTest } from '../infrastructure/BaseTest.js';
+import { BaseTest } from '../helpers/BaseTest.js';
 import { UniversalIndexer } from '../../src/indexing/universal-indexer.js';
+import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { eq, and } from 'drizzle-orm';
 import { 
@@ -13,10 +14,10 @@ import * as path from 'path';
 
 export class MultiLanguageParsingTest extends BaseTest {
   private indexer?: UniversalIndexer;
-  private db: any;
+  private drizzleDb: any;
   
-  constructor() {
-    super('Multi-Language Parsing Test', 'Tests parsing of Python, TypeScript, and JavaScript files');
+  constructor(db: Database.Database) {
+    super('Multi-Language Parsing Test', db);
   }
 
   async runTests(): Promise<void> {

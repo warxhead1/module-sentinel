@@ -288,10 +288,10 @@ export class ChangeImpactPredictor {
         `
       SELECT 
         id, name, qualified_name, file_path, kind as type,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        pipeline_stage, semantic_tags, confidence
+      FROM universal_symbols
       WHERE qualified_name = ? OR name = ?
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
       LIMIT 1
     `
       )

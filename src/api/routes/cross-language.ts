@@ -33,7 +33,14 @@ export class CrossLanguageRoutes {
         FROM universal_symbols s
         INNER JOIN universal_relationships r ON (s.id = r.from_symbol_id OR s.id = r.to_symbol_id)
         LEFT JOIN languages l ON s.language_id = l.id
-        WHERE JSON_EXTRACT(r.metadata, '$.crossLanguage') = true
+        INNER JOIN universal_symbols s2 ON (
+          CASE 
+            WHEN s.id = r.from_symbol_id THEN s2.id = r.to_symbol_id
+            ELSE s2.id = r.from_symbol_id
+          END
+        )
+        INNER JOIN languages l2 ON s2.language_id = l2.id
+        WHERE l.id != l2.id
         ${source_language ? `AND l.name = ?` : ''}
         ${relationship_type ? `AND r.type = ?` : ''}
         GROUP BY s.id

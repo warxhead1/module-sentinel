@@ -14,8 +14,7 @@ export class RelationshipExtractionTest extends BaseTest {
   private db: Database;
 
   constructor(db: Database) {
-    super("RelationshipExtractionTest");
-    this.db = db;
+    super("RelationshipExtractionTest", db);
   }
 
   async run(): Promise<TestResult[]> {

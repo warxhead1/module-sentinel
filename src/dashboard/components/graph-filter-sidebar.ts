@@ -44,7 +44,7 @@ export class GraphFilterSidebar extends DashboardComponent {
       }
 
       if (languages && languages.length > 0) {
-        this.availableFilters.languages = languages.map(l => l.language_name);
+        this.availableFilters.languages = languages.map(l => l.name);
       }
 
       this.render();

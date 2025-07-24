@@ -37,7 +37,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT s.id, s.qualified_name, s.signature
-      FROM enhanced_symbols s
+      FROM universal_symbols s
       WHERE (s.name LIKE 'vk%' OR s.name LIKE 'Vk%' 
              OR s.signature LIKE '%Vk%')
         AND s.kind IN ('function', 'method')
@@ -50,7 +50,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT DISTINCT sr.from_symbol_id as id
-      FROM symbol_relationships sr
+      FROM universal_relationships sr
       WHERE sr.source_text LIKE '%vk%' OR sr.source_text LIKE '%Vk%'
     `
       )
@@ -132,7 +132,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT s.id, s.qualified_name, s.parent_class
-      FROM enhanced_symbols s
+      FROM universal_symbols s
       WHERE (s.signature LIKE '%VkBuffer%' OR s.signature LIKE '%vkCreateBuffer%')
         AND s.kind IN ('function', 'method')
     `
@@ -144,7 +144,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT s.id, s.qualified_name, s.parent_class
-      FROM enhanced_symbols s
+      FROM universal_symbols s
       WHERE (s.signature LIKE '%VkBuffer%' AND s.name LIKE '%Bind%')
         OR (s.signature LIKE '%VkBuffer%' AND s.name LIKE '%Map%')
         OR (s.signature LIKE '%VkBuffer%' AND s.name LIKE '%Update%')
@@ -181,7 +181,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT id, qualified_name, signature
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (name LIKE 'gl%' OR name LIKE 'GL_%' OR signature LIKE '%gl%')
         AND kind IN ('function', 'method')
     `
@@ -213,7 +213,7 @@ export class APIUsageTracker {
         .prepare(
           `
         SELECT id, qualified_name, signature
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE (${patterns.map((p) => `signature LIKE '%${p}%'`).join(" OR ")})
           AND kind IN ('function', 'method', 'variable')
       `
@@ -236,7 +236,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT id, qualified_name, signature
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (signature LIKE '%fstream%' OR signature LIKE '%ifstream%' OR signature LIKE '%ofstream%'
              OR signature LIKE '%filesystem::%' OR signature LIKE '%std::filesystem%'
              OR name LIKE '%File%' OR name LIKE '%Directory%')
@@ -260,7 +260,7 @@ export class APIUsageTracker {
       .prepare(
         `
       SELECT id, qualified_name, signature
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (signature LIKE '%thread%' OR signature LIKE '%mutex%' OR signature LIKE '%atomic%'
              OR signature LIKE '%future%' OR signature LIKE '%async%'
              OR name LIKE '%Thread%' OR name LIKE '%Async%')
@@ -290,7 +290,7 @@ export class APIUsageTracker {
     const relationship = this.db
       .prepare(
         `
-      SELECT 1 FROM symbol_relationships 
+      SELECT 1 FROM universal_relationships 
       WHERE (from_symbol_id = ? AND to_symbol_id = ?) 
          OR (from_symbol_id = ? AND to_symbol_id = ?)
     `
@@ -314,8 +314,8 @@ export class APIUsageTracker {
       this.db
         .prepare(
           `
-        INSERT OR IGNORE INTO symbol_relationships 
-        (from_symbol_id, to_symbol_id, relationship_type, confidence, source_text, line_number)
+        INSERT OR IGNORE INTO universal_relationships 
+        (from_symbol_id, to_symbol_id, type, confidence, source_text, line_number)
         VALUES (?, ?, ?, ?, ?, NULL)
       `
         )
@@ -337,7 +337,7 @@ export class APIUsageTracker {
   private addSemanticTag(symbolId: number, tag: string): void {
     try {
       const symbol = this.db
-        .prepare("SELECT semantic_tags FROM enhanced_symbols WHERE id = ?")
+        .prepare("SELECT semantic_tags FROM universal_symbols WHERE id = ?")
         .get(symbolId) as any;
       if (symbol) {
         const currentTags = JSON.parse(symbol.semantic_tags || "[]");
@@ -345,7 +345,7 @@ export class APIUsageTracker {
           currentTags.push(tag);
           this.db
             .prepare(
-              "UPDATE enhanced_symbols SET semantic_tags = ? WHERE id = ?"
+              "UPDATE universal_symbols SET semantic_tags = ? WHERE id = ?"
             )
             .run(JSON.stringify(currentTags), symbolId);
         }
@@ -365,7 +365,7 @@ export class APIUsageTracker {
       SELECT 
         semantic_tags,
         COUNT(*) as usage_count
-      FROM enhanced_symbols 
+      FROM universal_symbols 
       WHERE semantic_tags LIKE '%api_%' 
          OR semantic_tags LIKE '%vulkan_%'
          OR semantic_tags LIKE '%stl_%'

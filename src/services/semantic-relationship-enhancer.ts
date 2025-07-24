@@ -43,12 +43,12 @@ export class SemanticRelationshipEnhancer {
         s1.qualified_name as derived_class,
         s2.id as base_id,
         s2.qualified_name as base_class
-      FROM enhanced_symbols s1
-      JOIN symbol_relationships sr ON s1.id = sr.from_symbol_id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_symbols s1
+      JOIN universal_relationships sr ON s1.id = sr.from_symbol_id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s1.kind = 'class' 
         AND s2.kind = 'class'
-        AND sr.relationship_type = 'calls'
+        AND sr.type = 'calls'
         AND s1.name != s2.name
         AND (s2.name LIKE '%Base%' OR s2.name LIKE '%Interface%' OR s2.name LIKE '%Abstract%'
              OR s1.signature LIKE '%::%' || s2.name || '%')
@@ -77,8 +77,8 @@ export class SemanticRelationshipEnhancer {
         s2.qualified_name as virtual_method,
         s1.parent_class as impl_class,
         s2.parent_class as interface_class
-      FROM enhanced_symbols s1
-      JOIN enhanced_symbols s2 ON s1.name = s2.name
+      FROM universal_symbols s1
+      JOIN universal_symbols s2 ON s1.name = s2.name
       WHERE s1.kind IN ('method', 'function')
         AND s2.kind IN ('method', 'function')
         AND s1.parent_class != s2.parent_class
@@ -117,8 +117,8 @@ export class SemanticRelationshipEnhancer {
         s2.id as template_id,
         s2.qualified_name as template_name,
         s1.signature
-      FROM enhanced_symbols s1
-      JOIN enhanced_symbols s2 ON s1.signature LIKE '%' || s2.name || '<%'
+      FROM universal_symbols s1
+      JOIN universal_symbols s2 ON s1.signature LIKE '%' || s2.name || '<%'
       WHERE s1.signature LIKE '%<%'
         AND s2.template_params IS NOT NULL
         AND s1.id != s2.id
@@ -141,7 +141,7 @@ export class SemanticRelationshipEnhancer {
       .prepare(
         `
       SELECT id, qualified_name, signature
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE signature LIKE '%std::function<%'
         OR signature LIKE '%callback%'
         OR signature LIKE '%Callback%'
@@ -170,8 +170,8 @@ export class SemanticRelationshipEnhancer {
         p.id as product_id,
         p.qualified_name as product_class,
         f.return_type
-      FROM enhanced_symbols f
-      JOIN enhanced_symbols p ON f.return_type LIKE '%' || p.name || '%'
+      FROM universal_symbols f
+      JOIN universal_symbols p ON f.return_type LIKE '%' || p.name || '%'
       WHERE (f.name LIKE '%Create%' OR f.name LIKE '%Make%' OR f.name LIKE '%Build%' OR f.name LIKE '%Factory%')
         AND f.kind = 'function'
         AND p.kind = 'class'
@@ -200,7 +200,7 @@ export class SemanticRelationshipEnhancer {
       .prepare(
         `
       SELECT id, qualified_name
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (name LIKE '%getInstance%' OR name LIKE '%instance%' OR name LIKE '%Instance%')
         AND kind = 'function'
         AND (signature LIKE '%static%' OR parent_class IS NOT NULL)
@@ -228,9 +228,9 @@ export class SemanticRelationshipEnhancer {
         s1.qualified_name as registrar,
         s2.id as callback_id,
         s2.qualified_name as callback_type
-      FROM enhanced_symbols s1
-      JOIN symbol_relationships sr ON s1.id = sr.from_symbol_id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_symbols s1
+      JOIN universal_relationships sr ON s1.id = sr.from_symbol_id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE (s1.name LIKE '%Set%Callback%' OR s1.name LIKE '%Register%' OR s1.name LIKE '%Subscribe%')
         AND (s2.signature LIKE '%function<%' OR s2.signature LIKE '%callback%')
     `
@@ -253,7 +253,7 @@ export class SemanticRelationshipEnhancer {
       .prepare(
         `
       SELECT id, qualified_name
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (name LIKE 'On%' OR name LIKE '%Event%' OR name LIKE '%Notify%' OR name LIKE '%Emit%')
         AND kind IN ('function', 'method')
     `
@@ -281,8 +281,8 @@ export class SemanticRelationshipEnhancer {
         d.id as destructor_id,
         d.qualified_name as destructor_name,
         c.parent_class
-      FROM enhanced_symbols c
-      JOIN enhanced_symbols d ON c.parent_class = d.parent_class
+      FROM universal_symbols c
+      JOIN universal_symbols d ON c.parent_class = d.parent_class
       WHERE c.kind = 'constructor'
         AND d.kind = 'destructor'
         AND c.parent_class IS NOT NULL
@@ -306,7 +306,7 @@ export class SemanticRelationshipEnhancer {
       .prepare(
         `
       SELECT id, qualified_name, parent_class
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE (name LIKE '%Manager%' OR name LIKE '%Pool%' OR name LIKE '%Registry%' OR name LIKE '%Cache%')
         AND kind = 'class'
     `
@@ -334,8 +334,8 @@ export class SemanticRelationshipEnhancer {
         consumer.id as consumer_id,
         consumer.qualified_name as consumer_name,
         producer.return_type as data_type
-      FROM enhanced_symbols producer
-      JOIN enhanced_symbols consumer ON consumer.signature LIKE '%' || producer.return_type || '%'
+      FROM universal_symbols producer
+      JOIN universal_symbols consumer ON consumer.signature LIKE '%' || producer.return_type || '%'
       WHERE producer.return_type IS NOT NULL
         AND producer.return_type != 'void'
         AND producer.return_type != ''
@@ -387,9 +387,9 @@ export class SemanticRelationshipEnhancer {
         s2.id as to_stage_symbol,
         s2.qualified_name as to_symbol,
         s2.pipeline_stage as to_stage
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s1.pipeline_stage != 'unknown'
         AND s2.pipeline_stage != 'unknown'
         AND s1.pipeline_stage != s2.pipeline_stage
@@ -437,8 +437,8 @@ export class SemanticRelationshipEnhancer {
       this.db
         .prepare(
           `
-        INSERT OR IGNORE INTO symbol_relationships 
-        (from_symbol_id, to_symbol_id, relationship_type, confidence, source_text, line_number)
+        INSERT OR IGNORE INTO universal_relationships 
+        (from_symbol_id, to_symbol_id, type, confidence, source_text, line_number)
         VALUES (?, ?, ?, ?, ?, NULL)
       `
         )
@@ -460,7 +460,7 @@ export class SemanticRelationshipEnhancer {
   private addSemanticTag(symbolId: number, tag: string): void {
     try {
       const symbol = this.db
-        .prepare("SELECT semantic_tags FROM enhanced_symbols WHERE id = ?")
+        .prepare("SELECT semantic_tags FROM universal_symbols WHERE id = ?")
         .get(symbolId) as any;
       if (symbol) {
         const currentTags = JSON.parse(symbol.semantic_tags || "[]");
@@ -468,7 +468,7 @@ export class SemanticRelationshipEnhancer {
           currentTags.push(tag);
           this.db
             .prepare(
-              "UPDATE enhanced_symbols SET semantic_tags = ? WHERE id = ?"
+              "UPDATE universal_symbols SET semantic_tags = ? WHERE id = ?"
             )
             .run(JSON.stringify(currentTags), symbolId);
         }

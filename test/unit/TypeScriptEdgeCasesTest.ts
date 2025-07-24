@@ -4,8 +4,13 @@ import { UniversalSymbolKind } from '../../dist/parsers/language-parser-interfac
 import { TestResult } from '../helpers/JUnitReporter.js';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import Database from 'better-sqlite3';
 
 export class TypeScriptEdgeCasesTest extends BaseTest {
+  constructor(db: Database.Database) {
+    super('TypeScriptEdgeCasesTest', db);
+  }
+  
   async run(): Promise<TestResult[]> {
     const results: TestResult[] = [];
     // Read the edge cases file

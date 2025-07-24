@@ -1,10 +1,14 @@
-import { BaseTest } from '../BaseTest.js';
+import { BaseTest } from '../helpers/BaseTest.js';
+import Database from 'better-sqlite3';
 import { OptimizedCppParser } from '../../src/parsers/tree-sitter/optimized-cpp-parser.js';
 import { DatabaseSchema } from '../../src/database/schema/base.js';
 import path from 'path';
 import fs from 'fs/promises';
 
 export class StructMethodExtractionTest extends BaseTest {
+  constructor(db: Database.Database) {
+    super('StructMethodExtractionTest', db);
+  }
   private parser!: OptimizedCppParser;
 
   protected getTestName(): string {

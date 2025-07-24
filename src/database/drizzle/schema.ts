@@ -15,7 +15,7 @@
  * - RICH SEMANTIC ANALYSIS: Advanced analysis tables (preserved from original)
  * 
  * MIGRATION STRATEGY:
- * Direct mapping from existing enhanced_symbols table to preserve all C++ complexity
+ * Designed to preserve all C++ analysis capabilities while supporting multi-language
  */
 
 import { sqliteTable, integer, text, real, blob, index, uniqueIndex, primaryKey, foreignKey } from 'drizzle-orm/sqlite-core';

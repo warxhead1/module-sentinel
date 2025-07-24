@@ -126,14 +126,14 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%factory%' 
         OR name LIKE '%Factory%' 
         OR name LIKE '%Creator%'
         OR name LIKE '%Builder%'
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -145,11 +145,11 @@ export class ArchitecturalPatternAnalyzer {
       const products = this.db
         .prepare(
           `
-        SELECT s2.name, s2.qualified_name, sr.relationship_type
-        FROM symbol_relationships sr
-        JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        SELECT s2.name, s2.qualified_name, sr.type
+        FROM universal_relationships sr
+        JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
         WHERE sr.from_symbol_id = ? 
-          AND sr.relationship_type IN ('creates', 'constructs', 'returns')
+          AND sr.type IN ('creates', 'constructs', 'returns')
         ORDER BY sr.confidence DESC
         LIMIT 10
       `
@@ -163,13 +163,13 @@ export class ArchitecturalPatternAnalyzer {
         id: `factory_${symbol.id}`,
         patternType: "factory",
         name: symbol.name,
-        confidence: symbol.parser_confidence,
+        confidence: symbol.confidence,
         location: {
           filePath: symbol.file_path,
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
-        stage: symbol.pipeline_stage || "unknown",
+        stage: "analysis",
         participants: [
           symbol.qualified_name,
           ...products.map((p: any) => p.qualified_name),
@@ -199,14 +199,14 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%singleton%' 
         OR name LIKE '%Singleton%'
         OR name LIKE '%Manager%'
         OR (kind = 'class' AND semantic_tags LIKE '%global%')
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -219,7 +219,7 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT COUNT(*) as count
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE parent_class = ? AND (name LIKE '%getInstance%' OR name LIKE '%instance%')
       `
         )
@@ -229,14 +229,14 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT COUNT(*) as count
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE parent_class = ? AND name = ? AND semantic_tags LIKE '%private%'
       `
         )
         .get(symbol.id, symbol.name) as any;
 
       const confidence =
-        symbol.parser_confidence *
+        symbol.confidence *
         (hasGetInstance.count > 0 ? 1.2 : 0.8) *
         (hasPrivateConstructor.count > 0 ? 1.1 : 0.9);
 
@@ -248,10 +248,10 @@ export class ArchitecturalPatternAnalyzer {
           confidence: Math.min(confidence, 1.0),
           location: {
             filePath: symbol.file_path,
-            line: symbol.location_line || 0,
-            column: symbol.location_column || 0,
+            line: symbol.line || 0,
+            column: symbol.column || 0,
           },
-          stage: symbol.pipeline_stage || "unknown",
+          stage: "analysis",
           participants: [symbol.qualified_name],
           relationships: ["enforces single instance"],
           semanticTags: symbol.semantic_tags
@@ -276,15 +276,15 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%observer%' 
         OR name LIKE '%Observer%'
         OR name LIKE '%Listener%'
         OR name LIKE '%Handler%'
         OR name LIKE '%Callback%'
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -297,7 +297,7 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT COUNT(*) as count
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE parent_class = ? AND (name LIKE '%notify%' OR name LIKE '%update%' OR name LIKE '%onChange%')
       `
         )
@@ -308,10 +308,10 @@ export class ArchitecturalPatternAnalyzer {
           .prepare(
             `
           SELECT s2.name, s2.qualified_name
-          FROM symbol_relationships sr
-          JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+          FROM universal_relationships sr
+          JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
           WHERE sr.from_symbol_id = ? 
-            AND sr.relationship_type IN ('notifies', 'updates', 'calls')
+            AND sr.type IN ('notifies', 'updates', 'calls')
           LIMIT 10
         `
           )
@@ -321,13 +321,13 @@ export class ArchitecturalPatternAnalyzer {
           id: `observer_${symbol.id}`,
           patternType: "observer",
           name: symbol.name,
-          confidence: symbol.parser_confidence,
+          confidence: symbol.confidence,
           location: {
             filePath: symbol.file_path,
-            line: symbol.location_line || 0,
-            column: symbol.location_column || 0,
+            line: symbol.line || 0,
+            column: symbol.column || 0,
           },
-          stage: symbol.pipeline_stage || "unknown",
+          stage: "analysis",
           participants: [
             symbol.qualified_name,
             ...observers.map((o: any) => o.qualified_name),
@@ -358,15 +358,15 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%strategy%' 
         OR name LIKE '%Strategy%'
         OR name LIKE '%Algorithm%'
         OR name LIKE '%Policy%'
         OR (kind = 'class' AND template_info IS NOT NULL AND semantic_tags LIKE '%algorithm%')
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -379,10 +379,10 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT s2.name, s2.qualified_name
-        FROM symbol_relationships sr
-        JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        FROM universal_relationships sr
+        JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
         WHERE sr.from_symbol_id = ? 
-          AND sr.relationship_type = 'inherits'
+          AND sr.type = 'inherits'
         LIMIT 10
       `
         )
@@ -392,13 +392,13 @@ export class ArchitecturalPatternAnalyzer {
         id: `strategy_${symbol.id}`,
         patternType: "strategy",
         name: symbol.name,
-        confidence: symbol.parser_confidence,
+        confidence: symbol.confidence,
         location: {
           filePath: symbol.file_path,
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
-        stage: symbol.pipeline_stage || "unknown",
+        stage: "analysis",
         participants: [
           symbol.qualified_name,
           ...implementations.map((i: any) => i.qualified_name),
@@ -431,13 +431,13 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%vulkan%' 
         AND (semantic_tags LIKE '%raii%' OR name LIKE '%Wrapper%' OR name LIKE '%Handle%')
         AND kind = 'class'
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -450,7 +450,7 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT COUNT(*) as count
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE parent_class = ? 
           AND (name LIKE 'vk%' OR semantic_tags LIKE '%vulkan-api%')
       `
@@ -462,13 +462,13 @@ export class ArchitecturalPatternAnalyzer {
           id: `vulkan_raii_${symbol.id}`,
           patternType: "vulkan-raii",
           name: symbol.name,
-          confidence: symbol.parser_confidence,
+          confidence: symbol.confidence,
           location: {
             filePath: symbol.file_path,
-            line: symbol.location_line || 0,
-            column: symbol.location_column || 0,
+            line: symbol.line || 0,
+            column: symbol.column || 0,
           },
-          stage: symbol.pipeline_stage || "rendering",
+          stage: "analysis",
           participants: [symbol.qualified_name],
           relationships: [
             "manages vulkan resource lifecycle",
@@ -496,13 +496,13 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%gpu%' 
         AND (semantic_tags LIKE '%compute%' OR name LIKE '%Compute%' OR name LIKE '%Dispatch%')
         AND kind IN ('class', 'function')
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -514,13 +514,13 @@ export class ArchitecturalPatternAnalyzer {
         id: `gpu_compute_${symbol.id}`,
         patternType: "gpu-compute",
         name: symbol.name,
-        confidence: symbol.parser_confidence,
+        confidence: symbol.confidence,
         location: {
           filePath: symbol.file_path,
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
-        stage: symbol.pipeline_stage || "rendering",
+        stage: "analysis",
         participants: [symbol.qualified_name],
         relationships: [
           "orchestrates gpu computation",
@@ -547,13 +547,13 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%memory%' 
         AND (name LIKE '%Pool%' OR name LIKE '%Allocator%' OR name LIKE '%Buffer%')
         AND kind = 'class'
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -565,13 +565,13 @@ export class ArchitecturalPatternAnalyzer {
         id: `memory_pool_${symbol.id}`,
         patternType: "memory-pool",
         name: symbol.name,
-        confidence: symbol.parser_confidence,
+        confidence: symbol.confidence,
         location: {
           filePath: symbol.file_path,
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
-        stage: symbol.pipeline_stage || "unknown",
+        stage: "analysis",
         participants: [symbol.qualified_name],
         relationships: [
           "manages memory allocation",
@@ -598,14 +598,14 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT 
-        id, name, qualified_name, file_path, location_line, location_column,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        id, name, qualified_name, file_path, line, column,
+        kind, semantic_tags, confidence
+      FROM universal_symbols
       WHERE semantic_tags LIKE '%pipeline%' 
         OR name LIKE '%Pipeline%'
         OR name LIKE '%Chain%'
         OR (semantic_tags LIKE '%stage%' AND semantic_tags LIKE '%process%')
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
     `
       )
       .all() as any[];
@@ -618,10 +618,10 @@ export class ArchitecturalPatternAnalyzer {
         .prepare(
           `
         SELECT s2.name, s2.qualified_name
-        FROM symbol_relationships sr
-        JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        FROM universal_relationships sr
+        JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
         WHERE sr.from_symbol_id = ? 
-          AND sr.relationship_type IN ('contains', 'uses', 'calls')
+          AND sr.type IN ('contains', 'uses', 'calls')
           AND s2.semantic_tags LIKE '%stage%'
         LIMIT 10
       `
@@ -632,13 +632,13 @@ export class ArchitecturalPatternAnalyzer {
         id: `pipeline_${symbol.id}`,
         patternType: "pipeline",
         name: symbol.name,
-        confidence: symbol.parser_confidence,
+        confidence: symbol.confidence,
         location: {
           filePath: symbol.file_path,
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
-        stage: symbol.pipeline_stage || "orchestration",
+        stage: "analysis",
         participants: [
           symbol.qualified_name,
           ...stages.map((s: any) => s.qualified_name),
@@ -670,7 +670,7 @@ export class ArchitecturalPatternAnalyzer {
     let score = 70; // Base score
 
     // Adjust for confidence
-    score += (symbol.parser_confidence - 0.5) * 40;
+    score += (symbol.confidence - 0.5) * 40;
 
     // Adjust for complexity (more participants = lower maintainability)
     score -= participantCount * 3;
@@ -841,7 +841,7 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT COUNT(*) as count
-      FROM symbol_relationships
+      FROM universal_relationships
       WHERE to_symbol_id = ?
     `
       )
@@ -851,7 +851,7 @@ export class ArchitecturalPatternAnalyzer {
       .prepare(
         `
       SELECT COUNT(*) as count
-      FROM symbol_relationships
+      FROM universal_relationships
       WHERE from_symbol_id = ?
     `
       )

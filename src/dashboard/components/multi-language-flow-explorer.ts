@@ -15,6 +15,7 @@ import {
 //   SpawnDetector 
 // } from '../utils/spawn-detector.js';
 import * as d3 from 'd3';
+import { showSymbolSelector } from './symbol-selector-modal.js';
 
 interface CrossLanguageConnection {
   id: string;
@@ -59,9 +60,6 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
 
   async loadData(): Promise<void> {
     try {
-      // Load available symbols from all languages
-      await this.loadAvailableSymbols();
-      
       // Check if there's a starting point in the URL
       const params = new URLSearchParams(window.location.search);
       const startNode = params.get('node');
@@ -250,15 +248,7 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
     }
   }
 
-  async exploreSelectedSymbol(): Promise<void> {
-    const selectElement = this.shadow.querySelector('#symbolSelect') as HTMLSelectElement;
-    if (!selectElement || !selectElement.value) {
-      return;
-    }
-    
-    const symbolId = selectElement.value;
-    await this.loadMultiLanguageFlow(symbolId);
-  }
+  // Removed old exploreSelectedSymbol method - now using enhanced symbol selector modal
 
   private async loadMultiLanguageFlow(nodeId: string) {
     try {
@@ -266,23 +256,33 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       this.updateLoadingState();
 
       // Use dedicated cross-language relationships API
-      const url = `/api/cross-language/relationships?from_symbol=${nodeId}&languages=${Array.from(this.selectedLanguages).join(',')}`;
+      const url = `/api/cross-language/relationships?limit=200`;
       console.log('Fetching cross-language relationships from:', url);
       
       const data = await this.fetchAPI(url);
       console.log('Cross-language relationships data:', data);
       
+      // Filter to relationships involving the selected symbol
+      let filteredData = data;
+      if (Array.isArray(data)) {
+        filteredData = data.filter((rel: any) => 
+          rel.from_symbol_id?.toString() === nodeId || 
+          rel.to_symbol_id?.toString() === nodeId
+        );
+        console.log(`Filtered to ${filteredData.length} relationships involving symbol ${nodeId}`);
+      }
+      
       // Handle both relationship array and flow graph formats
       let flowData: any;
-      if (Array.isArray(data)) {
+      if (Array.isArray(filteredData)) {
         // Convert relationships array to flow graph format
         console.log('Converting relationships to flow graph format');
-        flowData = this.convertRelationshipsToFlowData(data);
-      } else if (data && (data.nodes || data.edges)) {
+        flowData = this.convertRelationshipsToFlowData(filteredData);
+      } else if (filteredData && (filteredData.nodes || filteredData.edges)) {
         // Already in flow graph format
-        flowData = data;
+        flowData = filteredData;
       } else {
-        throw new Error('No flow data received');
+        throw new Error(`No flow data found for symbol ${nodeId}. Found ${filteredData.length || 0} relationships.`);
       }
 
       console.log('Processing multi-language data:', flowData);
@@ -748,25 +748,16 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       <div class="ml-container">
         <div class="ml-sidebar">
           <h3>Symbol Explorer</h3>
-          ${this.availableSymbols.length > 0 ? `
-            <div class="symbol-selector">
-              <select id="symbolSelect">
-                <option value="">Select a symbol to explore...</option>
-                ${this.availableSymbols.map(symbol => `
-                  <option value="${symbol.id}" ${symbol.id == this.currentFocusNode ? 'selected' : ''}>
-                    [${symbol.language}] ${symbol.name}
-                  </option>
-                `).join('')}
-              </select>
-              <button class="ml-button" onclick="this.getRootNode().host.exploreSelectedSymbol()">
-                🔍 Explore Symbol
-              </button>
+          <div class="symbol-selector">
+            <button class="ml-button" onclick="this.getRootNode().host.openSymbolSelector()">
+              🔍 Select Symbol to Explore
+            </button>
+          </div>
+          ${this.currentFocusNode ? `
+            <div style="margin-top: 15px; padding: 10px; background: rgba(78, 205, 196, 0.1); border-radius: 8px;">
+              <strong>Current Focus:</strong> ${this.getCurrentFocusSymbolName()}
             </div>
-          ` : this._loading ? `
-            <p>Loading symbols...</p>
-          ` : `
-            <p style="color: #888; margin-top: 20px;">No symbols available</p>
-          `}
+          ` : ''}
         </div>
         
         <div class="ml-canvas">
@@ -1150,6 +1141,47 @@ export class MultiLanguageFlowExplorer extends DashboardComponent {
       const connection = this.crossLanguageConnections[0];
       this.highlightConnection(connection);
     }
+  }
+
+  /**
+   * Open the enhanced symbol selector modal
+   */
+  openSymbolSelector() {
+    showSymbolSelector({
+      title: 'Select Symbol for Multi-Language Analysis',
+      onSelect: (symbol) => {
+        console.log('Selected symbol for multi-language analysis:', symbol);
+        this.loadMultiLanguageFlow(symbol.id.toString());
+      },
+      onCancel: () => {
+        console.log('Symbol selection cancelled');
+      },
+      // Only show symbols that could have cross-language relationships
+      filter: (symbol) => {
+        // Include symbols that are likely to have cross-language connections
+        const interestingKinds = ['function', 'method', 'class', 'variable', 'module'];
+        const interestingNames = ['main', 'execute', 'run', 'process', 'server', 'client', 'api', 'spawn'];
+        
+        return interestingKinds.includes(symbol.kind) || 
+               interestingNames.some(name => symbol.name.toLowerCase().includes(name));
+      }
+    });
+  }
+
+  /**
+   * Get the name of the currently focused symbol
+   */
+  getCurrentFocusSymbolName(): string {
+    if (!this.currentFocusNode || !this.flowData) {
+      return 'None';
+    }
+    
+    const focusNode = this.flowData.nodes.find(n => n.id === this.currentFocusNode);
+    if (focusNode) {
+      return `${focusNode.name} (${focusNode.language})`;
+    }
+    
+    return `Symbol ID: ${this.currentFocusNode}`;
   }
 
   private updateLoadingState() {

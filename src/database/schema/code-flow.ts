@@ -11,7 +11,7 @@ export const symbolCalls = sqliteTable('symbol_calls', {
   callerId: integer('caller_id').notNull(),
   calleeId: integer('callee_id'),
   projectId: integer('project_id'),
-  targetFunction: text('target_function'),
+  targetFunction: text('targetFunction'),
   lineNumber: integer('line_number').notNull(),
   columnNumber: integer('column_number'),
   callType: text('call_type').notNull().default('direct'), // direct, virtual, delegate, etc.

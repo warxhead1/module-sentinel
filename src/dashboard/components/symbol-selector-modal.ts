@@ -18,6 +18,7 @@ interface SymbolSelectorOptions {
   filter?: (symbol: Symbol) => boolean;
   onSelect: (symbol: Symbol) => void;
   onCancel?: () => void;
+  allowedTypes?: string[]; // Optional filter for specific symbol types
 }
 
 /**
@@ -30,6 +31,8 @@ export class SymbolSelectorModal extends DashboardComponent {
   private searchResults: Symbol[] = [];
   private recentSymbols: Symbol[] = [];
   private selectedIndex: number = 0;
+  private selectedType: string = 'all';
+  private availableTypes: { kind: string; count: number }[] = [];
   
   constructor() {
     super();
@@ -48,11 +51,61 @@ export class SymbolSelectorModal extends DashboardComponent {
   async loadData(): Promise<void> {
     // Data is loaded on demand during search
   }
+  
+  async loadAvailableTypes(): Promise<void> {
+    try {
+      const stats = await dataService.getStats();
+      this.availableTypes = Object.entries(stats.kindBreakdown)
+        .map(([kind, count]) => ({ kind, count }))
+        .sort((a, b) => b.count - a.count); // Sort by count descending
+    } catch (error) {
+      console.error('Failed to load symbol types:', error);
+      this.availableTypes = [];
+    }
+  }
 
-  show(options: SymbolSelectorOptions) {
+  async loadPopularSymbols(): Promise<void> {
+    try {
+      console.log('Loading popular symbols...');
+      
+      // Load some popular/interesting symbols to show initially
+      const response = await dataService.fetch('/api/symbols?limit=10');
+      
+      console.log('Popular symbols response:', response);
+      
+      let symbols = [];
+      if (response && response.length !== undefined) {
+        symbols = response;
+      } else if (response && response.success && response.data) {
+        symbols = response.data;
+      } else if (response && response.data) {
+        symbols = response.data;
+      }
+      
+      if (symbols.length > 0) {
+        // Store as "recent" symbols for display purposes
+        this.recentSymbols = symbols.slice(0, 8);
+        console.log('Loaded popular symbols:', this.recentSymbols.length);
+      }
+    } catch (error) {
+      console.error('Failed to load popular symbols:', error);
+    }
+  }
+
+  async show(options: SymbolSelectorOptions) {
     this.options = options;
     this.searchResults = [];
     this.selectedIndex = 0;
+    this.selectedType = 'all';
+    
+    // Load available symbol types
+    await this.loadAvailableTypes();
+    
+    // Load some popular symbols initially if no recent symbols
+    if (this.recentSymbols.length === 0) {
+      await this.loadPopularSymbols();
+    }
+    
     this.render();
     
     // Show modal with animation
@@ -165,6 +218,42 @@ export class SymbolSelectorModal extends DashboardComponent {
         .search-section {
           padding: 20px 24px;
           border-bottom: 1px solid var(--card-border);
+        }
+        
+        .filter-section {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-top: 16px;
+        }
+        
+        .filter-label {
+          color: var(--text-secondary);
+          font-size: 0.9rem;
+          font-weight: 500;
+        }
+        
+        .type-filter {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid var(--card-border);
+          border-radius: 6px;
+          color: var(--text-primary);
+          padding: 8px 12px;
+          font-size: 0.9rem;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+        
+        .type-filter:focus {
+          outline: none;
+          border-color: var(--primary-accent);
+          background: rgba(255, 255, 255, 0.08);
+          box-shadow: 0 0 0 2px rgba(147, 112, 219, 0.1);
+        }
+        
+        .type-filter option {
+          background: var(--card-bg);
+          color: var(--text-primary);
         }
 
         .search-input {
@@ -403,6 +492,20 @@ export class SymbolSelectorModal extends DashboardComponent {
               onkeydown="this.getRootNode().host.handleKeyDown(event)"
             />
           </div>
+          <div class="filter-section">
+            <label class="filter-label">Type:</label>
+            <select 
+              class="type-filter" 
+              onchange="this.getRootNode().host.handleTypeChange(this.value)"
+            >
+              <option value="all">All Types (${this.getTotalSymbolCount()})</option>
+              ${this.availableTypes.map(type => `
+                <option value="${type.kind}" ${this.selectedType === type.kind ? 'selected' : ''}>
+                  ${this.formatTypeName(type.kind)} (${type.count})
+                </option>
+              `).join('')}
+            </select>
+          </div>
         </div>
 
         <div class="content">
@@ -470,11 +573,15 @@ export class SymbolSelectorModal extends DashboardComponent {
     }
 
     if (hasRecentSymbols && !hasSearchResults) {
+      const recentFromState = stateService.getState('recentSymbols');
+      const isActuallyRecent = Array.isArray(recentFromState) && recentFromState.length > 0;
+      const sectionTitle = isActuallyRecent ? 'Recent Symbols' : 'Available Symbols';
+      
       html += `
         <div class="section">
-          <h3 class="section-title">Recent Symbols</h3>
+          <h3 class="section-title">${sectionTitle}</h3>
           <div class="symbol-list">
-            ${this.recentSymbols.slice(0, 5).map((symbol, index) => 
+            ${this.recentSymbols.slice(0, 8).map((symbol, index) => 
               this.renderSymbolItem(symbol, hasSearchResults ? index + this.searchResults.length : index)
             ).join('')}
           </div>
@@ -543,18 +650,44 @@ export class SymbolSelectorModal extends DashboardComponent {
     this.updateContent();
 
     try {
-      const response = await dataService.fetch(`/api/symbols?q=${encodeURIComponent(query)}&limit=20`);
+      // Build query parameters
+      const params = new URLSearchParams({
+        q: query,
+        limit: '20'
+      });
       
-      if (response.success && response.data) {
-        this.searchResults = response.data;
-        
-        // Apply custom filter if provided
-        if (this.options?.filter) {
-          this.searchResults = this.searchResults.filter(this.options.filter);
-        }
-        
-        this.selectedIndex = 0;
+      // Add type filter if not 'all'
+      if (this.selectedType !== 'all') {
+        params.set('kind', this.selectedType);
       }
+      
+      const response = await dataService.fetch(`/api/symbols?${params.toString()}`);
+      
+      console.log('Symbol search response:', response);
+      
+      if (response && response.length !== undefined) {
+        // Direct array response
+        this.searchResults = response;
+      } else if (response.success && response.data) {
+        // Wrapped response
+        this.searchResults = response.data;
+      } else if (response.data) {
+        // Fallback to data property
+        this.searchResults = response.data;
+      } else {
+        console.warn('Unexpected response format:', response);
+        this.searchResults = [];
+      }
+      
+      console.log('Search results:', this.searchResults);
+      
+      // Apply custom filter if provided
+      if (this.options?.filter && this.searchResults.length > 0) {
+        this.searchResults = this.searchResults.filter(this.options.filter);
+        console.log('Filtered results:', this.searchResults);
+      }
+      
+      this.selectedIndex = 0;
     } catch (error) {
       // Don't log aborted requests as errors
       if (error instanceof Error && error.name === 'AbortError') {
@@ -572,6 +705,43 @@ export class SymbolSelectorModal extends DashboardComponent {
 
   handleSearch(value: string) {
     this.debouncedSearch(value);
+  }
+  
+  handleTypeChange(type: string) {
+    this.selectedType = type;
+    
+    // Re-run search with new type filter
+    const searchInput = this.shadow.querySelector('.search-input') as HTMLInputElement;
+    if (searchInput && searchInput.value.trim()) {
+      this.debouncedSearch(searchInput.value);
+    } else {
+      // If no search query, just update the UI
+      this.updateContent();
+    }
+  }
+  
+  getTotalSymbolCount(): number {
+    return this.availableTypes.reduce((sum, type) => sum + type.count, 0);
+  }
+  
+  formatTypeName(kind: string): string {
+    // Format type names for better display
+    const nameMap: Record<string, string> = {
+      'method': 'Methods',
+      'function': 'Functions', 
+      'class': 'Classes',
+      'variable': 'Variables',
+      'field': 'Fields',
+      'property': 'Properties',
+      'interface': 'Interfaces',
+      'namespace': 'Namespaces',
+      'constructor': 'Constructors',
+      'constant': 'Constants',
+      'external_module': 'External Modules',
+      'file': 'Files'
+    };
+    
+    return nameMap[kind] || kind.charAt(0).toUpperCase() + kind.slice(1);
   }
 
   private updateContent() {

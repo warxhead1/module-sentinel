@@ -84,11 +84,11 @@ export class RippleEffectTracker {
         SELECT 
           s1.qualified_name as source_symbol,
           s2.qualified_name as target_symbol,
-          sr.relationship_type,
+          sr.type,
           sr.confidence
-        FROM symbol_relationships sr
-        JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-        JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        FROM universal_relationships sr
+        JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+        JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
         WHERE sr.confidence > 0.7
       `
         )
@@ -185,16 +185,15 @@ export class RippleEffectTracker {
           qualified_name,
           file_path,
           kind,
-          pipeline_stage,
-          parser_confidence,
+          confidence,
           semantic_tags,
-          location_line,
-          location_column,
-          template_info,
-          namespace_info
-        FROM enhanced_symbols
+          line,
+          column,
+          language_features,
+          namespace
+        FROM universal_symbols
         WHERE qualified_name = ? OR name = ?
-        ORDER BY parser_confidence DESC
+        ORDER BY confidence DESC
         LIMIT 1
       `
         )
@@ -207,7 +206,7 @@ export class RippleEffectTracker {
         .prepare(
           `
         SELECT COUNT(*) as count
-        FROM symbol_relationships sr
+        FROM universal_relationships sr
         WHERE sr.to_symbol_id = ?
       `
         )
@@ -224,10 +223,10 @@ export class RippleEffectTracker {
         name: symbol.name,
         type: symbol.kind as any,
         filePath: symbol.file_path,
-        stage: symbol.pipeline_stage || "unknown",
+        stage: "analysis", // Universal symbols don't have pipeline_stage
         impactLevel: this.calculateImpactLevel(symbol),
         changeType: "type", // Will be updated based on analysis
-        confidence: symbol.parser_confidence || 0.5,
+        confidence: symbol.confidence || 0.5,
         usageCount: usageCount?.count || 0,
         criticalityScore: this.calculateCriticalityScore(
           symbol,
@@ -235,12 +234,12 @@ export class RippleEffectTracker {
         ),
         dependencies: Array.from(dependencies),
         dependents: Array.from(dependents),
-        semanticTags: symbol.semantic_tags
-          ? symbol.semantic_tags.split(",")
-          : [],
+        semanticTags: Array.isArray(symbol.semantic_tags)
+          ? symbol.semantic_tags
+          : (symbol.semantic_tags ? [symbol.semantic_tags] : []),
         location: {
-          line: symbol.location_line || 0,
-          column: symbol.location_column || 0,
+          line: symbol.line || 0,
+          column: symbol.column || 0,
         },
         metrics: {
           complexity: this.calculateComplexity(symbol),
@@ -413,7 +412,7 @@ export class RippleEffectTracker {
     index -= this.calculateComplexity(symbol) * 5;
 
     // Reduce for low confidence
-    index -= (1 - (symbol.parser_confidence || 0.8)) * 20;
+    index -= (1 - (symbol.confidence || 0.8)) * 20;
 
     // Increase for good semantic tags
     if (symbol.semantic_tags?.includes("well-documented")) index += 10;

@@ -45,6 +45,101 @@ export class AnalyticsRoutes {
     }
   }
 
+  async getEnhancedImpactAnalysis(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const { changeType = 'type' } = req.query;
+      
+      const analysis = await this.analyticsService.analyzeEnhancedImpact(
+        symbolId, 
+        changeType as 'type' | 'value' | 'signature' | 'dependency' | 'removal'
+      );
+      
+      res.json({
+        success: true,
+        data: analysis
+      });
+    } catch (error) {
+      console.error('Enhanced impact analysis error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Analysis failed'
+      });
+    }
+  }
+
+  async predictImpact(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const { changeType = 'type', simulatedChange } = req.body;
+      
+      const analysis = await this.analyticsService.analyzeEnhancedImpact(symbolId, changeType);
+      
+      res.json({
+        success: true,
+        data: {
+          prediction: analysis.prediction,
+          riskAssessment: analysis.riskAssessment,
+          recommendations: analysis.recommendations,
+          estimatedFixTime: analysis.estimatedFixTime,
+          criticalPaths: analysis.criticalPaths
+        }
+      });
+    } catch (error) {
+      console.error('Impact prediction error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Impact prediction failed'
+      });
+    }
+  }
+
+  async analyzeScenarios(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const { scenarios } = req.body;
+      
+      const analysis = await this.analyticsService.analyzeScenarios(symbolId, scenarios);
+      
+      res.json({
+        success: true,
+        data: analysis
+      });
+    } catch (error) {
+      console.error('Scenario analysis error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Scenario analysis failed'
+      });
+    }
+  }
+
+  async getImplementationRecommendations(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const { changeType = 'type' } = req.query;
+      
+      const analysis = await this.analyticsService.analyzeEnhancedImpact(symbolId, changeType as any);
+      
+      res.json({
+        success: true,
+        data: {
+          recommendations: analysis.recommendations,
+          estimatedFixTime: analysis.estimatedFixTime,
+          reviewersNeeded: analysis.riskAssessment.reviewersNeeded,
+          testingRequired: analysis.riskAssessment.testingRequired,
+          criticalPaths: analysis.criticalPaths
+        }
+      });
+    } catch (error) {
+      console.error('Implementation recommendations error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Recommendations failed'
+      });
+    }
+  }
+
   async getPatterns(req: Request, res: Response) {
     try {
       const { scope = 'global' } = req.query;

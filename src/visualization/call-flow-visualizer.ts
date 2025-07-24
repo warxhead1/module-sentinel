@@ -114,7 +114,7 @@ export class CallFlowVisualizer {
                         <li class="call-item">
                             <div class="call-name">${call.qualified_name || call.name}</div>
                             <div class="call-meta">
-                                ${call.kind} • ${call.relationship_type} • confidence: ${(call.confidence * 100).toFixed(0)}%
+                                ${call.kind} • ${call.type} • confidence: ${(call.confidence * 100).toFixed(0)}%
                             </div>
                         </li>
                     `).join('')}
@@ -130,7 +130,7 @@ export class CallFlowVisualizer {
                         <li class="call-item incoming">
                             <div class="call-name">${call.qualified_name || call.name}</div>
                             <div class="call-meta">
-                                ${call.kind} • ${call.relationship_type} • confidence: ${(call.confidence * 100).toFixed(0)}%
+                                ${call.kind} • ${call.type} • confidence: ${(call.confidence * 100).toFixed(0)}%
                             </div>
                         </li>
                     `).join('')}
@@ -150,12 +150,12 @@ export class CallFlowVisualizer {
         s.kind,
         s.file_path,
         s.line,
-        r.relationship_type,
+        r.type,
         r.confidence
       FROM universal_relationships r
       JOIN universal_symbols s ON r.to_symbol_id = s.id
       WHERE r.from_symbol_id = ?
-        AND r.relationship_type IN ('calls', 'uses', 'depends_on')
+        AND r.type IN ('calls', 'uses', 'depends_on')
       ORDER BY r.confidence DESC, s.name
       LIMIT 50
     `).all(symbolId);
@@ -169,12 +169,12 @@ export class CallFlowVisualizer {
         s.kind,
         s.file_path,
         s.line,
-        r.relationship_type,
+        r.type,
         r.confidence
       FROM universal_relationships r
       JOIN universal_symbols s ON r.from_symbol_id = s.id
       WHERE r.to_symbol_id = ?
-        AND r.relationship_type IN ('calls', 'uses', 'depends_on')
+        AND r.type IN ('calls', 'uses', 'depends_on')
       ORDER BY r.confidence DESC, s.name
       LIMIT 50
     `).all(symbolId);

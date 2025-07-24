@@ -322,10 +322,47 @@ export interface SearchQuery {
   offset?: number;
 }
 
+export interface Language {
+  id: number;
+  name: string;
+  display_name: string;
+  file_extensions: string;
+  symbol_count: number;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  display_name: string;
+  description: string;
+  root_path: string;
+  metadata: string; // JSON string
+  is_active: number; // SQLite boolean (0/1)  
+  created_at: string;
+  symbol_count: number;
+}
+
 export interface ProjectStats {
   symbolCount: number;
-  fileCount: number;
   namespaceCount: number;
-  languageBreakdown: Record<string, number>;
   kindBreakdown: Record<string, number>;
+  languageBreakdown: Record<string, number>;
+}
+
+export interface Namespace {
+  namespace: string;
+  symbol_count: number;
+  kinds: string; // Comma-separated kinds
+}
+
+export interface Module {
+  name: string;
+  qualifiedName: string;
+  namespace: string;
+  kind: string;
+  files: FileInfo[];
+  imports: string[];
+  symbolCount: number;
+  symbolKinds: string[];
+  children: Symbol[];
 }

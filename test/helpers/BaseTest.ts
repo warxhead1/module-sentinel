@@ -13,8 +13,10 @@ export abstract class BaseTest {
   protected assertionCount = 0;
   protected passedAssertions = 0;
   protected currentTestName = "";
+  protected testName: string;
 
-  constructor(db: Database.Database) {
+  constructor(testName: string, db: Database.Database) {
+    this.testName = testName;
     this.db = db;
   }
 

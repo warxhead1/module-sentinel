@@ -309,6 +309,34 @@ export class ModernApiServer {
       } else if (apiPath === "/analytics/patterns" && req.method === "GET") {
         await this.analyticsRoutes.getPatterns(req, res);
       } else if (
+        apiPath.match(/^\/analytics\/enhanced-impact\/\d+$/) &&
+        req.method === "GET"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getEnhancedImpactAnalysis(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/predict\/\d+$/) &&
+        req.method === "POST"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.predictImpact(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/scenarios\/\d+$/) &&
+        req.method === "POST"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.analyzeScenarios(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/recommendations\/\d+$/) &&
+        req.method === "GET"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getImplementationRecommendations(req, res);
+      } else if (
         apiPath.match(/^\/analytics\/execution\/\d+$/) &&
         req.method === "GET"
       ) {

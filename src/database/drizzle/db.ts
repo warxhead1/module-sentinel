@@ -110,21 +110,6 @@ export class DrizzleDatabase {
     return this.sqlite;
   }
 
-  /**
-   * Check if database has old schema (legacy compatibility)
-   */
-  async hasOldSchema(): Promise<boolean> {
-    try {
-      const tables = this.sqlite
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='enhanced_symbols'"
-        )
-        .all();
-      return tables.length > 0;
-    } catch {
-      return false;
-    }
-  }
 
   /**
    * Run migrations

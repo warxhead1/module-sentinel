@@ -8,6 +8,7 @@ import { tooltipManager, TooltipManager } from '../utils/tooltip-manager.js';
 import { MicroChartRenderer } from '../utils/micro-chart-renderer.js';
 import type { ImpactMetrics, ImpactTimeline, ImpactRecommendation, CodeHealthIndicator } from '../types/dashboard.types.js';
 import * as d3 from 'd3';
+import './scenario-builder.js';
 
 interface ImpactNode {
   symbolId: number;
@@ -77,7 +78,7 @@ export class ImpactVisualization extends DashboardComponent {
       this._loading = true;
       this.render();
 
-      const response = await dataService.fetch(`/analytics/impact/${selectedSymbolId}`);
+      const response = await dataService.fetch(`/api/analytics/impact/${selectedSymbolId}`);
       
       if (!response.success) {
         throw new Error(response.error || 'Failed to load impact analysis');
@@ -455,6 +456,8 @@ export class ImpactVisualization extends DashboardComponent {
 
         ${this.impactMetrics ? this.renderImpactMetrics() : ''}
         ${this.recommendations.length > 0 ? this.renderRecommendations() : ''}
+
+        ${this.renderScenarioSection()}
 
         <div class="visualization-container">
           ${this._loading ? this.renderLoading() : ''}
@@ -992,6 +995,77 @@ export class ImpactVisualization extends DashboardComponent {
       abstract: '🔷'
     };
     return icons[type] || '💡';
+  }
+
+  private renderScenarioSection(): string {
+    if (!this.currentSymbolId) return ''; // Don't show scenario section if no symbol selected
+
+    return `
+      <div class="scenario-section">
+        <div class="section-header">
+          <h3>
+            <span class="section-icon">🎭</span>
+            What-If Scenario Analysis
+          </h3>
+          <p class="section-description">
+            Explore different implementation approaches and their impact on your codebase
+          </p>
+        </div>
+        <div class="scenario-content">
+          <scenario-builder id="impact-scenario-builder"></scenario-builder>
+        </div>
+      </div>
+
+      <style>
+        .scenario-section {
+          margin: 24px 0;
+          border: 1px solid rgba(147, 112, 219, 0.2);
+          border-radius: 12px;
+          background: rgba(35, 35, 65, 0.5);
+          overflow: hidden;
+        }
+        
+        .section-header {
+          padding: 20px 24px;
+          background: linear-gradient(135deg, 
+            rgba(147, 112, 219, 0.1) 0%, 
+            rgba(255, 105, 180, 0.1) 50%, 
+            rgba(135, 206, 235, 0.1) 100%);
+          border-bottom: 1px solid rgba(147, 112, 219, 0.2);
+        }
+        
+        .section-header h3 {
+          margin: 0 0 8px 0;
+          font-size: 1.25rem;
+          color: var(--primary-accent);
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        
+        .section-icon {
+          font-size: 1.5rem;
+        }
+        
+        .section-description {
+          margin: 0;
+          color: var(--text-secondary);
+          font-size: 0.9rem;
+          line-height: 1.4;
+        }
+        
+        .scenario-content {
+          height: 600px;
+          background: var(--primary-bg);
+        }
+        
+        scenario-builder {
+          display: block;
+          width: 100%;
+          height: 100%;
+        }
+      </style>
+    `;
   }
 
   // Load enhanced metrics and recommendations
@@ -1538,6 +1612,34 @@ export class ImpactVisualization extends DashboardComponent {
         }
       });
     });
+
+    // Initialize scenario builder with current symbol
+    this.setupScenarioBuilder();
+  }
+
+  private setupScenarioBuilder(): void {
+    const scenarioBuilder = this.shadow.querySelector('#impact-scenario-builder') as any;
+    if (scenarioBuilder && this.currentSymbolId) {
+      // Find the current symbol data
+      const selectedSymbolId = stateService.getState('selectedNodeId');
+      if (selectedSymbolId) {
+        // Trigger symbol selection in the scenario builder
+        setTimeout(async () => {
+          try {
+            // Get symbol details for the scenario builder
+            const response = await dataService.fetch(`/api/symbols/${selectedSymbolId}`);
+            if (response.success && response.data) {
+              // Set the symbol directly if the scenario builder supports it
+              if (typeof scenarioBuilder.setCurrentSymbol === 'function') {
+                scenarioBuilder.setCurrentSymbol(response.data);
+              }
+            }
+          } catch (error) {
+            console.warn('Failed to initialize scenario builder with symbol:', error);
+          }
+        }, 100);
+      }
+    }
   }
 
   private setupMetricCardTooltips(): void {

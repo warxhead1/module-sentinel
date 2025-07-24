@@ -112,7 +112,7 @@ export async function resolveSymbolReferences(db: any): Promise<number> {
     .prepare(
       `
     SELECT id, qualified_name, name, signature, file_path
-    FROM enhanced_symbols
+    FROM universal_symbols
     WHERE qualified_name IS NOT NULL
   `
     )
@@ -131,7 +131,7 @@ export async function resolveSymbolReferences(db: any): Promise<number> {
     .prepare(
       `
     SELECT id, to_name, from_symbol_id
-    FROM symbol_relationships
+    FROM universal_relationships
     WHERE to_symbol_id IS NULL AND to_name IS NOT NULL
   `
     )
@@ -139,7 +139,7 @@ export async function resolveSymbolReferences(db: any): Promise<number> {
 
   let resolved = 0;
   const updateStmt = db.prepare(`
-    UPDATE symbol_relationships 
+    UPDATE universal_relationships 
     SET to_symbol_id = ? 
     WHERE id = ?
   `);
@@ -164,12 +164,12 @@ export async function buildCallChains(db: any): Promise<void> {
     .prepare(
       `
     SELECT DISTINCT s.id, s.qualified_name
-    FROM enhanced_symbols s
+    FROM universal_symbols s
     WHERE s.kind IN ('function', 'method')
       AND s.id NOT IN (
         SELECT DISTINCT to_symbol_id 
-        FROM symbol_relationships 
-        WHERE relationship_type = 'calls' 
+        FROM universal_relationships 
+        WHERE type = 'calls' 
           AND to_symbol_id IS NOT NULL
       )
   `
@@ -215,9 +215,9 @@ function traceCallChain(db: any, startId: number, maxDepth: number): any[] {
       .prepare(
         `
       SELECT DISTINCT to_symbol_id
-      FROM symbol_relationships
+      FROM universal_relationships
       WHERE from_symbol_id = ?
-        AND relationship_type = 'calls'
+        AND type = 'calls'
         AND to_symbol_id IS NOT NULL
     `
       )
@@ -241,7 +241,7 @@ export async function extractGPUDispatches(db: any): Promise<void> {
     .prepare(
       `
     SELECT id, qualified_name, signature
-    FROM enhanced_symbols
+    FROM universal_symbols
     WHERE uses_gpu_compute = 1
       OR execution_mode = 'gpu'
       OR signature LIKE '%kernel%'
@@ -253,8 +253,8 @@ export async function extractGPUDispatches(db: any): Promise<void> {
 
   // For each GPU function, find who calls it (CPU->GPU boundary)
   const insertRel = db.prepare(`
-    INSERT INTO symbol_relationships 
-    (from_symbol_id, to_symbol_id, relationship_type, from_name, to_name)
+    INSERT INTO universal_relationships 
+    (from_symbol_id, to_symbol_id, type, from_name, to_name)
     VALUES (?, ?, 'dispatches_to_gpu', ?, ?)
   `);
 
@@ -263,9 +263,9 @@ export async function extractGPUDispatches(db: any): Promise<void> {
       .prepare(
         `
       SELECT DISTINCT from_symbol_id, from_name
-      FROM symbol_relationships
+      FROM universal_relationships
       WHERE to_symbol_id = ?
-        AND relationship_type = 'calls'
+        AND type = 'calls'
     `
       )
       .all(gpuFunc.id);
@@ -276,7 +276,7 @@ export async function extractGPUDispatches(db: any): Promise<void> {
         .prepare(
           `
         SELECT execution_mode, uses_gpu_compute
-        FROM enhanced_symbols
+        FROM universal_symbols
         WHERE id = ?
       `
         )

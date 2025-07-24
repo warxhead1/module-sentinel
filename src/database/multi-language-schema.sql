@@ -533,6 +533,5 @@ LEFT JOIN languages tl ON ts.language_id = tl.id;
 -- MIGRATION COMPATIBILITY
 -- ============================================================================
 
--- This schema is designed to coexist with the existing enhanced_symbols table
--- The migration strategy will gradually move data from enhanced_symbols to universal_symbols
+-- This schema provides universal symbol storage for all supported languages
 -- while maintaining backward compatibility for existing tools.

@@ -3,12 +3,16 @@
  * Purpose: Identify if context extraction is the source of the hang
  */
 
-import { BaseTest } from '../BaseTest.js';
+import { BaseTest } from '../helpers/BaseTest.js';
+import Database from 'better-sqlite3';
 import { SymbolInfo } from '../../src/parsers/tree-sitter/parser-types.js';
 import { SemanticContextExtractor } from '../../src/analysis/semantic-context-engine.js';
 import Parser from 'tree-sitter';
 
-class SemanticContextExtractionTest extends BaseTest {
+export class SemanticContextExtractionTest extends BaseTest {
+  constructor(db: Database.Database) {
+    super('SemanticContextExtractionTest', db);
+  }
   getName(): string {
     return 'Semantic Context Extraction Test';
   }

@@ -153,10 +153,10 @@ export class EnhancedIntelliSenseBridge {
       .prepare(
         `
       SELECT 
-        pipeline_stage,
-        AVG(parser_confidence) as avg_confidence,
+        'analysis' as pipeline_stage,
+        AVG(confidence) as avg_confidence,
         COUNT(*) as symbol_count
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE file_path = ?
       GROUP BY pipeline_stage
       LIMIT 1
@@ -335,14 +335,12 @@ public:
     const crossStageDeps = this.db
       .prepare(
         `
-      SELECT s2.pipeline_stage, COUNT(*) as dep_count
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      SELECT 'analysis' as pipeline_stage, COUNT(*) as dep_count
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s1.file_path = ? 
-        AND s1.pipeline_stage != s2.pipeline_stage
-        AND s2.pipeline_stage IS NOT NULL
-      GROUP BY s2.pipeline_stage
+      GROUP BY pipeline_stage
       ORDER BY dep_count DESC
     `
       )
@@ -473,7 +471,7 @@ public:
       .prepare(
         `
       SELECT COUNT(*) as count
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE file_path = ? AND semantic_tags LIKE '%modern-cpp%'
     `
       )
@@ -565,8 +563,8 @@ public:
       .prepare(
         `
       SELECT COUNT(*) as count
-      FROM enhanced_symbols
-      WHERE file_path = ? AND parser_confidence < 0.8
+      FROM universal_symbols
+      WHERE file_path = ? AND confidence < 0.8
     `
       )
       .get(context.currentFile) as any;
@@ -668,12 +666,12 @@ public:
     const relatedFiles = this.db
       .prepare(
         `
-      SELECT DISTINCT s2.file_path, sr.relationship_type, COUNT(*) as connection_count
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      SELECT DISTINCT s2.file_path, sr.type, COUNT(*) as connection_count
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s1.file_path = ? AND s2.file_path != ?
-      GROUP BY s2.file_path, sr.relationship_type
+      GROUP BY s2.file_path, sr.type
       ORDER BY connection_count DESC
       LIMIT 5
     `
@@ -689,7 +687,7 @@ public:
     return {
       relatedFiles: relatedFiles.map((file: any) => ({
         path: file.file_path,
-        relationship: file.relationship_type,
+        relationship: file.type,
         relevance: Math.min(1.0, file.connection_count / 10),
       })),
       relatedPatterns: relatedPatterns.map((pattern) => ({

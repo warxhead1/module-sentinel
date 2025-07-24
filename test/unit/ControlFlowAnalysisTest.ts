@@ -10,8 +10,12 @@ export class ControlFlowAnalysisTest extends BaseTest {
   private analyzer!: ControlFlowAnalyzer;
   private parser!: Parser;
   
+  constructor(db: Database.Database) {
+    super('ControlFlowAnalysisTest', db);
+  }
+  
   async specificSetup(): Promise<void> {
-    const testDb = this.dbManager.getDatabase();
+    const testDb = this.db;
     this.analyzer = new ControlFlowAnalyzer(testDb);
     
     this.parser = new Parser();
@@ -73,7 +77,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
     const tree = this.parser.parse(content);
     
     // First, let's find the SerializeToString function in the database
-    const testDb = this.dbManager.getDatabase(this.testName);
+    const testDb = this.db;
     const symbolQuery = testDb.prepare(`
       SELECT * FROM universal_symbols 
       WHERE name = 'SerializeToString' 

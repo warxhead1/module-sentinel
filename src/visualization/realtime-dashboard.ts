@@ -185,8 +185,8 @@ export class RealtimeDashboard {
       .prepare(
         `
       SELECT file_path, COUNT(*) as symbol_count
-      FROM enhanced_symbols
-      WHERE parser_confidence > 0.8
+      FROM universal_symbols
+      WHERE confidence > 0.8
       GROUP BY file_path
       ORDER BY symbol_count DESC
       LIMIT 10
@@ -238,9 +238,9 @@ export class RealtimeDashboard {
     const confidenceResult = this.db
       .prepare(
         `
-      SELECT AVG(parser_confidence) as avg_confidence
-      FROM enhanced_symbols
-      WHERE parser_confidence > 0
+      SELECT AVG(confidence) as avg_confidence
+      FROM universal_symbols
+      WHERE confidence > 0
     `
       )
       .get() as any;
@@ -250,7 +250,7 @@ export class RealtimeDashboard {
       .prepare(
         `
       SELECT COUNT(DISTINCT file_path) as count
-      FROM enhanced_symbols
+      FROM universal_symbols
     `
       )
       .get() as any;
@@ -259,7 +259,7 @@ export class RealtimeDashboard {
       .prepare(
         `
       SELECT COUNT(*) as count
-      FROM enhanced_symbols
+      FROM universal_symbols
     `
       )
       .get() as any;

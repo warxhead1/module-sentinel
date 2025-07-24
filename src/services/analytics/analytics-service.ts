@@ -1,5 +1,9 @@
 import type Database from 'better-sqlite3';
 import type { Symbol, Relationship } from '../../shared/types/api';
+import { RippleEffectTracker, ImpactPrediction, RippleNode } from '../../visualization/ripple-effect-tracker.js';
+import { ChangeImpactPredictor, ChangeScenario, ImpactVisualization } from '../../visualization/change-impact-predictor.js';
+import * as path from 'path';
+import * as os from 'os';
 
 export interface DataFlowNode {
   symbolId: number;
@@ -22,6 +26,30 @@ export interface DataMutation {
   location: string;
   type: 'assignment' | 'modification' | 'deletion';
   description: string;
+}
+
+// Enhanced impact analysis interfaces
+export interface EnhancedImpactAnalysis extends ImpactAnalysis {
+  prediction: ImpactPrediction;
+  riskAssessment: {
+    overall: number;
+    breakingChanges: number;
+    testingRequired: string[];
+    reviewersNeeded: string[];
+  };
+  recommendations: string[];
+  estimatedFixTime: number;
+  criticalPaths: string[][];
+}
+
+export interface ScenarioAnalysis {
+  scenarios: ChangeScenario[];
+  comparisons: {
+    mostOptimal: string;
+    leastRisky: string;
+    fastestImplementation: string;
+  };
+  visualization: ImpactVisualization;
 }
 
 export interface ImpactAnalysis {
@@ -95,7 +123,18 @@ export interface ComplexityMetrics {
 }
 
 export class AnalyticsService {
-  constructor(private db: Database.Database) {}
+  private rippleTracker: RippleEffectTracker;
+  private changePredictor: ChangeImpactPredictor;
+  private dbPath: string;
+
+  constructor(private db: Database.Database) {
+    // Get database path
+    this.dbPath = (db as any).name || path.join(os.homedir(), '.module-sentinel', 'development.db');
+    
+    // Initialize advanced analyzers
+    this.rippleTracker = new RippleEffectTracker(this.dbPath);
+    this.changePredictor = new ChangeImpactPredictor(this.dbPath);
+  }
 
   /**
    * Analyze data flow through a symbol
@@ -125,26 +164,42 @@ export class AnalyticsService {
   }
 
   /**
-   * Analyze the impact of changes to a symbol
+   * Analyze the impact of changes to a symbol (enhanced with RippleEffectTracker)
    */
   async analyzeImpact(symbolId: string): Promise<ImpactAnalysis> {
-    const visited = new Set<number>();
-    const directImpact: ImpactNode[] = [];
-    const indirectImpact: ImpactNode[] = [];
-    const rippleWaves: Map<number, ImpactNode[]> = new Map();
+    // Fallback to basic analysis if symbol doesn't exist
+    const symbol = this.getSymbol(parseInt(symbolId));
+    if (!symbol) {
+      return {
+        directImpact: [],
+        indirectImpact: [],
+        rippleEffect: [],
+        severityScore: 0
+      };
+    }
 
-    // BFS to find all impacted nodes
-    const queue: { id: number; distance: number }[] = [{ id: parseInt(symbolId), distance: 0 }];
+    // Use qualified name for advanced analysis
+    const symbolName = symbol.qualified_name || symbol.name;
     
-    while (queue.length > 0) {
-      const { id, distance } = queue.shift()!;
+    try {
+      // Use RippleEffectTracker for advanced analysis
+      const prediction = await this.rippleTracker.predictImpact(symbolName, 'type');
       
-      if (visited.has(id)) continue;
-      visited.add(id);
+      // Convert advanced analysis to basic format for backward compatibility
+      const directImpact: ImpactNode[] = [];
+      const indirectImpact: ImpactNode[] = [];
+      const rippleWaves: Map<number, ImpactNode[]> = new Map();
 
-      if (distance > 0) {
-        const impactNode = this.createImpactNode(id, distance);
-        
+      prediction.affectedNodes.forEach(affectedNode => {
+        const distance = affectedNode.propagationPath.length;
+        const impactNode: ImpactNode = {
+          symbolId: parseInt(affectedNode.node.id) || 0,
+          symbolName: affectedNode.node.name,
+          impactType: this.mapImpactType(affectedNode.impactSeverity),
+          distance,
+          confidence: affectedNode.node.confidence
+        };
+
         if (distance === 1) {
           directImpact.push(impactNode);
         } else {
@@ -156,9 +211,191 @@ export class AnalyticsService {
           rippleWaves.set(distance, []);
         }
         rippleWaves.get(distance)!.push(impactNode);
+      });
+
+      // Convert ripple waves to array
+      const rippleEffect: RippleWave[] = Array.from(rippleWaves.entries())
+        .map(([distance, nodes]) => ({
+          distance,
+          nodes,
+          timestamp: distance * 100 // 100ms delay per wave
+        }))
+        .sort((a, b) => a.distance - b.distance);
+
+      const severityScore = prediction.riskAssessment.overall;
+
+      return {
+        directImpact,
+        indirectImpact,
+        rippleEffect,
+        severityScore
+      };
+    } catch (error) {
+      console.warn('Advanced impact analysis failed, falling back to basic analysis:', error);
+      return this.analyzeImpactFallback(symbolId);
+    }
+  }
+
+  /**
+   * Enhanced impact analysis with full prediction details
+   */
+  async analyzeEnhancedImpact(
+    symbolId: string, 
+    changeType: 'type' | 'value' | 'signature' | 'dependency' | 'removal' = 'type'
+  ): Promise<EnhancedImpactAnalysis> {
+    const symbol = this.getSymbol(parseInt(symbolId));
+    if (!symbol) {
+      throw new Error(`Symbol ${symbolId} not found`);
+    }
+
+    const symbolName = symbol.qualified_name || symbol.name;
+    const prediction = await this.rippleTracker.predictImpact(symbolName, changeType);
+    const basicAnalysis = await this.analyzeImpact(symbolId);
+
+    const estimatedFixTime = prediction.affectedNodes.reduce(
+      (total, node) => total + node.estimatedFixTime, 
+      0
+    );
+
+    const criticalPaths = prediction.affectedNodes
+      .filter(node => node.impactSeverity >= 7)
+      .map(node => node.propagationPath);
+
+    return {
+      ...basicAnalysis,
+      prediction,
+      riskAssessment: prediction.riskAssessment,
+      recommendations: prediction.recommendations,
+      estimatedFixTime,
+      criticalPaths
+    };
+  }
+
+  /**
+   * Create and analyze multiple change scenarios
+   */
+  async analyzeScenarios(symbolId: string, customScenarios?: Partial<ChangeScenario>[]): Promise<ScenarioAnalysis> {
+    const symbol = this.getSymbol(parseInt(symbolId));
+    if (!symbol) {
+      throw new Error(`Symbol ${symbolId} not found`);
+    }
+
+    const symbolName = symbol.qualified_name || symbol.name;
+    
+    // Create default scenarios if none provided
+    const scenarios = await this.changePredictor.createChangeScenarios(symbolName);
+
+    // Analyze each scenario
+    const scenarioResults = await Promise.all(
+      scenarios.map(async (scenario: any) => {
+        const prediction = await this.rippleTracker.predictImpact(
+          scenario.targetSymbol, 
+          scenario.changeType, 
+          scenario.simulatedChange
+        );
+        return { scenario, prediction };
+      })
+    );
+
+    // Find comparisons
+    const comparisons = {
+      mostOptimal: this.findMostOptimal(scenarioResults),
+      leastRisky: this.findLeastRisky(scenarioResults),
+      fastestImplementation: this.findFastestImplementation(scenarioResults)
+    };
+
+    // Generate visualization
+    // Generate visualization for first scenario if available
+    const visualization = scenarios.length > 0 
+      ? await this.changePredictor.analyzeScenarioImpact(scenarios[0])
+      : null;
+
+    return {
+      scenarios,
+      comparisons,
+      visualization: visualization || {
+        scenario: scenarios[0] || {
+          id: 'default',
+          name: 'No scenario',
+          description: '',
+          targetSymbol: symbolName,
+          changeType: 'type' as const,
+          simulatedChange: { from: null, to: null, description: '' },
+          isActive: false,
+          estimatedFixTime: 0,
+          riskScore: 0,
+          affectedNodes: 0
+        },
+        prediction: {
+          changedSymbol: symbolName,
+          changeType: 'type' as const,
+          simulatedChange: null,
+          affectedNodes: [],
+          riskAssessment: {
+            overall: 0,
+            breakingChanges: 0,
+            testingRequired: [],
+            reviewersNeeded: []
+          },
+          recommendations: []
+        },
+        visualization: {
+          networkData: { nodes: [], edges: [] },
+          timelineData: {
+            phases: []
+          },
+          heatmapData: {
+            stages: [],
+            impacts: [],
+            labels: []
+          }
+        }
+      }
+    };
+  }
+
+  /**
+   * Map impact severity to impact type for backward compatibility
+   */
+  private mapImpactType(severity: number): 'breaking' | 'modification' | 'enhancement' {
+    if (severity >= 7) return 'breaking';
+    if (severity >= 4) return 'modification';
+    return 'enhancement';
+  }
+
+  /**
+   * Fallback to basic impact analysis
+   */
+  private async analyzeImpactFallback(symbolId: string): Promise<ImpactAnalysis> {
+    // Basic BFS analysis as fallback
+    const visited = new Set<number>();
+    const directImpact: ImpactNode[] = [];
+    const indirectImpact: ImpactNode[] = [];
+    const rippleWaves: Map<number, ImpactNode[]> = new Map();
+
+    const queue: { id: number; distance: number }[] = [{ id: parseInt(symbolId), distance: 0 }];
+    
+    while (queue.length > 0) {
+      const { id, distance } = queue.shift()!;
+      
+      if (visited.has(id) || distance > 3) continue; // Limit depth
+      visited.add(id);
+
+      if (distance > 0) {
+        const impactNode = this.createImpactNode(id, distance);
+        
+        if (distance === 1) {
+          directImpact.push(impactNode);
+        } else {
+          indirectImpact.push(impactNode);
+        }
+
+        if (!rippleWaves.has(distance)) {
+          rippleWaves.set(distance, []);
+        }
+        rippleWaves.get(distance)!.push(impactNode);
       }
 
-      // Get all symbols that depend on this one
       const dependents = this.getDependentSymbols(id);
       for (const dep of dependents) {
         if (!visited.has(dep.id)) {
@@ -167,23 +404,40 @@ export class AnalyticsService {
       }
     }
 
-    // Convert ripple waves to array
     const rippleEffect: RippleWave[] = Array.from(rippleWaves.entries())
       .map(([distance, nodes]) => ({
         distance,
         nodes,
-        timestamp: distance * 100 // 100ms delay per wave
+        timestamp: distance * 100
       }))
       .sort((a, b) => a.distance - b.distance);
-
-    const severityScore = this.calculateImpactSeverity(directImpact, indirectImpact);
 
     return {
       directImpact,
       indirectImpact,
       rippleEffect,
-      severityScore
+      severityScore: this.calculateImpactSeverity(directImpact, indirectImpact)
     };
+  }
+
+  private findMostOptimal(results: Array<{scenario: ChangeScenario, prediction: ImpactPrediction}>): string {
+    return results.reduce((best, current) => 
+      current.prediction.riskAssessment.overall < best.prediction.riskAssessment.overall ? current : best
+    ).scenario.id;
+  }
+
+  private findLeastRisky(results: Array<{scenario: ChangeScenario, prediction: ImpactPrediction}>): string {
+    return results.reduce((best, current) => 
+      current.prediction.riskAssessment.breakingChanges < best.prediction.riskAssessment.breakingChanges ? current : best
+    ).scenario.id;
+  }
+
+  private findFastestImplementation(results: Array<{scenario: ChangeScenario, prediction: ImpactPrediction}>): string {
+    return results.reduce((best, current) => {
+      const currentTime = current.prediction.affectedNodes.reduce((sum, node) => sum + node.estimatedFixTime, 0);
+      const bestTime = best.prediction.affectedNodes.reduce((sum, node) => sum + node.estimatedFixTime, 0);
+      return currentTime < bestTime ? current : best;
+    }).scenario.id;
   }
 
   /**
