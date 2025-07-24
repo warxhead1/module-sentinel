@@ -23,27 +23,25 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
         return;
       }
       
-      const indexer = new UniversalIndexer(this.db, projectPath);
+      const indexer = new UniversalIndexer(this.db, { 
+        projectPath: projectPath, 
+        projectName: 'microservices-demo',
+        languages: ['go', 'python', 'typescript', 'javascript', 'csharp', 'java'],
+        debugMode: false,
+        enableSemanticAnalysis: false,
+        maxFiles: 200 // Increased limit to ensure Go files are included
+      });
       
-      // Index just a subset for testing
-      const testServices = [
-        'src/checkoutservice',    // Go
-        'src/frontend',           // Go  
-        'src/cartservice',        // C#
-        'src/emailservice',       // Python
-        'src/currencyservice'     // Node.js
-      ];
+      console.log('\n    Indexing microservices demo project...');
+      const indexResult = await indexer.indexProject();
+      console.log(`      Indexed ${indexResult.filesIndexed} files, found ${indexResult.symbolsFound} symbols`);
       
-      console.log('\n    Indexing services:');
-      for (const service of testServices) {
-        const servicePath = path.join(projectPath, service);
-        if (fs.existsSync(servicePath)) {
-          console.log(`      - ${service}`);
-          await indexer.indexDirectory(servicePath);
-        }
-      }
+      // Use the project ID from the indexing result
+      const projectId = indexResult.projectId;
       
       // Get language distribution
+      console.log(`\n    Using Project ID: ${projectId}`);
+      
       const stats = this.db.prepare(`
         SELECT 
           l.name as language,
@@ -51,10 +49,10 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
           COUNT(*) as symbol_count
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
-        WHERE s.project_id = 1
+        WHERE s.project_id = ?
         GROUP BY l.name
         ORDER BY symbol_count DESC
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log('\n    Language distribution:');
       stats.forEach(stat => {
@@ -69,16 +67,20 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
       this.assert(languages.includes('go'), 'Should detect Go');
       this.assert(languages.includes('python'), 'Should detect Python');
       this.assert(languages.includes('javascript') || languages.includes('typescript'), 'Should detect JavaScript/TypeScript');
+      
+      // Store project ID for other tests
+      (this as any).microservicesProjectId = projectId;
     }));
     
     // Test 2: Check for cross-language relationships
     results.push(await this.runTest('Detect cross-language relationships', async () => {
+      const projectId = (this as any).microservicesProjectId || 1;
+      
       const crossLangRelations = this.db.prepare(`
         SELECT 
           l1.name as from_language,
           l2.name as to_language,
           r.type,
-          r.detected_by,
           COUNT(*) as count
         FROM universal_relationships r
         JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
@@ -86,17 +88,17 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
         JOIN languages l1 ON s1.language_id = l1.id
         JOIN languages l2 ON s2.language_id = l2.id
         WHERE l1.name != l2.name
-          AND r.project_id = 1
-        GROUP BY l1.name, l2.name, r.type, r.detected_by
+          AND r.project_id = ?
+        GROUP BY l1.name, l2.name, r.type
         ORDER BY count DESC
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log(`\n    Found ${crossLangRelations.length} cross-language relationship types`);
       
       if (crossLangRelations.length > 0) {
         console.log('    Top cross-language relationships:');
         crossLangRelations.slice(0, 5).forEach(rel => {
-          console.log(`      ${rel.from_language} -> ${rel.to_language}: ${rel.count} ${rel.type} (${rel.detected_by})`);
+          console.log(`      ${rel.from_language} -> ${rel.to_language}: ${rel.count} ${rel.type}`);
         });
       }
       
@@ -107,6 +109,8 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
     
     // Test 3: Check for gRPC/Protobuf patterns
     results.push(await this.runTest('Detect gRPC/Protobuf usage', async () => {
+      const projectId = (this as any).microservicesProjectId || 1;
+      
       const grpcPatterns = this.db.prepare(`
         SELECT 
           s.name,
@@ -115,7 +119,7 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
           l.name as language
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
-        WHERE s.project_id = 1
+        WHERE s.project_id = ?
           AND (
             s.name LIKE '%grpc%' OR 
             s.name LIKE '%Grpc%' OR
@@ -126,7 +130,7 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
             s.qualified_name LIKE '%_pb2%'
           )
         LIMIT 10
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log(`\n    Found ${grpcPatterns.length} gRPC/Protobuf patterns`);
       
@@ -140,6 +144,8 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
     
     // Test 4: Check HTTP/REST patterns
     results.push(await this.runTest('Detect HTTP/REST API patterns', async () => {
+      const projectId = (this as any).microservicesProjectId || 1;
+      
       const httpPatterns = this.db.prepare(`
         SELECT 
           s.name,
@@ -148,7 +154,7 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
           l.name as language
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
-        WHERE s.project_id = 1
+        WHERE s.project_id = ?
           AND (
             s.name LIKE '%http%' OR 
             s.name LIKE '%Http%' OR
@@ -159,7 +165,7 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
           )
           AND s.kind IN ('function', 'method', 'class')
         LIMIT 10
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log(`\n    Found ${httpPatterns.length} HTTP/REST patterns`);
       
@@ -173,43 +179,53 @@ export class CrossLanguageMicroservicesTest extends BaseTest {
     
     // Test 5: Test CrossLanguageDetector directly
     results.push(await this.runTest('CrossLanguageDetector pattern detection', async () => {
-      const detector = new CrossLanguageDetector();
+      // Test Go code with gRPC line by line
+      const goCode = [
+        'import (',
+        '    "context"',
+        '    pb "github.com/example/proto"',
+        '    "google.golang.org/grpc"',
+        ')',
+        '',
+        'func main() {',
+        '    client := pb.NewCartServiceClient(conn)',
+        '    response, err := client.GetCart(ctx, req)',
+        '    cmd := exec.Command("python", "process.py")',
+        '}'
+      ];
       
-      // Test Go code with gRPC
-      const goCode = `
-import (
-    "context"
-    pb "github.com/example/proto"
-    "google.golang.org/grpc"
-)
-
-func (s *server) GetCart(ctx context.Context, req *pb.GetCartRequest) (*pb.Cart, error) {
-    return s.cartService.GetCart(ctx, req.UserId)
-}
-`;
-      
-      const goPatterns = detector.detect(goCode, 'go');
+      const goPatterns: any[] = [];
+      goCode.forEach((line, idx) => {
+        const calls = CrossLanguageDetector.detectCrossLanguageCalls(line, idx + 1, 'go', 'test.go');
+        goPatterns.push(...calls);
+      });
       console.log(`\n    Go patterns detected: ${goPatterns.length}`);
       goPatterns.forEach(p => {
-        console.log(`      - ${p.type}: ${p.targetLanguage || 'N/A'} (confidence: ${p.confidence})`);
+        console.log(`      - Type: ${p.type}, Target: ${p.targetEndpoint || 'N/A'}, Language: ${p.targetLanguage || 'N/A'}`);
       });
       
-      // Test Python code with gRPC
-      const pythonCode = `
-import grpc
-from concurrent import futures
-import demo_pb2
-import demo_pb2_grpc
-
-class EmailService(demo_pb2_grpc.EmailServiceServicer):
-    def SendOrderConfirmation(self, request, context):
-        return demo_pb2.Empty()
-`;
+      // Test Python code with gRPC line by line
+      const pythonCode = [
+        'import grpc',
+        'from concurrent import futures',
+        'import demo_pb2',
+        'import demo_pb2_grpc',
+        '',
+        'def run():',
+        '    response = requests.post("http://other-service:8080/api/data")',
+        '    subprocess.run(["node", "process.js"])',
+        '    client = EmailServiceClient(channel)',
+        '    result = client.SendOrderConfirmation(request)'
+      ];
       
-      const pythonPatterns = detector.detect(pythonCode, 'python');
+      const pythonPatterns: any[] = [];
+      pythonCode.forEach((line, idx) => {
+        const calls = CrossLanguageDetector.detectCrossLanguageCalls(line, idx + 1, 'python', 'test.py');
+        pythonPatterns.push(...calls);
+      });
       console.log(`\n    Python patterns detected: ${pythonPatterns.length}`);
       pythonPatterns.forEach(p => {
-        console.log(`      - ${p.type}: ${p.targetLanguage || 'N/A'} (confidence: ${p.confidence})`);
+        console.log(`      - Type: ${p.type}, Target: ${p.targetEndpoint || 'N/A'}, Language: ${p.targetLanguage || 'N/A'}`);
       });
       
       // Should detect some patterns
@@ -220,6 +236,8 @@ class EmailService(demo_pb2_grpc.EmailServiceServicer):
     // Test 6: Check for service-to-service communication
     results.push(await this.runTest('Analyze service-to-service communication', async () => {
       // Look for environment variables that indicate service endpoints
+      const projectId = (this as any).microservicesProjectId || 1;
+      
       const envVarPatterns = this.db.prepare(`
         SELECT 
           s.name,
@@ -227,7 +245,7 @@ class EmailService(demo_pb2_grpc.EmailServiceServicer):
           l.name as language
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
-        WHERE s.project_id = 1
+        WHERE s.project_id = ?
           AND s.kind = 'variable'
           AND (
             s.name LIKE '%SERVICE%ADDR%' OR
@@ -237,7 +255,7 @@ class EmailService(demo_pb2_grpc.EmailServiceServicer):
             s.name LIKE '%_ENDPOINT'
           )
         LIMIT 10
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log(`\n    Found ${envVarPatterns.length} service endpoint references`);
       
@@ -251,28 +269,28 @@ class EmailService(demo_pb2_grpc.EmailServiceServicer):
       // Look for import/using statements that reference other services
       const serviceImports = this.db.prepare(`
         SELECT 
-          r.source_text,
           s1.file_path as from_file,
           l.name as language
         FROM universal_relationships r
         JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
+        JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
         JOIN languages l ON s1.language_id = l.id
-        WHERE r.project_id = 1
+        WHERE r.project_id = ?
           AND r.type = 'imports'
           AND (
-            r.source_text LIKE '%service%' OR
-            r.source_text LIKE '%proto%' OR
-            r.source_text LIKE '%pb%'
+            s1.file_path LIKE '%service%' OR
+            s1.file_path LIKE '%proto%' OR
+            s2.name LIKE '%pb%'
           )
         LIMIT 10
-      `).all() as any[];
+      `).all(projectId) as any[];
       
       console.log(`\n    Found ${serviceImports.length} service-related imports`);
       
       if (serviceImports.length > 0) {
         console.log('    Service imports:');
         serviceImports.slice(0, 5).forEach(imp => {
-          console.log(`      ${imp.language}: ${imp.source_text} in ${path.basename(imp.from_file)}`);
+          console.log(`      ${imp.language}: import in ${path.basename(imp.from_file)}`);
         });
       }
     }));

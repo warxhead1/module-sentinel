@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Module Sentinel Test Suite" tests="7" failures="0" skipped="0" time="18.111">
+  <testsuite name="Module Sentinel" tests="7" failures="0" skipped="0" time="18.111">
+    <testcase classname="CrossLanguageFlowTest" name="CrossLanguageFlowTest" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Index multi-language microservices project" time="7649">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect cross-language relationships" time="1">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect gRPC/Protobuf usage" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect HTTP/REST API patterns" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="CrossLanguageDetector pattern detection" time="1">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Analyze service-to-service communication" time="1">
+    </testcase>
+  </testsuite>
+</testsuites>
