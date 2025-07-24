@@ -11,18 +11,18 @@ export function debounce<T extends (...args: any[]) => any>(
   immediate?: boolean
 ): (...args: Parameters<T>) => void {
   let timeout: NodeJS.Timeout | null = null;
-  
+
   return function executedFunction(...args: Parameters<T>) {
     const later = () => {
       timeout = null;
       if (!immediate) func(...args);
     };
-    
+
     const callNow = immediate && !timeout;
-    
+
     if (timeout) clearTimeout(timeout);
     timeout = setTimeout(later, wait);
-    
+
     if (callNow) func(...args);
   };
 }
@@ -36,7 +36,7 @@ export function throttle<T extends (...args: any[]) => any>(
 ): (...args: Parameters<T>) => void {
   let lastFunc: NodeJS.Timeout | null = null;
   let lastRan: number;
-  
+
   return function executedFunction(...args: Parameters<T>) {
     if (!lastRan) {
       func(...args);
@@ -44,7 +44,7 @@ export function throttle<T extends (...args: any[]) => any>(
     } else {
       if (lastFunc) clearTimeout(lastFunc);
       lastFunc = setTimeout(() => {
-        if ((Date.now() - lastRan) >= limit) {
+        if (Date.now() - lastRan >= limit) {
           func(...args);
           lastRan = Date.now();
         }
@@ -58,15 +58,14 @@ export function throttle<T extends (...args: any[]) => any>(
  */
 export class PerformanceTimer {
   private startTime: number = 0;
-  
+
   start(): void {
     this.startTime = performance.now();
   }
-  
+
   end(label?: string): number {
     const elapsed = performance.now() - this.startTime;
     if (label) {
-      console.log(`${label}: ${elapsed.toFixed(2)}ms`);
     }
     return elapsed;
   }
@@ -86,7 +85,10 @@ export function measureTime<T>(fn: () => T, label?: string): T {
 /**
  * Measure execution time of an async function
  */
-export async function measureTimeAsync<T>(fn: () => Promise<T>, label?: string): Promise<T> {
+export async function measureTimeAsync<T>(
+  fn: () => Promise<T>,
+  label?: string
+): Promise<T> {
   const timer = new PerformanceTimer();
   timer.start();
   const result = await fn();

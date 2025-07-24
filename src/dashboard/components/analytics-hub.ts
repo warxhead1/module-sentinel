@@ -1,9 +1,9 @@
-import { DashboardComponent, defineComponent } from './base-component.js';
-import * as d3 from 'd3';
+import { DashboardComponent, defineComponent } from "./base-component.js";
+import * as d3 from "d3";
 
 /**
  * 🧠 Analytics Hub - Advanced Data Visualization & Intelligence Dashboard
- * 
+ *
  * Features:
  * - Interactive relationship graphs with D3.js
  * - Dependency flow diagrams
@@ -14,102 +14,102 @@ import * as d3 from 'd3';
  * - Architecture topology maps
  */
 export class AnalyticsHub extends DashboardComponent {
-  private activeTab: string = 'relationships';
+  private activeTab: string = "relationships";
   private chartData: any = {};
   private d3Available: boolean = false;
 
   // Navigation cards for different analysis tools (using correct routes)
   private navigationCards = [
     {
-      id: 'relationships',
-      title: 'Relationship Graph',
-      icon: '🕸️',
-      description: 'Interactive symbol dependencies and connections',
-      route: '/relationships',
-      category: 'analysis',
-      status: 'available'
+      id: "relationships",
+      title: "Relationship Graph",
+      icon: "🕸️",
+      description: "Interactive symbol dependencies and connections",
+      route: "/relationships",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'code-flow',
-      title: 'Code Flow Explorer',
-      icon: '🌊',
-      description: 'Execution paths and control flow analysis',
-      route: '/code-flow',
-      category: 'analysis',
-      status: 'available'
+      id: "code-flow",
+      title: "Code Flow Explorer",
+      icon: "🌊",
+      description: "Execution paths and control flow analysis",
+      route: "/code-flow",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'enhanced-flow',
-      title: 'Enhanced Code Flow',
-      icon: '⚡',
-      description: 'Advanced control flow with runtime context',
-      route: '/enhanced-flow',
-      category: 'analysis',
-      status: 'available'
+      id: "enhanced-flow",
+      title: "Enhanced Code Flow",
+      icon: "⚡",
+      description: "Advanced control flow with runtime context",
+      route: "/enhanced-flow",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'impact',
-      title: 'Impact Analysis',
-      icon: '💥',
-      description: 'Change impact and ripple effect visualization',
-      route: '/impact',
-      category: 'analysis',
-      status: 'available'
+      id: "impact",
+      title: "Impact Analysis",
+      icon: "💥",
+      description: "Change impact and ripple effect visualization",
+      route: "/impact",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'multi-language',
-      title: 'Multi-Language Flow',
-      icon: '🌍',
-      description: 'Cross-language interactions and boundaries',
-      route: '/multi-language-flow',
-      category: 'analysis',
-      status: 'available'
+      id: "multi-language",
+      title: "Multi-Language Flow",
+      icon: "🌍",
+      description: "Cross-language interactions and boundaries",
+      route: "/multi-language-flow",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'patterns',
-      title: 'Pattern Analyzer',
-      icon: '🧩',
-      description: 'Design patterns and anti-pattern detection',
-      route: '/patterns',
-      category: 'intelligence',
-      status: 'available'
+      id: "patterns",
+      title: "Pattern Analyzer",
+      icon: "🧩",
+      description: "Design patterns and anti-pattern detection",
+      route: "/patterns",
+      category: "intelligence",
+      status: "available",
     },
     {
-      id: 'namespace',
-      title: 'Namespace Explorer',
-      icon: '🗂️',
-      description: 'Namespace structure and organization',
-      route: '/namespaces',
-      category: 'structure',
-      status: 'available'
+      id: "namespace",
+      title: "Namespace Explorer",
+      icon: "🗂️",
+      description: "Namespace structure and organization",
+      route: "/namespaces",
+      category: "structure",
+      status: "available",
     },
     {
-      id: 'insights',
-      title: 'Code Insights',
-      icon: '💡',
-      description: 'Intelligent code recommendations and insights',
-      route: '/insights',
-      category: 'intelligence',
-      status: 'available'
+      id: "insights",
+      title: "Code Insights",
+      icon: "💡",
+      description: "Intelligent code recommendations and insights",
+      route: "/insights",
+      category: "intelligence",
+      status: "available",
     },
     {
-      id: 'performance',
-      title: 'Performance Hotspots',
-      icon: '🔥',
-      description: 'Performance bottlenecks and optimization opportunities',
-      route: '/performance',
-      category: 'analysis',
-      status: 'available'
+      id: "performance",
+      title: "Performance Hotspots",
+      icon: "🔥",
+      description: "Performance bottlenecks and optimization opportunities",
+      route: "/performance",
+      category: "analysis",
+      status: "available",
     },
     {
-      id: 'search',
-      title: 'Search Interface',
-      icon: '🔍',
-      description: 'Advanced code search and symbol lookup',
-      route: '/search',
-      category: 'structure',
-      status: 'available'
-    }
+      id: "search",
+      title: "Search Interface",
+      icon: "🔍",
+      description: "Advanced code search and symbol lookup",
+      route: "/search",
+      category: "structure",
+      status: "available",
+    },
   ];
 
   async loadData(): Promise<void> {
@@ -117,34 +117,33 @@ export class AnalyticsHub extends DashboardComponent {
       // Load overview statistics only (no complex visualizations)
       await Promise.allSettled([
         this.loadOverviewStats(),
-        this.loadRecentActivity()
+        this.loadRecentActivity(),
       ]);
-
     } catch (error) {
-      console.error('Failed to load analytics overview:', error);
+      console.error("Failed to load analytics overview:", error);
     }
   }
 
   private async loadOverviewStats(): Promise<void> {
     try {
-      const stats = await this.fetchAPI('/api/stats');
+      const stats = await this.fetchAPI("/api/stats");
       this.chartData.overview = {
         totalSymbols: stats?.total_symbols || 0,
         totalFiles: stats?.total_files || 0,
         namespaces: Object.keys(stats?.kindBreakdown || {}).length,
         languages: stats?.languages?.length || 0,
         complexity: stats?.avg_complexity || 0,
-        patterns: stats?.patterns_detected || 0
+        patterns: stats?.patterns_detected || 0,
       };
     } catch (error) {
-      console.warn('Failed to load overview stats:', error);
+      console.warn("Failed to load overview stats:", error);
       this.chartData.overview = {
         totalSymbols: 0,
         totalFiles: 0,
         namespaces: 0,
         languages: 0,
         complexity: 0,
-        patterns: 0
+        patterns: 0,
       };
     }
   }
@@ -153,17 +152,36 @@ export class AnalyticsHub extends DashboardComponent {
     try {
       // Mock recent activity for now
       this.chartData.recentActivity = [
-        { type: 'analysis', component: 'Relationship Graph', time: '2 minutes ago', icon: '🕸️' },
-        { type: 'pattern', component: 'Pattern Analyzer', time: '15 minutes ago', icon: '🧩' },
-        { type: 'flow', component: 'Code Flow Explorer', time: '1 hour ago', icon: '🌊' },
-        { type: 'impact', component: 'Impact Analysis', time: '2 hours ago', icon: '💥' }
+        {
+          type: "analysis",
+          component: "Relationship Graph",
+          time: "2 minutes ago",
+          icon: "🕸️",
+        },
+        {
+          type: "pattern",
+          component: "Pattern Analyzer",
+          time: "15 minutes ago",
+          icon: "🧩",
+        },
+        {
+          type: "flow",
+          component: "Code Flow Explorer",
+          time: "1 hour ago",
+          icon: "🌊",
+        },
+        {
+          type: "impact",
+          component: "Impact Analysis",
+          time: "2 hours ago",
+          icon: "💥",
+        },
       ];
     } catch (error) {
-      console.warn('Failed to load recent activity:', error);
+      console.warn("Failed to load recent activity:", error);
       this.chartData.recentActivity = [];
     }
   }
-
 
   render(): void {
     this.shadow.innerHTML = `
@@ -194,7 +212,7 @@ export class AnalyticsHub extends DashboardComponent {
 
   private renderOverviewStats(): string {
     const stats = this.chartData.overview || {};
-    
+
     return `
       <div class="stat-card">
         <div class="stat-value">${stats.totalSymbols || 0}</div>
@@ -217,16 +235,22 @@ export class AnalyticsHub extends DashboardComponent {
 
   private renderNavigationCards(): string {
     const cardsByCategory = this.groupCardsByCategory();
-    
+
     return `
       <div class="navigation-section">
         <h2 class="section-title">🚀 Analysis Tools</h2>
         <div class="navigation-grid">
-          ${Object.entries(cardsByCategory).map(([category, cards]) => `
+          ${Object.entries(cardsByCategory)
+            .map(
+              ([category, cards]) => `
             <div class="category-section">
-              <h3 class="category-title">${this.getCategoryIcon(category)} ${this.getCategoryTitle(category)}</h3>
+              <h3 class="category-title">${this.getCategoryIcon(
+                category
+              )} ${this.getCategoryTitle(category)}</h3>
               <div class="cards-grid">
-                ${(cards as any[]).map(card => `
+                ${(cards as any[])
+                  .map(
+                    (card) => `
                   <div class="nav-card" data-route="${card.route}">
                     <div class="card-icon">${card.icon}</div>
                     <div class="card-content">
@@ -234,13 +258,17 @@ export class AnalyticsHub extends DashboardComponent {
                       <p class="card-description">${card.description}</p>
                     </div>
                     <div class="card-status ${card.status}">
-                      ${card.status === 'available' ? '✅' : '🚧'}
+                      ${card.status === "available" ? "✅" : "🚧"}
                     </div>
                   </div>
-                `).join('')}
+                `
+                  )
+                  .join("")}
               </div>
             </div>
-          `).join('')}
+          `
+            )
+            .join("")}
         </div>
       </div>
     `;
@@ -248,12 +276,16 @@ export class AnalyticsHub extends DashboardComponent {
 
   private renderRecentActivity(): string {
     const activity = this.chartData.recentActivity || [];
-    
+
     return `
       <div class="activity-section">
         <h2 class="section-title">⏱️ Recent Activity</h2>
         <div class="activity-list">
-          ${activity.length > 0 ? activity.map((item: any) => `
+          ${
+            activity.length > 0
+              ? activity
+                  .map(
+                    (item: any) => `
             <div class="activity-item">
               <div class="activity-icon">${item.icon}</div>
               <div class="activity-content">
@@ -264,13 +296,17 @@ export class AnalyticsHub extends DashboardComponent {
                 ${item.type.charAt(0).toUpperCase() + item.type.slice(1)}
               </div>
             </div>
-          `).join('') : `
+          `
+                  )
+                  .join("")
+              : `
             <div class="no-activity">
               <div class="no-activity-icon">📊</div>
               <div class="no-activity-text">No recent analysis activity</div>
               <div class="no-activity-subtitle">Start exploring your codebase using the tools above</div>
             </div>
-          `}
+          `
+          }
         </div>
       </div>
     `;
@@ -278,41 +314,43 @@ export class AnalyticsHub extends DashboardComponent {
 
   private groupCardsByCategory(): Record<string, any[]> {
     const grouped: Record<string, any[]> = {};
-    
-    this.navigationCards.forEach(card => {
+
+    this.navigationCards.forEach((card) => {
       if (!grouped[card.category]) {
         grouped[card.category] = [];
       }
       grouped[card.category].push(card);
     });
-    
+
     return grouped;
   }
 
   private getCategoryIcon(category: string): string {
     const icons: Record<string, string> = {
-      'analysis': '🔍',
-      'intelligence': '🧠',
-      'structure': '🏗️'
+      analysis: "🔍",
+      intelligence: "🧠",
+      structure: "🏗️",
     };
-    return icons[category] || '📊';
+    return icons[category] || "📊";
   }
 
   private getCategoryTitle(category: string): string {
     const titles: Record<string, string> = {
-      'analysis': 'Code Analysis',
-      'intelligence': 'AI Intelligence', 
-      'structure': 'Structure & Navigation'
+      analysis: "Code Analysis",
+      intelligence: "AI Intelligence",
+      structure: "Structure & Navigation",
     };
-    return titles[category] || category.charAt(0).toUpperCase() + category.slice(1);
+    return (
+      titles[category] || category.charAt(0).toUpperCase() + category.slice(1)
+    );
   }
 
   private setupEventListeners(): void {
     // Navigation card click listeners
-    this.shadow.querySelectorAll('.nav-card').forEach(card => {
-      card.addEventListener('click', (e) => {
+    this.shadow.querySelectorAll(".nav-card").forEach((card) => {
+      card.addEventListener("click", (e) => {
         const target = e.currentTarget as HTMLElement;
-        const route = target.getAttribute('data-route');
+        const route = target.getAttribute("data-route");
         if (route) {
           this.navigateToRoute(route);
         }
@@ -322,8 +360,8 @@ export class AnalyticsHub extends DashboardComponent {
 
   private navigateToRoute(route: string): void {
     // Remove leading slash for hash navigation
-    const hashRoute = route.startsWith('/') ? route.substring(1) : route;
-    
+    const hashRoute = route.startsWith("/") ? route.substring(1) : route;
+
     // Try to use router if available, otherwise fallback to hash navigation
     const router = (window as any).dashboardServices?.router;
     if (router) {
@@ -331,14 +369,7 @@ export class AnalyticsHub extends DashboardComponent {
     } else {
       window.location.hash = `#/${hashRoute}`;
     }
-    
-    console.log(`🚀 Navigating to: ${route}`);
   }
-
-
-
-
-
 
   styles(): string {
     return `
@@ -754,4 +785,4 @@ export class AnalyticsHub extends DashboardComponent {
   }
 }
 
-defineComponent('analytics-hub', AnalyticsHub);
+defineComponent("analytics-hub", AnalyticsHub);

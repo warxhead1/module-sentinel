@@ -33,10 +33,11 @@ export class GraphDataProcessor {
    */
   public processGraphData(rawData: GraphData): GraphData {
     const processedNodes = this.processNodes(rawData.nodes);
-    const processedEdges = this.processEdges(rawData.edges, processedNodes);
+    const hierarchicalNodes = this.createClassContainerNodes(processedNodes);
+    const processedEdges = this.processEdges(rawData.edges, hierarchicalNodes);
     
     return {
-      nodes: processedNodes,
+      nodes: hierarchicalNodes,
       edges: processedEdges
     };
   }
@@ -126,6 +127,7 @@ export class GraphDataProcessor {
         'rs': 'rust',
         'go': 'go',
         'java': 'java', 'kt': 'kotlin',
+        'cs': 'csharp',
       };
       return languageMap[ext || ''] || 'unknown';
     }
@@ -191,7 +193,7 @@ export class GraphDataProcessor {
     const languageMap = new Map<string, GraphNode>();
 
     // First pass: create group nodes
-    data.nodes.forEach(node => {
+    newNodes.forEach(node => {
       // Ensure language is detected
       if (!node.language) {
         node.language = this.detectLanguage(node);
@@ -335,6 +337,193 @@ export class GraphDataProcessor {
   }
 
   /**
+   * Create class container nodes that group methods and properties
+   */
+  private createClassContainerNodes(nodes: GraphNode[]): GraphNode[] {
+    const containerNodes: GraphNode[] = [];
+    const processedNodes: Set<string> = new Set();
+    const classContainerMap = new Map<string, GraphNode>();
+
+    // Group nodes by their parent class
+    const classMemberMap = new Map<string, GraphNode[]>();
+    
+    nodes.forEach(node => {
+      if (node.type === 'class' || node.type === 'interface' || node.type === 'struct') {
+        // This is a class-like container
+        if (!classMemberMap.has(node.id)) {
+          classMemberMap.set(node.id, []);
+        }
+        
+        // Create enhanced class container
+        const containerNode: GraphNode = {
+          ...node,
+          type: `${node.type}-container`,
+          isExpanded: true, // Default to expanded
+          containerType: 'class',
+          childNodes: [],
+          aggregatedMethods: [],
+          metrics: {
+            ...node.metrics,
+            childCount: 0,
+            methodCount: 0,
+            propertyCount: 0
+          }
+        };
+        classContainerMap.set(node.id, containerNode);
+      } else if (node.parentSymbolId) {
+        // This is a member of a class
+        const parentId = node.parentSymbolId.toString();
+        if (!classMemberMap.has(parentId)) {
+          classMemberMap.set(parentId, []);
+        }
+        classMemberMap.get(parentId)!.push(node);
+      } else if (this.couldBelongToClass(node)) {
+        // Try to infer class membership from qualified names and patterns
+        const inferredParentId = this.inferClassParent(node, nodes);
+        if (inferredParentId) {
+          if (!classMemberMap.has(inferredParentId)) {
+            classMemberMap.set(inferredParentId, []);
+          }
+          classMemberMap.get(inferredParentId)!.push(node);
+        }
+      }
+    });
+
+    // Process each class and its members
+    classMemberMap.forEach((members, classId) => {
+      const classContainer = classContainerMap.get(classId);
+      if (!classContainer) {
+        // No class container found, add individual nodes
+        members.forEach(member => {
+          if (!processedNodes.has(member.id)) {
+            containerNodes.push(member);
+            processedNodes.add(member.id);
+          }
+        });
+        return;
+      }
+
+      // Separate methods from properties
+      const methods = members.filter(m => m.type === 'method' || m.type === 'function');
+      const properties = members.filter(m => m.type === 'property' || m.type === 'field' || m.type === 'variable');
+      const others = members.filter(m => !methods.includes(m) && !properties.includes(m));
+
+      // Classify methods by complexity for aggregation
+      const simpleMethods = methods.filter(m => this.isSimpleMethod(m));
+      const complexMethods = methods.filter(m => !this.isSimpleMethod(m));
+
+      // Update container metrics
+      classContainer.metrics!.childCount = members.length;
+      classContainer.metrics!.methodCount = methods.length;
+      classContainer.metrics!.propertyCount = properties.length;
+
+      // Add simple methods as aggregated badges
+      classContainer.aggregatedMethods = simpleMethods.map(m => ({
+        id: m.id,
+        name: m.name,
+        type: m.type,
+        visibility: m.visibility,
+        metrics: m.metrics,
+        isPublic: m.visibility === 'public',
+        complexity: m.metrics?.cyclomaticComplexity || 1
+      }));
+
+      // Add complex methods and properties as expandable child nodes
+      classContainer.childNodes = [...complexMethods, ...properties, ...others].map(child => ({
+        ...child,
+        parentContainerId: classContainer.id,
+        isVisible: classContainer.isExpanded
+      }));
+
+      // Mark all members as processed
+      members.forEach(member => processedNodes.add(member.id));
+      
+      containerNodes.push(classContainer);
+      processedNodes.add(classContainer.id);
+    });
+
+    // Add remaining nodes that weren't part of any class
+    nodes.forEach(node => {
+      if (!processedNodes.has(node.id)) {
+        containerNodes.push(node);
+      }
+    });
+
+    return containerNodes;
+  }
+
+  /**
+   * Determine if a method should be aggregated (shown as badge) vs expanded (shown as node)
+   */
+  private isSimpleMethod(node: GraphNode): boolean {
+    const loc = node.metrics?.loc || 0;
+    const complexity = node.metrics?.cyclomaticComplexity || 1;
+    const callCount = node.metrics?.callCount || 0;
+    
+    // Aggregate simple methods: small, low complexity, private/protected
+    return (
+      loc < 15 && 
+      complexity <= 3 && 
+      callCount < 10 && 
+      (node.visibility === 'private' || node.visibility === 'protected')
+    );
+  }
+
+  /**
+   * Check if a node could belong to a class based on its properties
+   */
+  private couldBelongToClass(node: GraphNode): boolean {
+    const hasMethodType = (node.type === 'method' || node.type === 'function' || node.type === 'property' || node.type === 'field');
+    const hasQualifiedName = !!(node.qualifiedName?.includes('::') || node.qualifiedName?.includes('.'));
+    const hasNamespace = !!node.namespace;
+    
+    return hasMethodType && hasQualifiedName && hasNamespace;
+  }
+
+  /**
+   * Try to infer which class a node belongs to based on patterns
+   */
+  private inferClassParent(node: GraphNode, allNodes: GraphNode[]): string | null {
+    if (!node.qualifiedName) return null;
+
+    // For C++ style: "ClassName::methodName" or "Namespace::ClassName::methodName"
+    if (node.qualifiedName.includes('::')) {
+      const parts = node.qualifiedName.split('::');
+      if (parts.length >= 2) {
+        // Try to find a class with a matching qualified name pattern
+        const potentialClassName = parts[parts.length - 2]; // Second to last part
+        const potentialClassQualifiedName = parts.slice(0, -1).join('::');
+        
+        const parentClass = allNodes.find(n => 
+          n.type === 'class' && 
+          (n.name === potentialClassName || n.qualifiedName === potentialClassQualifiedName)
+        );
+        
+        if (parentClass) {
+          return parentClass.id;
+        }
+      }
+    }
+
+    // For other languages: "Class.method" patterns
+    if (node.qualifiedName.includes('.')) {
+      const parts = node.qualifiedName.split('.');
+      if (parts.length >= 2) {
+        const potentialClassName = parts[parts.length - 2];
+        const parentClass = allNodes.find(n => 
+          n.type === 'class' && n.name === potentialClassName
+        );
+        
+        if (parentClass) {
+          return parentClass.id;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Filter graph data based on provided filters
    */
   public filterGraphData(data: GraphData, filters: GraphFilters): GraphData {
@@ -421,6 +610,11 @@ export class GraphDataProcessor {
     relationships.forEach(rel => {
       // Create source node if not exists
       if (!nodes.has(rel.from_symbol_id.toString())) {
+        // Debug language data
+        if (!rel.from_language) {
+          console.warn('🔍 Missing from_language for symbol:', rel.from_name, 'file:', rel.from_file_path);
+        }
+        
         const sourceNode: GraphNode = {
           id: rel.from_symbol_id.toString(),
           name: rel.from_name || 'Unknown',
@@ -456,6 +650,11 @@ export class GraphDataProcessor {
 
       // Create target node if not exists  
       if (!nodes.has(rel.to_symbol_id.toString())) {
+        // Debug language data
+        if (!rel.to_language) {
+          console.warn('🔍 Missing to_language for symbol:', rel.to_name, 'file:', rel.to_file_path);
+        }
+        
         const targetNode: GraphNode = {
           id: rel.to_symbol_id.toString(),
           name: rel.to_name || 'Unknown',
@@ -584,16 +783,37 @@ export class GraphDataProcessor {
    */
   private detectLanguageFromSymbol(rel: any, prefix: 'from' | 'to' = 'from'): string {
     const qualifiedName = prefix === 'from' ? rel.from_qualified_name : rel.to_qualified_name;
+    const filePath = prefix === 'from' ? rel.from_file_path : rel.to_file_path;
+    const symbolName = prefix === 'from' ? rel.from_name : rel.to_name;
     
+    // First try to detect from file extension
+    if (filePath) {
+      if (filePath.endsWith('.go')) return 'go';
+      if (filePath.endsWith('.java')) return 'java';
+      if (filePath.endsWith('.cs')) return 'csharp';
+      if (filePath.endsWith('.py') || filePath.endsWith('.pyi')) return 'python';
+      if (filePath.endsWith('.ts') || filePath.endsWith('.tsx')) return 'typescript';
+      if (filePath.endsWith('.js') || filePath.endsWith('.jsx') || filePath.endsWith('.mjs')) return 'javascript';
+      if (filePath.endsWith('.cpp') || filePath.endsWith('.cc') || filePath.endsWith('.cxx') || 
+          filePath.endsWith('.ixx') || filePath.endsWith('.h') || filePath.endsWith('.hpp')) return 'cpp';
+    }
+    
+    // Fallback to qualified name patterns
     if (qualifiedName?.includes('::')) {
       return 'cpp';
     }
     
     if (qualifiedName?.includes('.') && !qualifiedName?.includes('::')) {
+      // Could be Java, C#, or Python - check for common patterns
+      if (qualifiedName.match(/^[a-z]+(\.[a-z][a-zA-Z]*)*\.[A-Z]/)) {
+        return 'java'; // Java package naming convention
+      }
       return 'python';
     }
     
-    return 'cpp'; // Default to cpp
+    // Debug: log when we can't detect language
+    console.warn('🔍 Could not detect language for symbol:', symbolName, 'file:', filePath, 'qualified:', qualifiedName);
+    return 'unknown'; // Don't default to cpp, be explicit about unknown
   }
 
   /**
@@ -679,6 +899,7 @@ export class GraphDataProcessor {
       'rust': 'Rust',
       'go': 'Go',
       'java': 'Java',
+      'csharp': 'C#',
       'kotlin': 'Kotlin',
       'unknown': 'Unknown'
     };

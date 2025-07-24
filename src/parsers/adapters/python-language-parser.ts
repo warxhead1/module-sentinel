@@ -38,6 +38,14 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
         if (classNameNode) {
           const className = this.getNodeText(classNameNode, context.content);
           const qualifiedName = this.getQualifiedName(node, context.content);
+          const decorators = this.getDecorators(node, context.content);
+          
+          // Check if this is a dataclass
+          const semanticTags: string[] = [];
+          if (decorators.some(d => d === 'dataclass' || d.startsWith('dataclass('))) {
+            semanticTags.push('dataclass');
+          }
+          
           return {
             name: className,
             qualifiedName: qualifiedName,
@@ -49,12 +57,12 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
             endColumn: node.endPosition.column,
             isDefinition: true,
             confidence: 1.0,
-            semanticTags: [],
+            semanticTags: semanticTags,
             complexity: 1,
             isExported: this.isExported(node, context),
             isAsync: false,
             languageFeatures: {
-              decorators: this.getDecorators(node, context.content),
+              decorators: decorators,
               baseClasses: this.getBaseClasses(node, context.content),
               docstring: this.getDocstring(node, context.content)
             }
@@ -213,7 +221,11 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
       
       // Decorator detection
       if (trimmedLine.startsWith('@')) {
-        decorators.push(trimmedLine.slice(1));
+        // Extract decorator name without parentheses
+        const decoratorMatch = trimmedLine.slice(1).match(/^(\w+)/);
+        if (decoratorMatch) {
+          decorators.push(decoratorMatch[1]);
+        }
         continue;
       }
       

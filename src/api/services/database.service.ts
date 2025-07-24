@@ -127,10 +127,16 @@ export class DatabaseService {
     let sql = `
       SELECT r.*, 
         s1.name as from_name, s1.qualified_name as from_qualified_name,
-        s2.name as to_name, s2.qualified_name as to_qualified_name
+        s1.kind as from_kind, s1.namespace as from_namespace,
+        l1.name as from_language,
+        s2.name as to_name, s2.qualified_name as to_qualified_name,
+        s2.kind as to_kind, s2.namespace as to_namespace,
+        l2.name as to_language
       FROM universal_relationships r
       JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
       JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
+      LEFT JOIN languages l1 ON s1.language_id = l1.id
+      LEFT JOIN languages l2 ON s2.language_id = l2.id
       WHERE 1=1
     `;
     
@@ -154,8 +160,14 @@ export class DatabaseService {
     return this.db.prepare(sql).all(...params) as Array<Relationship & {
       from_name: string;
       from_qualified_name: string;
+      from_kind: string;
+      from_namespace: string;
+      from_language: string;
       to_name: string;
       to_qualified_name: string;
+      to_kind: string;
+      to_namespace: string;
+      to_language: string;
     }>;
   }
 
@@ -288,13 +300,14 @@ export class DatabaseService {
           p.display_name,
           p.description,
           p.root_path,
+          p.metadata,
           p.is_active,
           p.created_at,
           COUNT(s.id) as symbol_count
         FROM projects p
         LEFT JOIN universal_symbols s ON p.id = s.project_id
         WHERE p.is_active = 1
-        GROUP BY p.id, p.name, p.display_name, p.description, p.root_path, p.is_active, p.created_at
+        GROUP BY p.id, p.name, p.display_name, p.description, p.root_path, p.metadata, p.is_active, p.created_at
         ORDER BY p.name
       `).all() as Array<{
         id: number;
@@ -302,6 +315,7 @@ export class DatabaseService {
         display_name: string | null;
         description: string | null;
         root_path: string;
+        metadata: any;
         is_active: number;
         created_at: string;
         symbol_count: number;
@@ -458,5 +472,13 @@ export class DatabaseService {
     } catch (error) {
       return { healthy: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
+  }
+
+  /**
+   * Get the database file path
+   */
+  getDatabasePath(): string {
+    // Access the database path through the name property of better-sqlite3
+    return (this.db as any).name || '';
   }
 }

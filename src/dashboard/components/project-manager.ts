@@ -58,7 +58,7 @@ export class ProjectManager extends DashboardComponent {
       <div class="project-manager">
         <div class="manager-header">
           <h2>Project Management</h2>
-          <button class="add-project-btn" ${this.showAddForm ? 'style="display: none;"' : ''}>
+          <button type="button" class="add-project-btn" ${this.showAddForm ? 'style="display: none;"' : ''}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2z"/>
             </svg>
@@ -90,7 +90,7 @@ export class ProjectManager extends DashboardComponent {
       <div class="add-form">
         <div class="form-header">
           <h3>Add New Project</h3>
-          <button class="cancel-btn">Cancel</button>
+          <button type="button" class="cancel-btn">Cancel</button>
         </div>
         
         <form class="project-form">
@@ -113,12 +113,27 @@ export class ProjectManager extends DashboardComponent {
 
           <div class="form-group">
             <label>Root Path</label>
-            <input type="text" name="rootPath" placeholder="/path/to/project/root" required>
+            <div class="path-input-container">
+              <input type="text" name="rootPath" placeholder="/path/to/project/root" required>
+              <button type="button" class="browse-btn" title="Browse for folder">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M1.75 1a.75.75 0 0 0-.75.75v3c0 .414.336.75.75.75h2.5a.75.75 0 0 0 .75-.75V2.75h8.25a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-12a.75.75 0 0 1-.75-.75v-8.5c0-.414.336-.75.75-.75z"/>
+                  <path d="M6 4.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v.75a.25.25 0 0 1-.25.25h-3.5a.25.25 0 0 1-.25-.25z"/>
+                </svg>
+              </button>
+            </div>
             <div class="help-text">Absolute path to the project's root directory</div>
+            <div class="file-browser" style="display: none;"></div>
           </div>
 
           <div class="form-group">
             <label>Supported Languages</label>
+            <div class="select-all-container">
+              <label class="checkbox-label select-all-label">
+                <input type="checkbox" id="select-all-languages">
+                <span><strong>Select All</strong></span>
+              </label>
+            </div>
             <div class="language-checkboxes">
               <label class="checkbox-label">
                 <input type="checkbox" name="languages" value="cpp" checked>
@@ -162,6 +177,8 @@ export class ProjectManager extends DashboardComponent {
 
   private renderProject(project: any): string {
     const lastUpdated = new Date(project.created_at).toLocaleDateString();
+    const additionalPaths = project.metadata?.additionalPaths || [];
+    const languages = project.metadata?.languages || [];
     
     return `
       <div class="project-card" data-project-id="${project.id}">
@@ -169,23 +186,29 @@ export class ProjectManager extends DashboardComponent {
           <div class="project-info">
             <h3 class="project-name">${project.display_name || project.name}</h3>
             <div class="project-meta">
-              <span class="project-path">${project.root_path}</span>
+              <span class="project-path" title="${project.root_path}">${project.root_path}</span>
+              ${additionalPaths.length > 0 ? 
+                `<span class="project-additional-paths" title="${additionalPaths.join('\n')}">+${additionalPaths.length} paths</span>` : 
+                ''}
               <span class="project-symbols">${project.symbol_count} symbols</span>
+              ${languages.length > 0 ? 
+                `<span class="project-languages" title="${languages.join(', ')}">${languages.join(', ')}</span>` : 
+                ''}
             </div>
           </div>
           <div class="project-actions">
-            <button class="action-btn scan-btn" title="Scan project">
+            <button type="button" class="action-btn scan-btn" title="Scan project">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A3.488 3.488 0 0 1 8 4.5a3.487 3.487 0 0 1 2.927 1.073l1.204-1.204A5.487 5.487 0 0 0 8 2.5zm-6.131 3.869a5.487 5.487 0 0 0 0 7.262l1.204-1.204a3.487 3.487 0 0 1 0-4.854L1.869 6.369zm12.262 0l-1.204 1.204a3.487 3.487 0 0 1 0 4.854l1.204 1.204a5.487 5.487 0 0 0 0-7.262zM8 13.5a3.487 3.487 0 0 1-2.927-1.073L3.869 13.631A5.487 5.487 0 0 0 8 15.5a5.487 5.487 0 0 0 4.131-1.869l-1.204-1.204A3.487 3.487 0 0 1 8 13.5z"/>
                 <circle cx="8" cy="8" r="1.5"/>
               </svg>
             </button>
-            <button class="action-btn edit-btn" title="Edit project">
+            <button type="button" class="action-btn edit-btn" title="Edit project">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="m13.498.795.149-.149a1.207 1.207 0 1 1 1.707 1.708l-.149.148a1.5 1.5 0 0 1-.059 2.059L4.854 14.854a.5.5 0 0 1-.233.131l-4 1a.5.5 0 0 1-.606-.606l1-4a.5.5 0 0 1 .131-.232l9.642-9.642a.5.5 0 0 0-.642.056L6.854 4.854a.5.5 0 1 1-.708-.708L9.44.854A1.5 1.5 0 0 1 11.5.796a1.5 1.5 0 0 1 1.998-.001zm-.644.766a.5.5 0 0 0-.707 0L1.95 11.756l-.764 3.057 3.057-.764L14.44 3.854a.5.5 0 0 0 0-.708l-1.585-1.585z"/>
               </svg>
             </button>
-            <button class="action-btn delete-btn" title="Delete project">
+            <button type="button" class="action-btn delete-btn" title="Delete project">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
                 <path fill-rule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
@@ -210,7 +233,7 @@ export class ProjectManager extends DashboardComponent {
 
   private renderLanguageBadges(project: any): string {
     // Get languages from project metadata or detected languages
-    const languages = project.languages || project.detectedLanguages || ['cpp']; // fallback to cpp
+    const languages = project.languages || project.detectedLanguages || ['cpp', 'python', 'typescript', 'javascript', 'go', 'java']; // multi-language fallback
     
     const languageNames: Record<string, string> = {
       cpp: 'C++',
@@ -246,12 +269,48 @@ export class ProjectManager extends DashboardComponent {
       });
     });
 
+    // File browser button
+    const browseBtn = this.shadow.querySelector('.browse-btn');
+    browseBtn?.addEventListener('click', () => {
+      this.toggleFileBrowser();
+    });
+
     // Form submission
     const form = this.shadow.querySelector('.project-form');
     form?.addEventListener('submit', (e) => {
       e.preventDefault();
       this.handleFormSubmit(e.target as HTMLFormElement);
     });
+
+    // Select all languages functionality
+    const selectAllCheckbox = this.shadow.querySelector('#select-all-languages') as HTMLInputElement;
+    const languageCheckboxes = this.shadow.querySelectorAll('input[name="languages"]') as NodeListOf<HTMLInputElement>;
+    
+    selectAllCheckbox?.addEventListener('change', () => {
+      languageCheckboxes.forEach(checkbox => {
+        checkbox.checked = selectAllCheckbox.checked;
+      });
+    });
+
+    // Update select all state when individual checkboxes change
+    languageCheckboxes.forEach(checkbox => {
+      checkbox.addEventListener('change', () => {
+        const allChecked = Array.from(languageCheckboxes).every(cb => cb.checked);
+        const noneChecked = Array.from(languageCheckboxes).every(cb => !cb.checked);
+        
+        selectAllCheckbox.checked = allChecked;
+        selectAllCheckbox.indeterminate = !allChecked && !noneChecked;
+      });
+    });
+
+    // Initialize select all state based on current checkboxes
+    if (selectAllCheckbox && languageCheckboxes.length > 0) {
+      const allChecked = Array.from(languageCheckboxes).every(cb => cb.checked);
+      const noneChecked = Array.from(languageCheckboxes).every(cb => !cb.checked);
+      
+      selectAllCheckbox.checked = allChecked;
+      selectAllCheckbox.indeterminate = !allChecked && !noneChecked;
+    }
 
     // Project action buttons
     this.shadow.querySelectorAll('.scan-btn').forEach(btn => {
@@ -519,12 +578,42 @@ export class ProjectManager extends DashboardComponent {
     const newRootPath = prompt('Root Path:', project.root_path);
     if (newRootPath === null) return;
 
+    // Handle additional paths
+    const existingAdditionalPaths = project.metadata?.additionalPaths || [];
+    const additionalPathsStr = prompt(
+      'Additional Paths (comma-separated):\n' +
+      'These paths will also be indexed along with the main root path.',
+      existingAdditionalPaths.join(', ')
+    );
+    if (additionalPathsStr === null) return;
+
+    // Handle languages
+    const existingLanguages = project.metadata?.languages || [];
+    const languagesStr = prompt(
+      'Languages to index (comma-separated):\n' +
+      'Available: cpp, python, typescript, javascript, go, java, csharp',
+      existingLanguages.join(', ')
+    );
+    if (languagesStr === null) return;
+
     try {
+      const additionalPaths = additionalPathsStr
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
+
+      const languages = languagesStr
+        .split(',')
+        .map(l => l.trim().toLowerCase())
+        .filter(l => l.length > 0);
+
       const updateData = {
         name: newName || project.name,
         displayName: newDisplayName || project.display_name,
         description: newDescription || project.description,
         rootPath: newRootPath || project.root_path,
+        additionalPaths,
+        languages,
         isActive: true
       };
 
@@ -619,6 +708,127 @@ export class ProjectManager extends DashboardComponent {
       const errorMessage = error instanceof Error ? error.message : String(error);
       alert(`❌ Failed to delete project:\n\n${errorMessage}`);
     }
+  }
+
+  /**
+   * Toggle file browser visibility and load directories
+   */
+  private async toggleFileBrowser(): Promise<void> {
+    const fileBrowser = this.shadow.querySelector('.file-browser') as HTMLElement;
+    const isVisible = fileBrowser.style.display !== 'none';
+    
+    if (isVisible) {
+      fileBrowser.style.display = 'none';
+    } else {
+      fileBrowser.style.display = 'block';
+      await this.loadDirectoryTree('/home'); // Start from user home
+    }
+  }
+
+  /**
+   * Load directory tree for browsing
+   */
+  private async loadDirectoryTree(path: string = '/'): Promise<void> {
+    try {
+      const response = await fetch(`/api/files/browse?path=${encodeURIComponent(path)}`);
+      if (!response.ok) {
+        throw new Error(`Failed to browse directory: ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to browse directory');
+      }
+      
+      this.renderDirectoryTree(result.data, path);
+    } catch (error) {
+      console.error('Failed to load directory:', error);
+      const fileBrowser = this.shadow.querySelector('.file-browser') as HTMLElement;
+      fileBrowser.innerHTML = `
+        <div class="browser-error">
+          <p>❌ Failed to browse directories</p>
+          <p class="error-detail">${error instanceof Error ? error.message : String(error)}</p>
+          <button type="button" class="retry-btn" onclick="this.closest('project-manager').loadDirectoryTree('/')">Retry</button>
+        </div>
+      `;
+    }
+  }
+
+  /**
+   * Render directory tree in the browser
+   */
+  private renderDirectoryTree(items: any[], currentPath: string): void {
+    const fileBrowser = this.shadow.querySelector('.file-browser') as HTMLElement;
+    
+    const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
+    
+    fileBrowser.innerHTML = `
+      <div class="directory-browser">
+        <div class="browser-header">
+          <div class="current-path">📁 ${currentPath}</div>
+          ${currentPath !== '/' ? `
+            <button type="button" class="up-btn" data-path="${parentPath}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0zM4.646 5.646a.5.5 0 0 1 .708 0L8 8.293l2.646-2.647a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 0-.708z"/>
+              </svg>
+              Up
+            </button>
+          ` : ''}
+        </div>
+        <div class="directory-list">
+          ${items.filter(item => item.isDirectory).map(item => `
+            <div class="directory-item" data-path="${item.path}">
+              <span class="dir-icon">📁</span>
+              <span class="dir-name">${item.name}</span>
+              <button type="button" class="select-btn" data-path="${item.path}">Select</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+
+    // Add event listeners for navigation
+    fileBrowser.querySelectorAll('.directory-item .dir-name, .directory-item .dir-icon').forEach(el => {
+      el.addEventListener('click', (e) => {
+        const path = (e.target as HTMLElement).closest('.directory-item')?.getAttribute('data-path');
+        if (path) {
+          this.loadDirectoryTree(path);
+        }
+      });
+    });
+
+    // Add event listeners for selection
+    fileBrowser.querySelectorAll('.select-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const path = (e.target as HTMLElement).getAttribute('data-path');
+        if (path) {
+          this.selectDirectory(path);
+        }
+      });
+    });
+
+    // Add up button listener
+    const upBtn = fileBrowser.querySelector('.up-btn');
+    upBtn?.addEventListener('click', (e) => {
+      const path = (e.target as HTMLElement).getAttribute('data-path');
+      if (path) {
+        this.loadDirectoryTree(path);
+      }
+    });
+  }
+
+  /**
+   * Select a directory and populate the path input
+   */
+  private selectDirectory(path: string): void {
+    const pathInput = this.shadow.querySelector('input[name="rootPath"]') as HTMLInputElement;
+    if (pathInput) {
+      pathInput.value = path;
+    }
+    
+    // Hide the file browser
+    const fileBrowser = this.shadow.querySelector('.file-browser') as HTMLElement;
+    fileBrowser.style.display = 'none';
   }
 
   styles(): string {
@@ -720,6 +930,17 @@ export class ProjectManager extends DashboardComponent {
         color: var(--text-muted);
       }
 
+      .select-all-container {
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      .select-all-label {
+        font-weight: 600;
+        color: var(--primary-accent);
+      }
+
       .language-checkboxes {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -738,6 +959,149 @@ export class ProjectManager extends DashboardComponent {
       .checkbox-label input[type="checkbox"] {
         width: auto;
         margin: 0;
+      }
+
+      .path-input-container {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .path-input-container input {
+        flex: 1;
+      }
+
+      .browse-btn {
+        padding: 12px;
+        background: rgba(147, 112, 219, 0.1);
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        cursor: pointer;
+        color: var(--text-secondary);
+        transition: var(--transition-smooth);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .browse-btn:hover {
+        background: rgba(147, 112, 219, 0.2);
+        color: var(--primary-accent);
+      }
+
+      .file-browser {
+        margin-top: 12px;
+        border: 1px solid var(--card-border);
+        border-radius: 8px;
+        background: var(--card-bg);
+        max-height: 300px;
+        overflow: hidden;
+      }
+
+      .directory-browser {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+
+      .browser-header {
+        padding: 12px;
+        border-bottom: 1px solid var(--card-border);
+        background: rgba(147, 112, 219, 0.05);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .current-path {
+        font-family: monospace;
+        font-size: 12px;
+        color: var(--text-secondary);
+      }
+
+      .up-btn {
+        padding: 4px 8px;
+        background: transparent;
+        border: 1px solid var(--card-border);
+        border-radius: 4px;
+        cursor: pointer;
+        color: var(--text-secondary);
+        font-size: 11px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .up-btn:hover {
+        background: rgba(147, 112, 219, 0.1);
+      }
+
+      .directory-list {
+        padding: 8px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      .directory-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: var(--transition-smooth);
+      }
+
+      .directory-item:hover {
+        background: rgba(147, 112, 219, 0.1);
+      }
+
+      .dir-icon {
+        font-size: 14px;
+      }
+
+      .dir-name {
+        flex: 1;
+        font-family: monospace;
+        font-size: 12px;
+        color: var(--text-primary);
+      }
+
+      .select-btn {
+        padding: 4px 8px;
+        background: var(--primary-accent);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: var(--transition-smooth);
+      }
+
+      .select-btn:hover {
+        background: var(--secondary-accent);
+      }
+
+      .browser-error {
+        padding: 16px;
+        text-align: center;
+        color: var(--text-muted);
+      }
+
+      .error-detail {
+        font-size: 12px;
+        color: var(--text-muted);
+        margin: 8px 0;
+      }
+
+      .retry-btn {
+        padding: 6px 12px;
+        background: var(--primary-accent);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
       }
 
       .form-actions {
@@ -829,8 +1193,10 @@ export class ProjectManager extends DashboardComponent {
 
       .project-meta {
         display: flex;
-        flex-direction: column;
-        gap: 4px;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
       }
 
       .project-path {
@@ -843,6 +1209,25 @@ export class ProjectManager extends DashboardComponent {
         font-size: 12px;
         color: var(--primary-accent);
         font-weight: 500;
+      }
+
+      .project-additional-paths {
+        font-size: 11px;
+        color: var(--success-color);
+        background: rgba(0, 230, 118, 0.1);
+        padding: 2px 6px;
+        border-radius: 4px;
+        cursor: help;
+      }
+
+      .project-languages {
+        font-size: 11px;
+        color: var(--info-color);
+        background: rgba(33, 150, 243, 0.1);
+        padding: 2px 6px;
+        border-radius: 4px;
+        cursor: help;
+        font-family: monospace;
       }
 
       .project-actions {

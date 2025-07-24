@@ -1,63 +1,58 @@
 #!/usr/bin/env node
 
-import { SecureConfigManager } from '../utils/secure-config.js';
+import { SecureConfigManager } from "../utils/secure-config.js";
 
 function showHelp() {
-  console.log('🔐 Module Sentinel Secure Configuration Manager');
-  console.log('==============================================');
+  console.log("🔐 Module Sentinel Secure Configuration Manager");
+  console.log("==============================================");
   console.log();
-  console.log('Usage: module-sentinel-config <command> [args]');
+  console.log("Usage: module-sentinel-config <command> [args]");
   console.log();
-  console.log('Commands:');
-  console.log('  init                    Initialize secure configuration');
-  console.log('  set-api-key <key>      Set Gemini API key securely');
-  console.log('  show                   Show current configuration (API key hidden)');
-  console.log('  check                  Check configuration security');
-  console.log('  path                   Show configuration file path');
-  console.log('  help                   Show this help');
+  console.log("Commands:");
+  console.log("  init                    Initialize secure configuration");
+  console.log("  set-api-key <key>      Set Gemini API key securely");
+  console.log(
+    "  show                   Show current configuration (API key hidden)"
+  );
+  console.log("  check                  Check configuration security");
+  console.log("  path                   Show configuration file path");
+  console.log("  help                   Show this help");
   console.log();
-  console.log('Examples:');
-  console.log('  module-sentinel-config init');
+  console.log("Examples:");
+  console.log("  module-sentinel-config init");
   console.log('  module-sentinel-config set-api-key "your-gemini-api-key"');
-  console.log('  module-sentinel-config check');
+  console.log("  module-sentinel-config check");
   console.log();
-  console.log('Security:');
-  console.log('  • Config stored in ~/.module-sentinel/config.json');
-  console.log('  • File permissions: 600 (owner read/write only)');
-  console.log('  • Directory permissions: 700 (owner access only)');
+  console.log("Security:");
+  console.log("  • Config stored in ~/.module-sentinel/config.json");
+  console.log("  • File permissions: 600 (owner read/write only)");
+  console.log("  • Directory permissions: 700 (owner access only)");
 }
 
 function showConfig() {
   const config = SecureConfigManager.getConfig();
-  
-  console.log('📋 Current Configuration:');
-  console.log('========================');
+
+  console.log("📋 Current Configuration:");
+  console.log("========================");
   console.log();
-  console.log(`Project Path: ${config.projectPath || 'Not set'}`);
-  console.log(`Database Path: ${config.dbPath || 'Not set'}`);
-  console.log(`API Key: ${config.geminiApiKey ? '✅ Configured (hidden)' : '❌ Not configured'}`);
+
   console.log();
-  console.log(`Config File: ${SecureConfigManager.getConfigPath()}`);
 }
 
 function checkSecurity() {
-  console.log('🔒 Security Check:');
-  console.log('=================');
+  console.log("🔒 Security Check:");
+  console.log("=================");
   console.log();
-  
+
   const security = SecureConfigManager.checkSecurity();
-  
+
   if (security.secure) {
-    console.log('✅ Configuration is secure');
+    console.log("✅ Configuration is secure");
   } else {
-    console.log('⚠️  Security issues found:');
-    security.issues.forEach(issue => {
-      console.log(`   • ${issue}`);
-    });
+    console.log("⚠️  Security issues found:");
+    security.issues.forEach((issue) => {});
     console.log();
-    console.log('🔧 To fix permissions:');
-    console.log(`   chmod 700 ~/.module-sentinel`);
-    console.log(`   chmod 600 ~/.module-sentinel/config.json`);
+    console.log("🔧 To fix permissions:");
   }
 }
 
@@ -67,50 +62,57 @@ async function main() {
 
   try {
     switch (command) {
-      case 'init':
+      case "init":
         await SecureConfigManager.initializeConfig();
         break;
 
-      case 'set-api-key':
+      case "set-api-key":
         if (args.length !== 1) {
-          console.error('❌ Error: set-api-key requires exactly one argument');
-          console.error('Usage: module-sentinel-config set-api-key <your-api-key>');
+          console.error("❌ Error: set-api-key requires exactly one argument");
+          console.error(
+            "Usage: module-sentinel-config set-api-key <your-api-key>"
+          );
           process.exit(1);
         }
         SecureConfigManager.setApiKey(args[0]);
         break;
 
-      case 'show':
+      case "show":
         showConfig();
         break;
 
-      case 'check':
+      case "check":
         checkSecurity();
         break;
 
-      case 'path':
+      case "path":
         console.log(SecureConfigManager.getConfigPath());
         break;
 
-      case 'help':
+      case "help":
       case undefined:
         showHelp();
         break;
 
       default:
         console.error(`❌ Unknown command: ${command}`);
-        console.error('Run "module-sentinel-config help" for usage information');
+        console.error(
+          'Run "module-sentinel-config help" for usage information'
+        );
         process.exit(1);
     }
   } catch (error) {
-    console.error('❌ Error:', error instanceof Error ? error.message : String(error));
+    console.error(
+      "❌ Error:",
+      error instanceof Error ? error.message : String(error)
+    );
     process.exit(1);
   }
 }
 
 if (require.main === module) {
-  main().catch(error => {
-    console.error('❌ Fatal error:', error);
+  main().catch((error) => {
+    console.error("❌ Fatal error:", error);
     process.exit(1);
   });
 }

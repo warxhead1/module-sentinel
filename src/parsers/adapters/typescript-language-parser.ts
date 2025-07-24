@@ -185,6 +185,7 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
               visibility: this.getVisibility(node),
               isStatic: this.isStatic(node),
               isReadonly: this.isReadonly(node),
+              isAbstract: this.isAbstract(node),
               typeParameters: this.getTypeParameters(node, context.content),
               parameters: this.getParameters(node, context.content),
               returnType: this.getReturnType(node, context.content),
@@ -637,6 +638,31 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         }
         
         return symbols.length > 0 ? symbols : null;
+      },
+
+      onNamespace: (node: Parser.SyntaxNode, context: VisitorContext): SymbolInfo | null => {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          const namespaceName = this.getNodeText(nameNode, context.content);
+          const qualifiedName = this.getQualifiedName(node, context.content);
+          return {
+            name: namespaceName,
+            qualifiedName: qualifiedName,
+            kind: UniversalSymbolKind.Namespace,
+            filePath: context.filePath,
+            line: node.startPosition.row,
+            column: node.startPosition.column,
+            endLine: node.endPosition.row,
+            endColumn: node.endPosition.column,
+            isDefinition: true,
+            confidence: 1.0,
+            semanticTags: [],
+            complexity: 1,
+            isExported: this.isExported(node, context),
+            isAsync: false
+          };
+        }
+        return null;
       }
     };
   }
@@ -644,9 +670,11 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
   protected getNodeTypeMap(): Map<string, keyof VisitorHandlers> {
     return new Map<string, keyof VisitorHandlers>([
       ['class_declaration', 'onClass'],
+      ['abstract_class_declaration', 'onClass'], // CRITICAL FIX: Add abstract class support
       ['interface_declaration', 'onInterface'],
       ['function_declaration', 'onFunction'],
       ['method_definition', 'onMethod'],
+      ['abstract_method_signature', 'onMethod'], // CRITICAL FIX: Add abstract method support
       ['call_expression', 'onCall'],
       ['import_statement', 'onImport'],
       ['export_statement', 'onExport'],
@@ -661,6 +689,9 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
       // Add destructuring pattern support
       ['object_pattern', 'onObjectPattern'],
       ['array_pattern', 'onArrayPattern'],
+      // Add namespace and module support
+      ['internal_module', 'onNamespace'],
+      ['module_declaration', 'onNamespace'],
     ]);
   }
 

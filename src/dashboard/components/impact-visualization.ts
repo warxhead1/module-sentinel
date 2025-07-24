@@ -3,6 +3,10 @@ import { dataService } from '../services/data.service.js';
 import { stateService } from '../services/state.service.js';
 import { showSymbolSelector } from './symbol-selector-modal.js';
 import { MultiLanguageDetector } from '../utils/multi-language-detector.js';
+import { iconRegistry } from '../utils/icon-registry.js';
+import { tooltipManager, TooltipManager } from '../utils/tooltip-manager.js';
+import { MicroChartRenderer } from '../utils/micro-chart-renderer.js';
+import type { ImpactMetrics, ImpactTimeline, ImpactRecommendation, CodeHealthIndicator } from '../types/dashboard.types.js';
 import * as d3 from 'd3';
 
 interface ImpactNode {
@@ -47,6 +51,11 @@ export class ImpactVisualization extends DashboardComponent {
   private animationTimer: any = null;
   private languageDetector: MultiLanguageDetector = new MultiLanguageDetector();
   private sourceLanguage: string = 'unknown';
+  private impactMetrics: ImpactMetrics | null = null;
+  private timeline: ImpactTimeline | null = null;
+  private recommendations: ImpactRecommendation[] = [];
+  private codeHealthMap: Map<number, CodeHealthIndicator> = new Map();
+  private showTimeline: boolean = false;
 
   async loadData(): Promise<void> {
     // Get selected symbol from state
@@ -80,12 +89,24 @@ export class ImpactVisualization extends DashboardComponent {
       // Enhance impact data with language information
       this.enhanceImpactDataWithLanguages();
       
+      // Load additional metrics and recommendations
+      await this.loadEnhancedMetrics();
+      
       this._loading = false;
       this.render();
       
       // Initialize visualization after render
-      setTimeout(() => this.initializeVisualization(), 100);
+      setTimeout(() => {
+        this.initializeVisualization();
+        this.setupEnhancedInteractions();
+      }, 100);
     } catch (error) {
+      // Don't show error for aborted requests (user switched tabs quickly)
+      if (error instanceof Error && error.name === 'AbortError') {
+        this._loading = false;
+        return;
+      }
+      
       this._error = error instanceof Error ? error.message : 'Failed to load impact data';
       this._loading = false;
       this.render();
@@ -432,6 +453,9 @@ export class ImpactVisualization extends DashboardComponent {
           ${this.impactData?.crossLanguageImpact ? this.renderCrossLanguageWarning() : ''}
         </div>
 
+        ${this.impactMetrics ? this.renderImpactMetrics() : ''}
+        ${this.recommendations.length > 0 ? this.renderRecommendations() : ''}
+
         <div class="visualization-container">
           ${this._loading ? this.renderLoading() : ''}
           ${this._error ? this.renderError() : ''}
@@ -583,6 +607,551 @@ export class ImpactVisualization extends DashboardComponent {
     `;
   }
 
+  private renderImpactMetrics(): string {
+    if (!this.impactMetrics) return '';
+
+    const metrics = this.impactMetrics;
+    const coverageClass = metrics.testCoverage.percentage < 50 ? 'metric-bad' : 
+                         metrics.testCoverage.percentage < 80 ? 'metric-warning' : 'metric-good';
+    
+    return `
+      <div class="impact-metrics-grid">
+        <div class="metric-card enhanced" data-metric="coverage">
+          <div class="metric-header">
+            <span class="metric-icon">${iconRegistry.render('hotspots', { size: 24 }).outerHTML}</span>
+            <h4>Test Coverage Impact</h4>
+          </div>
+          <div class="metric-content">
+            <div class="metric-main-value ${coverageClass}">
+              ${metrics.testCoverage.percentage}%
+            </div>
+            <div class="metric-subtitle">${metrics.testCoverage.covered} of ${metrics.testCoverage.affected} symbols covered</div>
+            <div class="metric-chart">
+              ${MicroChartRenderer.renderPieChart([
+                { value: metrics.testCoverage.covered, label: 'Covered' },
+                { value: metrics.testCoverage.affected - metrics.testCoverage.covered, label: 'Uncovered' }
+              ], { size: 60, donut: true }).outerHTML}
+            </div>
+          </div>
+        </div>
+
+        <div class="metric-card enhanced" data-metric="performance">
+          <div class="metric-header">
+            <span class="metric-icon">⚡</span>
+            <h4>Performance Impact</h4>
+          </div>
+          <div class="metric-content">
+            <div class="metric-stats-grid">
+              <div class="metric-stat">
+                <span class="stat-label">Latency</span>
+                <span class="stat-value metric-warning">+${metrics.performanceImpact.estimatedLatency}ms</span>
+              </div>
+              <div class="metric-stat">
+                <span class="stat-label">Memory</span>
+                <span class="stat-value metric-warning">+${metrics.performanceImpact.memoryDelta}%</span>
+              </div>
+              <div class="metric-stat">
+                <span class="stat-label">CPU</span>
+                <span class="stat-value">+${metrics.performanceImpact.cpuDelta}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric-card enhanced" data-metric="build">
+          <div class="metric-header">
+            <span class="metric-icon">🔨</span>
+            <h4>Build Impact</h4>
+          </div>
+          <div class="metric-content">
+            <div class="metric-main-value">${metrics.buildImpact.estimatedBuildTime}s</div>
+            <div class="metric-subtitle">Estimated build time</div>
+            <div class="metric-details">
+              <span class="detail-item">${metrics.buildImpact.affectedFiles} files</span>
+              <span class="detail-item">${metrics.buildImpact.incrementalBuildTime}s incremental</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="metric-card enhanced" data-metric="team">
+          <div class="metric-header">
+            <span class="metric-icon">👥</span>
+            <h4>Team Impact</h4>
+          </div>
+          <div class="metric-content">
+            <div class="metric-main-value">${metrics.teamImpact.affectedTeams.length}</div>
+            <div class="metric-subtitle">Teams affected</div>
+            <div class="team-list">
+              ${metrics.teamImpact.affectedTeams.map(team => 
+                `<span class="team-badge">${team}</span>`
+              ).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="metric-card enhanced risk-score" data-metric="risk">
+          <div class="metric-header">
+            <span class="metric-icon">⚠️</span>
+            <h4>Risk Score</h4>
+          </div>
+          <div class="metric-content">
+            <div class="risk-gauge">
+              <div class="risk-value ${metrics.riskScore.overall > 70 ? 'high-risk' : 
+                                      metrics.riskScore.overall > 40 ? 'medium-risk' : 'low-risk'}">
+                ${metrics.riskScore.overall}
+              </div>
+              <div class="risk-factors">
+                <div class="factor">Complexity: ${metrics.riskScore.complexity}</div>
+                <div class="factor">Testability: ${metrics.riskScore.testability}</div>
+                <div class="factor">Stability: ${metrics.riskScore.stability}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <style>
+        .impact-metrics-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+          gap: 20px;
+          margin: 20px 0;
+        }
+        
+        .metric-card.enhanced {
+          background: rgba(35, 35, 65, 0.9);
+          border: 1px solid rgba(147, 112, 219, 0.3);
+          border-radius: 12px;
+          padding: 20px;
+          backdrop-filter: blur(20px);
+          transition: all 0.3s ease;
+          cursor: pointer;
+        }
+        
+        .metric-card.enhanced:hover {
+          transform: translateY(-4px);
+          box-shadow: 0 8px 32px rgba(147, 112, 219, 0.3);
+          border-color: rgba(147, 112, 219, 0.5);
+        }
+        
+        .metric-header {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+        
+        .metric-header h4 {
+          margin: 0;
+          font-size: 1rem;
+          color: var(--text-primary);
+        }
+        
+        .metric-icon {
+          font-size: 24px;
+        }
+        
+        .metric-main-value {
+          font-size: 2.5rem;
+          font-weight: 700;
+          margin-bottom: 8px;
+        }
+        
+        .metric-good { color: #4ade80; }
+        .metric-warning { color: #f59e0b; }
+        .metric-bad { color: #ef4444; }
+        
+        .metric-subtitle {
+          color: var(--text-secondary);
+          font-size: 0.875rem;
+          margin-bottom: 12px;
+        }
+        
+        .metric-stats-grid {
+          display: grid;
+          gap: 12px;
+        }
+        
+        .metric-stat {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .stat-label {
+          color: var(--text-muted);
+          font-size: 0.875rem;
+        }
+        
+        .stat-value {
+          font-weight: 600;
+          font-size: 1.125rem;
+        }
+        
+        .team-badge {
+          display: inline-block;
+          padding: 4px 12px;
+          background: rgba(147, 112, 219, 0.2);
+          border: 1px solid rgba(147, 112, 219, 0.5);
+          border-radius: 20px;
+          font-size: 0.875rem;
+          margin: 4px;
+        }
+        
+        .risk-gauge {
+          text-align: center;
+        }
+        
+        .risk-value {
+          font-size: 3rem;
+          font-weight: 700;
+          margin-bottom: 16px;
+        }
+        
+        .high-risk { color: #ef4444; }
+        .medium-risk { color: #f59e0b; }
+        .low-risk { color: #4ade80; }
+        
+        .risk-factors {
+          display: grid;
+          gap: 8px;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+        }
+        
+        .metric-chart {
+          display: flex;
+          justify-content: center;
+          margin-top: 12px;
+        }
+        
+        .metric-details {
+          display: flex;
+          gap: 16px;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+        }
+      </style>
+    `;
+  }
+
+  private renderRecommendations(): string {
+    return `
+      <div class="recommendations-section">
+        <h3>🎯 Recommendations</h3>
+        <div class="recommendations-grid">
+          ${this.recommendations.map(rec => `
+            <div class="recommendation-card ${rec.priority}">
+              <div class="rec-header">
+                <span class="rec-type">${this.getRecommendationIcon(rec.type)}</span>
+                <span class="rec-priority ${rec.priority}">${rec.priority}</span>
+              </div>
+              <h4>${rec.title}</h4>
+              <p class="rec-reasoning">${rec.reasoning}</p>
+              <div class="rec-metrics">
+                <span class="metric-item">
+                  <span class="metric-label">Effort:</span>
+                  <span class="metric-value">${rec.estimatedEffort}h</span>
+                </span>
+                <span class="metric-item">
+                  <span class="metric-label">Risk ↓</span>
+                  <span class="metric-value">${rec.riskReduction}%</span>
+                </span>
+              </div>
+              <button class="recommendation-action" data-recommendation-id="${rec.id}">
+                View Details →
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
+      <style>
+        .recommendations-section {
+          margin: 24px 0;
+        }
+        
+        .recommendations-section h3 {
+          font-size: 1.25rem;
+          margin-bottom: 16px;
+          color: var(--primary-accent);
+        }
+        
+        .recommendations-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+          gap: 16px;
+        }
+        
+        .recommendation-card {
+          background: rgba(35, 35, 65, 0.7);
+          border: 1px solid rgba(147, 112, 219, 0.3);
+          border-radius: 8px;
+          padding: 16px;
+          transition: all 0.2s ease;
+        }
+        
+        .recommendation-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 16px rgba(147, 112, 219, 0.2);
+        }
+        
+        .rec-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+        
+        .rec-type {
+          font-size: 20px;
+        }
+        
+        .rec-priority {
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.75rem;
+          font-weight: 600;
+          text-transform: uppercase;
+        }
+        
+        .rec-priority.critical {
+          background: rgba(239, 68, 68, 0.2);
+          color: #ef4444;
+          border: 1px solid #ef4444;
+        }
+        
+        .rec-priority.high {
+          background: rgba(245, 158, 11, 0.2);
+          color: #f59e0b;
+          border: 1px solid #f59e0b;
+        }
+        
+        .rec-priority.medium {
+          background: rgba(59, 130, 246, 0.2);
+          color: #3b82f6;
+          border: 1px solid #3b82f6;
+        }
+        
+        .recommendation-card h4 {
+          margin: 0 0 8px 0;
+          font-size: 1rem;
+          color: var(--text-primary);
+        }
+        
+        .rec-reasoning {
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+          margin: 0 0 12px 0;
+          line-height: 1.4;
+        }
+        
+        .rec-metrics {
+          display: flex;
+          gap: 16px;
+          margin-bottom: 12px;
+          font-size: 0.875rem;
+        }
+        
+        .metric-label {
+          color: var(--text-muted);
+          margin-right: 4px;
+        }
+        
+        .metric-value {
+          font-weight: 600;
+          color: var(--primary-accent);
+        }
+        
+        .recommendation-action {
+          background: rgba(147, 112, 219, 0.2);
+          border: 1px solid rgba(147, 112, 219, 0.5);
+          color: var(--primary-accent);
+          padding: 6px 16px;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 0.875rem;
+        }
+        
+        .recommendation-action:hover {
+          background: rgba(147, 112, 219, 0.3);
+          transform: translateX(2px);
+        }
+      </style>
+    `;
+  }
+
+  private getRecommendationIcon(type: string): string {
+    const icons: Record<string, string> = {
+      test: '🧪',
+      refactor: '🔧',
+      document: '📝',
+      defer: '⏸️',
+      split: '✂️',
+      abstract: '🔷'
+    };
+    return icons[type] || '💡';
+  }
+
+  // Load enhanced metrics and recommendations
+  private async loadEnhancedMetrics(): Promise<void> {
+    if (!this.impactData || !this.currentSymbolId) return;
+
+    // Generate mock metrics for demonstration
+    // In production, these would come from API endpoints
+    this.impactMetrics = this.generateImpactMetrics();
+    this.timeline = this.generateTimeline();
+    this.recommendations = this.generateRecommendations();
+    this.loadCodeHealth();
+  }
+
+  private generateImpactMetrics(): ImpactMetrics {
+    const totalImpacted = (this.impactData?.directImpact.length || 0) + 
+                         (this.impactData?.indirectImpact.length || 0);
+    
+    return {
+      testCoverage: {
+        affected: totalImpacted,
+        covered: Math.floor(totalImpacted * 0.45),
+        percentage: 45,
+        uncoveredSymbols: []
+      },
+      performanceImpact: {
+        estimatedLatency: 120,
+        memoryDelta: 15,
+        cpuDelta: 8,
+        ioOperations: 23
+      },
+      buildImpact: {
+        affectedFiles: Math.floor(totalImpacted * 0.7),
+        estimatedBuildTime: 45,
+        incrementalBuildTime: 12,
+        dependencies: ['auth-service', 'payment-processor', 'user-api']
+      },
+      teamImpact: {
+        affectedTeams: ['Platform', 'Backend', 'QA'],
+        primaryOwners: ['john.doe@company.com', 'jane.smith@company.com'],
+        reviewersNeeded: 3,
+        communicationChannels: ['#platform-team', '#backend-dev']
+      },
+      riskScore: {
+        overall: this.impactData?.severityScore || 50,
+        complexity: 72,
+        testability: 45,
+        stability: 68,
+        historicalSuccess: 82
+      }
+    };
+  }
+
+  private generateTimeline(): ImpactTimeline {
+    const allImpacted = [...(this.impactData?.directImpact || []), ...(this.impactData?.indirectImpact || [])];
+    
+    return {
+      immediateImpact: allImpacted.filter(n => n.distance <= 1).map(n => ({ id: n.symbolId } as any)),
+      shortTermImpact: allImpacted.filter(n => n.distance === 2).map(n => ({ id: n.symbolId } as any)),
+      mediumTermImpact: allImpacted.filter(n => n.distance === 3).map(n => ({ id: n.symbolId } as any)),
+      longTermImpact: allImpacted.filter(n => n.distance > 3).map(n => ({ id: n.symbolId } as any)),
+      estimatedPropagationTime: 48, // hours
+      criticalPath: allImpacted.slice(0, 5).map(n => ({ id: n.symbolId } as any))
+    };
+  }
+
+  private generateRecommendations(): ImpactRecommendation[] {
+    return [
+      {
+        id: '1',
+        type: 'test',
+        priority: 'critical',
+        title: 'Add Unit Tests to PaymentService',
+        reasoning: 'PaymentService has 0% test coverage but is critical to the change path',
+        estimatedEffort: 8,
+        riskReduction: 35,
+        suggestedApproach: [
+          'Create unit tests for payment validation',
+          'Add integration tests with mock payment gateway',
+          'Test error handling scenarios'
+        ],
+        affectedSymbols: [],
+        prerequisites: []
+      },
+      {
+        id: '2',
+        type: 'refactor',
+        priority: 'high',
+        title: 'Split authenticate() Method',
+        reasoning: 'Method has cyclomatic complexity of 23, making it hard to test and maintain',
+        estimatedEffort: 4,
+        riskReduction: 20,
+        suggestedApproach: [
+          'Extract token validation to separate method',
+          'Move user lookup to repository pattern',
+          'Separate authorization from authentication'
+        ],
+        affectedSymbols: [],
+        prerequisites: ['Add integration tests first']
+      },
+      {
+        id: '3',
+        type: 'document',
+        priority: 'medium',
+        title: 'Document API Contract Changes',
+        reasoning: '3 external teams consume this API and need migration guidance',
+        estimatedEffort: 2,
+        riskReduction: 15,
+        suggestedApproach: [
+          'Update OpenAPI specification',
+          'Create migration guide with examples',
+          'Schedule sync with consumer teams'
+        ],
+        affectedSymbols: [],
+        prerequisites: []
+      }
+    ];
+  }
+
+  private loadCodeHealth(): void {
+    // Generate mock code health indicators
+    const allNodes = [...(this.impactData?.directImpact || []), ...(this.impactData?.indirectImpact || [])];
+    
+    allNodes.forEach(node => {
+      const health = this.calculateNodeHealth(node);
+      this.codeHealthMap.set(node.symbolId, health);
+    });
+  }
+
+  private calculateNodeHealth(node: ImpactNode): CodeHealthIndicator {
+    const testCoverage = Math.random() * 100;
+    const complexity = Math.random() * 30;
+    const stability = Math.random() * 100;
+    
+    let health: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
+    if (testCoverage > 80 && complexity < 10 && stability > 80) {
+      health = 'excellent';
+    } else if (testCoverage > 60 && complexity < 15 && stability > 60) {
+      health = 'good';
+    } else if (testCoverage > 40 && complexity < 20 && stability > 40) {
+      health = 'fair';
+    } else if (testCoverage > 20 || complexity < 25 || stability > 20) {
+      health = 'poor';
+    } else {
+      health = 'critical';
+    }
+    
+    return {
+      symbolId: node.symbolId,
+      health,
+      testCoverage,
+      complexity,
+      stability,
+      lastModified: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000),
+      modificationFrequency: Math.random() * 10,
+      bugDensity: Math.random() * 5,
+      technicalDebt: Math.random() * 100
+    };
+  }
+
   // Language enhancement methods
   private enhanceImpactDataWithLanguages(): void {
     if (!this.impactData) return;
@@ -592,16 +1161,20 @@ export class ImpactVisualization extends DashboardComponent {
 
     // Enhance direct impact nodes
     this.impactData.directImpact.forEach(node => {
-      if (node.filePath) {
+      if (node.filePath && !node.language) {
         node.language = this.languageDetector.detectLanguageFromPath(node.filePath);
+      }
+      if (node.language) {
         node.isCrossLanguage = node.language !== this.sourceLanguage;
       }
     });
 
     // Enhance indirect impact nodes
     this.impactData.indirectImpact.forEach(node => {
-      if (node.filePath) {
+      if (node.filePath && !node.language) {
         node.language = this.languageDetector.detectLanguageFromPath(node.filePath);
+      }
+      if (node.language) {
         node.isCrossLanguage = node.language !== this.sourceLanguage;
       }
     });
@@ -935,6 +1508,81 @@ export class ImpactVisualization extends DashboardComponent {
     if (!event.active) this.simulation.alphaTarget(0);
     d.fx = null;
     d.fy = null;
+  }
+
+  private setupEnhancedInteractions(): void {
+    // Setup metric card interactions
+    this.setupMetricCardTooltips();
+    
+    // Setup timeline toggle
+    const timelineToggle = this.shadow.querySelector('#timeline-toggle');
+    if (timelineToggle) {
+      timelineToggle.addEventListener('click', () => {
+        this.showTimeline = !this.showTimeline;
+        this.render();
+        setTimeout(() => {
+          this.initializeVisualization();
+          this.setupEnhancedInteractions();
+        }, 100);
+      });
+    }
+    
+    // Setup recommendation actions
+    this.shadow.querySelectorAll('.recommendation-action').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const recommendationId = (e.currentTarget as HTMLElement).getAttribute('data-recommendation-id');
+        const recommendation = this.recommendations.find(r => r.id === recommendationId);
+        if (recommendation) {
+          console.log('Executing recommendation:', recommendation.title);
+          // In production, this would trigger actual actions
+        }
+      });
+    });
+  }
+
+  private setupMetricCardTooltips(): void {
+    // Test Coverage Card
+    const coverageCard = this.shadow.querySelector('[data-metric="coverage"]');
+    if (coverageCard && this.impactMetrics) {
+      tooltipManager.bind(coverageCard as HTMLElement, {
+        content: TooltipManager.createRichContent({
+          title: 'Test Coverage Impact',
+          description: 'Symbols affected by this change and their test coverage status',
+          stats: [
+            { label: 'Covered', value: this.impactMetrics.testCoverage.covered, color: '#4ade80' },
+            { label: 'Uncovered', value: this.impactMetrics.testCoverage.affected - this.impactMetrics.testCoverage.covered, color: '#f87171' },
+            { label: 'Critical Uncovered', value: '8', color: '#dc2626' }
+          ],
+          actions: [
+            { label: 'View Uncovered Symbols', icon: '→' },
+            { label: 'Generate Test Plan', icon: '📝' }
+          ]
+        }),
+        placement: 'auto',
+        interactive: true,
+        maxWidth: 350
+      });
+    }
+
+    // Performance Card
+    const perfCard = this.shadow.querySelector('[data-metric="performance"]');
+    if (perfCard && this.impactMetrics) {
+      tooltipManager.bind(perfCard as HTMLElement, {
+        content: TooltipManager.createRichContent({
+          title: 'Performance Impact',
+          description: 'Estimated performance changes from this modification',
+          stats: [
+            { label: 'Latency', value: `+${this.impactMetrics.performanceImpact.estimatedLatency}ms`, color: '#f59e0b' },
+            { label: 'Memory', value: `+${this.impactMetrics.performanceImpact.memoryDelta}%`, color: '#8b5cf6' },
+            { label: 'CPU', value: `+${this.impactMetrics.performanceImpact.cpuDelta}%`, color: '#3b82f6' },
+            { label: 'I/O Ops', value: `${this.impactMetrics.performanceImpact.ioOperations}`, color: '#6366f1' }
+          ]
+        }),
+        placement: 'auto',
+        interactive: true,
+        maxWidth: 350
+      });
+    }
   }
 
   disconnectedCallback() {

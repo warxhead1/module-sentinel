@@ -194,13 +194,18 @@ export const cppFeatures = sqliteTable('cpp_features', {
   isConstexpr: integer('is_constexpr', { mode: 'boolean' }).default(false),
   isConsteval: integer('is_consteval', { mode: 'boolean' }).default(false),
   isConstinit: integer('is_constinit', { mode: 'boolean' }).default(false),
+  isMutable: integer('is_mutable', { mode: 'boolean' }).default(false),
   
   // C++ Object Model (preserved from original)
   isVirtual: integer('is_virtual', { mode: 'boolean' }).default(false),
+  isPureVirtual: integer('is_pure_virtual', { mode: 'boolean' }).default(false),
   isOverride: integer('is_override', { mode: 'boolean' }).default(false),
   isFinal: integer('is_final', { mode: 'boolean' }).default(false),
+  isDeleted: integer('is_deleted', { mode: 'boolean' }).default(false),
+  isDefaulted: integer('is_defaulted', { mode: 'boolean' }).default(false),
   isStatic: integer('is_static', { mode: 'boolean' }).default(false),
   isInline: integer('is_inline', { mode: 'boolean' }).default(false),
+  isExplicit: integer('is_explicit', { mode: 'boolean' }).default(false),
   isFriend: integer('is_friend', { mode: 'boolean' }).default(false),
   
   // C++ Special Members (preserved from original)
@@ -214,6 +219,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   isTemplate: integer('is_template', { mode: 'boolean' }).default(false),
   isTemplateSpecialization: integer('is_template_specialization', { mode: 'boolean' }).default(false),
   templateParams: text('template_params', { mode: 'json' }).$type<any[]>(),
+  templateParameters: text('template_parameters', { mode: 'json' }).$type<any[]>(), // From migration
+  templateSpecialization: text('template_specialization', { mode: 'json' }).$type<Record<string, any>>(), // From migration
   templateArgs: text('template_args', { mode: 'json' }).$type<any[]>(),
   
   // C++ Enums (preserved from original)
@@ -230,6 +237,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   // C++ Modules (C++20/23) (preserved from original)
   isModuleInterface: integer('is_module_interface', { mode: 'boolean' }).default(false),
   moduleName: text('module_name'),
+  isModuleImplementation: integer('is_module_implementation', { mode: 'boolean' }).default(false),
+  isModulePartition: integer('is_module_partition', { mode: 'boolean' }).default(false),
   isModuleExported: integer('is_module_exported', { mode: 'boolean' }).default(false),
   exportNamespace: text('export_namespace'),
   
@@ -243,6 +252,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   // C++ Concepts (C++20) (preserved from original)
   isConcept: integer('is_concept', { mode: 'boolean' }).default(false),
   conceptConstraints: text('concept_constraints'),
+  requiresConcepts: text('requires_concepts', { mode: 'json' }).$type<any[]>(), // From migration
+  conceptDefinition: text('concept_definition'), // From migration
   
   // Domain-Specific Types (preserved from original)
   isVulkanType: integer('is_vulkan_type', { mode: 'boolean' }).default(false),
@@ -260,6 +271,11 @@ export const cppFeatures = sqliteTable('cpp_features', {
   usesGpuCompute: integer('uses_gpu_compute', { mode: 'boolean' }).default(false),
   hasCpuFallback: integer('has_cpu_fallback', { mode: 'boolean' }).default(false),
   isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
+  
+  // Additional features from migration
+  storageClass: text('storage_class'), // 'static', 'extern', 'thread_local'
+  linkageType: text('linkage_type'), // 'internal', 'external', 'none'
+  callingConvention: text('calling_convention'), // '__cdecl', '__stdcall', etc.
   
   // Metadata
   lastAnalyzed: integer('last_analyzed', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
@@ -327,7 +343,11 @@ export const pythonFeatures = sqliteTable('python_features', {
   importFrom: text('import_from'),
   importAs: text('import_as'),
   isRelativeImport: integer('is_relative_import', { mode: 'boolean' }).default(false)
-});
+}, (table) => ({
+  // Indexes from migration
+  generatorIdx: index('idx_python_features_generator').on(table.isGenerator),
+  decoratorsIdx: index('idx_python_features_decorators').on(table.decorators),
+}));
 
 export const typescriptFeatures = sqliteTable('typescript_features', {
   symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id, { onDelete: 'cascade' }),
@@ -388,7 +408,11 @@ export const typescriptFeatures = sqliteTable('typescript_features', {
   utilityType: text('utility_type'),
   isAmbient: integer('is_ambient', { mode: 'boolean' }).default(false),
   isDeclaration: integer('is_declaration', { mode: 'boolean' }).default(false)
-});
+}, (table) => ({
+  // Indexes from migration
+  reactIdx: index('idx_typescript_features_react').on(table.isReactComponent),
+  interfaceIdx: index('idx_typescript_features_interface').on(table.isInterface),
+}));
 
 // ============================================================================
 // CROSS-LANGUAGE FEATURES
@@ -425,6 +449,36 @@ export const apiBindings = sqliteTable('api_bindings', {
   typeIdx: index('idx_api_bindings_type').on(table.bindingType)
 }));
 
+// Cross-language binding features from migration 003
+export const crossLanguageBindings = sqliteTable('cross_language_bindings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  bindingType: text('binding_type').notNull(), // 'ffi', 'pybind11', 'ctypes', 'wasm', 'napi', etc.
+  
+  // Binding metadata
+  bindingLibrary: text('binding_library'),
+  bindingVersion: text('binding_version'),
+  
+  // Type mapping
+  typeMapping: text('type_mapping', { mode: 'json' }).$type<Record<string, any>>(),
+  
+  // Performance characteristics
+  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  overheadCategory: text('overhead_category'), // 'low', 'medium', 'high'
+  
+  // Additional metadata
+  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
+  confidence: real('confidence').default(1.0),
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`)
+}, (table) => ({
+  fromSymbolIdx: index('idx_bindings_from_symbol').on(table.fromSymbolId),
+  toSymbolIdx: index('idx_bindings_to_symbol').on(table.toSymbolId),
+  typeIdx: index('idx_bindings_type').on(table.bindingType)
+}));
+
 export const crossLanguageDeps = sqliteTable('cross_language_deps', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
@@ -448,6 +502,39 @@ export const crossLanguageDeps = sqliteTable('cross_language_deps', {
   projectIdx: index('idx_cross_language_deps_project').on(table.projectId),
   fromLangIdx: index('idx_cross_language_deps_from_lang').on(table.fromLanguageId),
   toLangIdx: index('idx_cross_language_deps_to_lang').on(table.toLanguageId)
+}));
+
+// Language-specific patterns from migration 003
+export const languagePatterns = sqliteTable('language_patterns', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  languageId: integer('language_id').notNull().references(() => languages.id),
+  patternName: text('pattern_name').notNull(),
+  patternCategory: text('pattern_category').notNull(), // 'idiom', 'anti-pattern', 'best-practice'
+  
+  // Pattern definition
+  description: text('description'),
+  detection: text('detection', { mode: 'json' }).$type<Record<string, any>>(), // JSON object with detection rules
+  
+  // Examples and fixes
+  examples: text('examples', { mode: 'json' }).$type<any[]>(), // JSON array of code examples
+  recommendation: text('recommendation'),
+  autoFixAvailable: integer('auto_fix_available', { mode: 'boolean' }).default(false),
+  
+  // Severity and impact
+  severity: text('severity'), // 'info', 'warning', 'error'
+  performanceImpact: text('performance_impact'), // 'none', 'low', 'medium', 'high'
+  securityImpact: text('security_impact'), // 'none', 'low', 'medium', 'high'
+  
+  // Usage tracking
+  usageCount: integer('usage_count').default(0),
+  lastDetected: integer('last_detected', { mode: 'timestamp' }),
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`)
+}, (table) => ({
+  langPatternIdx: index('idx_language_patterns_lang_pattern').on(table.languageId, table.patternName),
+  categoryIdx: index('idx_language_patterns_category').on(table.patternCategory),
+  severityIdx: index('idx_language_patterns_severity').on(table.severity)
 }));
 
 export const semanticEquivalents = sqliteTable('semantic_equivalents', {
@@ -1083,7 +1170,7 @@ export const patternSymbolsRelations = relations(patternSymbols, ({ one }) => ({
 // Semantic clusters - groups of semantically similar symbols
 export const semanticClusters = sqliteTable('semantic_clusters', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   clusterName: text('cluster_name').notNull(),
   clusterType: text('cluster_type').notNull(), // 'function_similarity', 'data_structure', 'pattern_based', etc.
   quality: real('quality').notNull(), // Cluster quality score (0-1)
@@ -1102,11 +1189,11 @@ export const semanticClusters = sqliteTable('semantic_clusters', {
 // Cluster membership - many-to-many relationship between symbols and clusters
 export const clusterMembership = sqliteTable('cluster_membership', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  clusterId: integer('cluster_id').notNull().references(() => semanticClusters.id),
-  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id),
+  clusterId: integer('cluster_id').notNull().references(() => semanticClusters.id, { onDelete: 'cascade' }),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   similarity: real('similarity').notNull(),
   role: text('role').default('member'),
-  assignedAt: integer('assigned_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  joinedAt: integer('joined_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
 }, (table) => ({
   clusterIdx: index('idx_cluster_membership_cluster').on(table.clusterId),
   symbolIdx: index('idx_cluster_membership_symbol').on(table.symbolId),
@@ -1117,7 +1204,7 @@ export const clusterMembership = sqliteTable('cluster_membership', {
 // Semantic insights - AI-generated insights about code quality and architecture
 export const semanticInsights = sqliteTable('semantic_insights', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   insightType: text('insight_type').notNull(), // 'refactoring_opportunity', 'architectural_violation', 'performance_concern', 'code_smell'
   category: text('category').notNull(), // 'architecture', 'performance', 'maintainability', 'quality', 'testing', 'security'
   severity: text('severity').notNull(), // 'low', 'medium', 'high', 'critical'
@@ -1126,7 +1213,7 @@ export const semanticInsights = sqliteTable('semantic_insights', {
   title: text('title').notNull(),
   description: text('description').notNull(),
   affectedSymbols: text('affected_symbols'), // JSON array of symbol IDs
-  clusterId: integer('cluster_id').references(() => semanticClusters.id),
+  clusterId: integer('cluster_id').references(() => semanticClusters.id, { onDelete: 'set null' }),
   metrics: text('metrics'), // JSON object with relevant metrics
   sourceContext: text('source_context'), // Code context that triggered the insight
   reasoning: text('reasoning'), // AI reasoning for the insight
@@ -1154,7 +1241,7 @@ export const semanticInsights = sqliteTable('semantic_insights', {
 // Insight recommendations - specific actionable recommendations for insights
 export const insightRecommendations = sqliteTable('insight_recommendations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  insightId: integer('insight_id').notNull().references(() => semanticInsights.id),
+  insightId: integer('insight_id').notNull().references(() => semanticInsights.id, { onDelete: 'cascade' }),
   action: text('action').notNull(),
   description: text('description').notNull(),
   effort: text('effort').notNull(), // 'low', 'medium', 'high'
@@ -1171,9 +1258,9 @@ export const insightRecommendations = sqliteTable('insight_recommendations', {
 // Semantic relationships - discovered semantic relationships between symbols
 export const semanticRelationships = sqliteTable('semantic_relationships', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  projectId: integer('project_id').notNull().references(() => projects.id),
-  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id),
-  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   semanticType: text('semantic_type').notNull(), // 'similar_purpose', 'complementary', 'alternative_implementation', etc.
   strength: real('strength').notNull(), // Relationship strength (0-1)
   evidence: text('evidence'), // JSON array of evidence
@@ -1190,7 +1277,7 @@ export const semanticRelationships = sqliteTable('semantic_relationships', {
 // Code embeddings - Vector embeddings for semantic similarity
 export const codeEmbeddings = sqliteTable('code_embeddings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
-  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   embeddingType: text('embedding_type').notNull(), // 'semantic', 'structural', 'combined'
   embedding: blob('embedding', { mode: 'buffer' }).notNull(), // Base64 encoded vector
   dimensions: integer('dimensions').notNull(),
@@ -1230,6 +1317,10 @@ export type PythonFeature = typeof pythonFeatures.$inferSelect;
 export type NewPythonFeature = typeof pythonFeatures.$inferInsert;
 export type TypescriptFeature = typeof typescriptFeatures.$inferSelect;
 export type NewTypescriptFeature = typeof typescriptFeatures.$inferInsert;
+export type CrossLanguageBinding = typeof crossLanguageBindings.$inferSelect;
+export type NewCrossLanguageBinding = typeof crossLanguageBindings.$inferInsert;
+export type LanguagePattern = typeof languagePatterns.$inferSelect;
+export type NewLanguagePattern = typeof languagePatterns.$inferInsert;
 export type SemanticTagDefinition = typeof semanticTagDefinitions.$inferSelect;
 export type NewSemanticTagDefinition = typeof semanticTagDefinitions.$inferInsert;
 export type DetectedPattern = typeof detectedPatterns.$inferSelect;

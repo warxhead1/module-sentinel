@@ -8,7 +8,9 @@ Module Sentinel is a multi-language code analysis and visualization tool support
 
 ```bash
 npm run dev          # Start development server (port 6969)
-npm test            # Run tests and create sample database
+npm test            # Run tests (fast, no semantic analysis)
+npm run test:semantic  # Run tests with semantic analysis enabled
+npm run test:fast     # Run tests without indexing (fastest)
 npm run build       # Production build
 npm run dashboard   # Start visualization dashboard only
 ```
@@ -41,7 +43,7 @@ npm run dashboard   # Start visualization dashboard only
 
 ```typescript
 // Always use emoji prefixes for console logging
-console.log(` Operation succeeded`);
+
 console.error(`L Operation failed:`, error);
 console.warn(`� Warning message`);
 ```
@@ -106,9 +108,14 @@ export class MyComponent extends BaseComponent {
 
 ## Testing Strategy
 
-- Run specific tests: `npm test -- --filter drizzle`
+- **Fast tests** (default): `npm test` - No semantic analysis, uses existing database
+- **Filtered tests**: `npm test -- --filter drizzle` - Run specific test suites  
+- **Semantic tests**: `npm run test:semantic` - Enable expensive semantic analysis
+- **Parser-only tests**: `npm run test:fast` - Skip indexing entirely (fastest)
+- **Fresh database**: `npm run test:reset` - Reset database before running
 - Test database location: `~/.module-sentinel/test/test.db`
 - Tests use custom assertion framework with emoji feedback
+- Tests work with existing data (like a real indexer) unless `--rebuild` is used
 - Always run `npm test` before commits to validate changes
 
 ## Performance Considerations
@@ -146,16 +153,19 @@ PROD_DB=/custom/path/to/prod.db
 ### Parser Improvements (Recent Updates)
 
 1. **Enhanced Error Reporting**
+
    - Parser now reports when falling back to pattern-based extraction
    - Syntax errors are counted and logged with warnings
    - Parse method and errors available in result metadata
+
    ```typescript
-   if ((result as any).parseMethod === 'pattern-fallback') {
-     console.warn('Parser fell back to patterns');
+   if ((result as any).parseMethod === "pattern-fallback") {
+     console.warn("Parser fell back to patterns");
    }
    ```
 
 2. **Modern Syntax Support**
+
    - ✅ Generators: `function* gen() { }`
    - ✅ Private fields: `class C { #private = 1; }`
    - ✅ Re-exports: `export { MyClass as MC } from './mod'`
@@ -163,14 +173,16 @@ PROD_DB=/custom/path/to/prod.db
    - ✅ Getter/setter detection
 
 3. **Advanced Cross-Language Detection**
+
    - REST APIs: `fetch()`, `axios.post()`
    - gRPC: Proto imports and client creation
    - FFI: `ffi-napi`, `ctypes`
    - WebSockets: `new WebSocket()`
    - Subprocess with language detection
+
    ```typescript
    // New cross-language detector usage
-   import { CrossLanguageDetector } from './parsers/utils/cross-language-detector.js';
+   import { CrossLanguageDetector } from "./parsers/utils/cross-language-detector.js";
    ```
 
 4. **Performance Optimizations**
@@ -182,20 +194,21 @@ PROD_DB=/custom/path/to/prod.db
 ### Testing Parsers Efficiently
 
 #### Test Individual Files Without Full Indexing
+
 ```typescript
-import Database from 'better-sqlite3';
-import { TypeScriptLanguageParser } from './src/parsers/adapters/typescript-language-parser.js';
-import { DatabaseInitializer } from './src/database/db-init.js';
+import Database from "better-sqlite3";
+import { TypeScriptLanguageParser } from "./src/parsers/adapters/typescript-language-parser.js";
+import { DatabaseInitializer } from "./src/database/db-init.js";
 
 // Create in-memory database for testing
-const db = new Database(':memory:');
+const db = new Database(":memory:");
 const initializer = new DatabaseInitializer(db);
 await initializer.initialize();
 
 // Test a single file
-const parser = new TypeScriptLanguageParser(db, { 
+const parser = new TypeScriptLanguageParser(db, {
   debugMode: true,
-  enableSemanticAnalysis: false  // Skip expensive operations
+  enableSemanticAnalysis: false, // Skip expensive operations
 });
 await parser.initialize();
 
@@ -205,25 +218,29 @@ class TestClass {
 }
 `;
 
-const result = await parser.parseFile('test.ts', testCode);
-console.log('Found symbols:', result.symbols.map(s => s.name));
-console.log('Found relationships:', result.relationships.length);
+const result = await parser.parseFile("test.ts", testCode);
+console.log(
+  "Found symbols:",
+  result.symbols.map((s) => s.name)
+);
+console.log("Found relationships:", result.relationships.length);
 ```
 
 #### Common Test Cases to Verify
+
 ```typescript
 // Test edge cases that often fail
 const edgeCases = {
   // Modern syntax
-  decorators: '@decorator class C {}',
-  privateFields: 'class C { #field = 1; }',
-  optionalChaining: 'obj?.prop?.method?.()',
-  
+  decorators: "@decorator class C {}",
+  privateFields: "class C { #field = 1; }",
+  optionalChaining: "obj?.prop?.method?.()",
+
   // Complex patterns
-  nestedClasses: 'class Outer { class Inner {} }',
+  nestedClasses: "class Outer { class Inner {} }",
   dynamicImports: 'const mod = await import("./mod")',
-  templateLiterals: 'type T = `prefix${string}`',
-  
+  templateLiterals: "type T = `prefix${string}`",
+
   // Cross-language
   subprocess: 'exec("python script.py")',
   ffi: 'require("ffi-napi")',
@@ -233,27 +250,29 @@ const edgeCases = {
 ### Parser Accuracy Verification
 
 1. **Check Symbol Counts**
+
    ```bash
    # Quick validation - parser should find roughly same count as grep
    grep -E "class|function|interface" file.ts | wc -l
    ```
 
 2. **Validate Relationships**
+
    - Every import should create a relationship
    - Class inheritance should be tracked
    - Method calls within same file should be detected
 
 3. **Monitor Parse Failures**
    ```typescript
-   if (result.parseMethod === 'pattern-fallback') {
-     console.warn('⚠️ Tree-sitter parsing failed, using regex fallback');
+   if (result.parseMethod === "pattern-fallback") {
+     console.warn("⚠️ Tree-sitter parsing failed, using regex fallback");
    }
    ```
 
 ### Known Parser Bugs
 
 1. **TypeScript**: Arrow functions in object literals missed
-2. **Python**: Decorators not linked to decorated items  
+2. **Python**: Decorators not linked to decorated items
 3. **C++**: Template specializations create duplicate symbols
 4. **All**: Unicode in identifiers may cause parsing errors
 
@@ -270,7 +289,7 @@ const edgeCases = {
 Use the new `ParserValidator` for comprehensive testing:
 
 ```typescript
-import { ParserValidator } from './parsers/utils/parser-validator.js';
+import { ParserValidator } from "./parsers/utils/parser-validator.js";
 
 const validator = new ParserValidator();
 const testCases = ParserValidator.getTypeScriptTestCases();

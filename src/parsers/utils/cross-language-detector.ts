@@ -24,31 +24,55 @@ export class CrossLanguageDetector {
       /\b(spawn|exec|execFile|fork)\s*\(\s*['"`]([^'"`]+)['"`]/,
       /child_process\.(spawn|exec|execFile|fork)\s*\(/,
       /\bnew\s+Worker\s*\(\s*['"`]([^'"`]+\.(?:py|rb|java|go|rs))['"`]/,
-      /worker_threads\.Worker\s*\(\s*['"`]([^'"`]+)['"`]/
+      /worker_threads\.Worker\s*\(\s*['"`]([^'"`]+)['"`]/,
+      // Template literal support
+      /\b(spawn|exec|execFile|fork)\s*\(\s*`([^`]+)`/
     ],
     // Python subprocess calls
     python: [
       /subprocess\.(run|call|Popen)\s*\(\s*\[?\s*['"`]([^'"`]+)['"`]/,
       /os\.system\s*\(\s*['"`]([^'"`]+)['"`]/,
-      /os\.popen\s*\(\s*['"`]([^'"`]+)['"`]/
+      /os\.popen\s*\(\s*['"`]([^'"`]+)['"`]/,
+      // Async subprocess
+      /asyncio\.create_subprocess_exec\s*\(\s*['"`]([^'"`]+)['"`]/
     ],
     // C++ system calls
     cpp: [
       /\bsystem\s*\(\s*"([^"]+)"/,
       /\bpopen\s*\(\s*"([^"]+)"/,
-      /\bexecv[pe]?\s*\(\s*"([^"]+)"/
+      /\bexecv[pe]?\s*\(\s*"([^"]+)"/,
+      // Modern C++ process APIs
+      /CreateProcess\s*\([^,]*,\s*"([^"]+)"/,
+      /posix_spawn\s*\([^,]*,\s*"([^"]+)"/
+    ],
+    // Go subprocess calls
+    go: [
+      /exec\.Command\s*\(\s*"([^"]+)"/,
+      /cmd\s*:=\s*exec\.Command\s*\(\s*"([^"]+)"/
     ]
   };
 
   // REST API patterns
   private static readonly REST_API_PATTERNS = [
-    // HTTP client libraries
-    /\b(axios|fetch|request|http|https)\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/,
+    // JavaScript/TypeScript HTTP client libraries
+    /\b(axios|fetch|request|http)\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/,
+    // Fix https.request pattern
+    /\bhttps?\.(get|post|put|delete|patch|request)\s*\(\s*['"`]([^'"`]+)['"`]/,
     /\bfetch\s*\(\s*['"`](https?:\/\/[^'"`]+)['"`]/,
     // Express route definitions (server-side)
     /\b(app|router)\.(get|post|put|delete|patch|use)\s*\(\s*['"`](\/[^'"`]+)['"`]/,
     // FastAPI/Django patterns
-    /@(app|api)\.(get|post|put|delete|patch)\s*\(\s*['"`](\/[^'"`]+)['"`]/
+    /@(app|api)\.(get|post|put|delete|patch)\s*\(\s*['"`](\/[^'"`]+)['"`]/,
+    // Python HTTP clients
+    /requests\.(get|post|put|delete|patch)\s*\(\s*['"`]([^'"`]+)['"`]/,
+    /urllib\.request\.urlopen\s*\(\s*['"`]([^'"`]+)['"`]/,
+    /aiohttp\.ClientSession\(\)\.\w+\s*\(\s*['"`]([^'"`]+)['"`]/,
+    // Go HTTP clients
+    /http\.(Get|Post|Put|Delete)\s*\(\s*"([^"]+)"/,
+    /client\.(Get|Post|Put|Delete)\s*\(\s*"([^"]+)"/,
+    // C++ HTTP libraries
+    /curl_easy_setopt\s*\([^,]+,\s*CURLOPT_URL,\s*"([^"]+)"/,
+    /httplib::Client\s+\w+\s*\(\s*"([^"]+)"/
   ];
 
   // gRPC patterns
@@ -58,7 +82,14 @@ export class CrossLanguageDetector {
     /\bgrpc\.(loadPackageDefinition|makeClientConstructor)\s*\(/,
     // Proto imports
     /import\s+.*\s+from\s+['"`]([^'"`]+\.proto)['"`]/,
-    /require\s*\(\s*['"`]([^'"`]+\.proto)['"`]\s*\)/
+    /require\s*\(\s*['"`]([^'"`]+\.proto)['"`]\s*\)/,
+    // Client method calls
+    /(\w+Client)\.(\w+)\s*\(/,
+    /(\w+Stub)\.(\w+)\s*\(/,
+    // C++ gRPC
+    /(\w+)::NewStub\s*\(/,
+    // Go gRPC
+    /\w+\.New\w+Client\s*\(/
   ];
 
   // FFI (Foreign Function Interface) patterns
@@ -69,16 +100,23 @@ export class CrossLanguageDetector {
     // Python ctypes
     /ctypes\.CDLL\s*\(\s*['"`]([^'"`]+)['"`]/,
     /ctypes\.windll\.(\w+)/,
+    // Enhanced Python windll access
+    /windll\.(\w+)\.(\w+)/,
     // Rust FFI
     /#\[link\(name\s*=\s*"([^"]+)"/,
-    /extern\s+"C"\s*{/
+    /extern\s+"C"\s*{/,
+    // C/C++ function declarations within extern blocks
+    /extern\s+"C"\s*\{[^}]*?(\w+)\s*\(/
   ];
 
   // WebSocket patterns
   private static readonly WEBSOCKET_PATTERNS = [
     /new\s+WebSocket\s*\(\s*['"`](wss?:\/\/[^'"`]+)['"`]/,
     /\bio\.connect\s*\(\s*['"`]([^'"`]+)['"`]/,
-    /socket\.emit\s*\(\s*['"`]([^'"`]+)['"`]/
+    /socket\.emit\s*\(\s*['"`]([^'"`]+)['"`]/,
+    // Server-side socket handlers
+    /io\.on\s*\(\s*['"`]([^'"`]+)['"`]/,
+    /socket\.on\s*\(\s*['"`]([^'"`]+)['"`]/
   ];
 
   // Language file extensions
@@ -113,6 +151,17 @@ export class CrossLanguageDetector {
     filePath: string
   ): Array<CrossLanguageCallInfo & { relationship: Partial<RelationshipInfo> }> {
     const results: Array<CrossLanguageCallInfo & { relationship: Partial<RelationshipInfo> }> = [];
+
+    // Skip comments and empty lines
+    const trimmedLine = line.trim();
+    if (!trimmedLine || 
+        trimmedLine.startsWith('//') || 
+        trimmedLine.startsWith('#') || 
+        trimmedLine.startsWith('/*') || 
+        trimmedLine.startsWith('*') ||
+        trimmedLine.startsWith('--')) {
+      return results;
+    }
 
     // 1. Check subprocess patterns
     const subprocessInfo = this.detectSubprocessCall(line, sourceLanguage);

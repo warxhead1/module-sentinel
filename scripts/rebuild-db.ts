@@ -1,26 +1,26 @@
 #!/usr/bin/env tsx
 
-import { ModuleSentinelMCPServer } from '../src/index.js';
-import * as dotenv from 'dotenv';
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
+import { ModuleSentinelMCPServer } from "../src/index.js";
+import * as dotenv from "dotenv";
+import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
 
 async function initializeDatabase(dbPath: string) {
-  console.log('🗃️  Initializing database schema and seed data...');
-  
+  console.log("🗃️  Initializing database schema and seed data...");
+
   // Ensure directory exists
   const dbDir = path.dirname(dbPath);
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
-  
+
   const sqlite = new Database(dbPath);
-  
+
   try {
     // Create tables manually
-    console.log('  🔧 Creating core tables...');
-    
+    console.log("  🔧 Creating core tables...");
+
     // Create projects table if it doesn't exist
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS projects (
@@ -36,7 +36,7 @@ async function initializeDatabase(dbPath: string) {
         metadata TEXT
       );
     `);
-    
+
     // Create languages table if it doesn't exist
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS languages (
@@ -51,7 +51,7 @@ async function initializeDatabase(dbPath: string) {
         priority INTEGER DEFAULT 100
       );
     `);
-    
+
     // Create project_languages table if it doesn't exist
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS project_languages (
@@ -65,7 +65,7 @@ async function initializeDatabase(dbPath: string) {
         FOREIGN KEY (language_id) REFERENCES languages(id) ON DELETE CASCADE
       );
     `);
-    
+
     // Create universal_symbols table if it doesn't exist
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS universal_symbols (
@@ -98,7 +98,7 @@ async function initializeDatabase(dbPath: string) {
         FOREIGN KEY (parent_symbol_id) REFERENCES universal_symbols(id)
       );
     `);
-    
+
     // Create universal_relationships table if it doesn't exist
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS universal_relationships (
@@ -118,55 +118,73 @@ async function initializeDatabase(dbPath: string) {
         FOREIGN KEY (to_symbol_id) REFERENCES universal_symbols(id) ON DELETE CASCADE
       );
     `);
-    
+
     // Seed default languages
     const languageSeedData = [
       {
-        name: 'cpp',
-        displayName: 'C++',
-        version: '23',
-        parserClass: 'StreamingCppParser',
-        extensions: JSON.stringify(['.cpp', '.cxx', '.cc', '.c++', '.ixx', '.cppm', '.h', '.hpp', '.hxx', '.h++']),
-        features: JSON.stringify(['modules', 'templates', 'concepts', 'coroutines']),
+        name: "cpp",
+        displayName: "C++",
+        version: "23",
+        parserClass: "StreamingCppParser",
+        extensions: JSON.stringify([
+          ".cpp",
+          ".cxx",
+          ".cc",
+          ".c++",
+          ".ixx",
+          ".cppm",
+          ".h",
+          ".hpp",
+          ".hxx",
+          ".h++",
+        ]),
+        features: JSON.stringify([
+          "modules",
+          "templates",
+          "concepts",
+          "coroutines",
+        ]),
         isEnabled: true,
-        priority: 10
+        priority: 10,
       },
       {
-        name: 'python',
-        displayName: 'Python',
-        version: '3.12',
-        parserClass: 'PythonParser',
-        extensions: JSON.stringify(['.py', '.pyi', '.pyx']),
-        features: JSON.stringify(['async', 'typing', 'decorators']),
+        name: "python",
+        displayName: "Python",
+        version: "3.12",
+        parserClass: "PythonParser",
+        extensions: JSON.stringify([".py", ".pyi", ".pyx"]),
+        features: JSON.stringify(["async", "typing", "decorators"]),
         isEnabled: true,
-        priority: 20
+        priority: 20,
       },
       {
-        name: 'typescript',
-        displayName: 'TypeScript',
-        version: '5.0',
-        parserClass: 'TypeScriptParser',
-        extensions: JSON.stringify(['.ts', '.tsx', '.d.ts']),
-        features: JSON.stringify(['generics', 'decorators', 'modules']),
+        name: "typescript",
+        displayName: "TypeScript",
+        version: "5.0",
+        parserClass: "TypeScriptParser",
+        extensions: JSON.stringify([".ts", ".tsx", ".d.ts"]),
+        features: JSON.stringify(["generics", "decorators", "modules"]),
         isEnabled: true,
-        priority: 30
+        priority: 30,
       },
       {
-        name: 'javascript',
-        displayName: 'JavaScript',
-        version: 'ES2023',
-        parserClass: 'JavaScriptParser',
-        extensions: JSON.stringify(['.js', '.jsx', '.mjs', '.cjs']),
-        features: JSON.stringify(['modules', 'async', 'classes']),
+        name: "javascript",
+        displayName: "JavaScript",
+        version: "ES2023",
+        parserClass: "JavaScriptParser",
+        extensions: JSON.stringify([".js", ".jsx", ".mjs", ".cjs"]),
+        features: JSON.stringify(["modules", "async", "classes"]),
         isEnabled: true,
-        priority: 40
-      }
+        priority: 40,
+      },
     ];
-    
+
     // Seed languages using raw SQL
-    console.log('  🌱 Seeding languages...');
+    console.log("  🌱 Seeding languages...");
     for (const lang of languageSeedData) {
-      const existing = sqlite.prepare('SELECT id FROM languages WHERE name = ?').get(lang.name);
+      const existing = sqlite
+        .prepare("SELECT id FROM languages WHERE name = ?")
+        .get(lang.name);
       if (!existing) {
         const insertStmt = sqlite.prepare(`
           INSERT INTO languages (name, display_name, version, parser_class, extensions, features, is_enabled, priority)
@@ -182,14 +200,11 @@ async function initializeDatabase(dbPath: string) {
           lang.isEnabled ? 1 : 0,
           lang.priority
         );
-        console.log(`    ✅ Added language: ${lang.displayName}`);
       } else {
-        console.log(`    ⏭️  Language already exists: ${lang.displayName}`);
       }
     }
-    
-    console.log('✅ Database schema and seed data initialized successfully!');
-    
+
+    console.log("✅ Database schema and seed data initialized successfully!");
   } finally {
     sqlite.close();
   }
@@ -198,43 +213,39 @@ async function initializeDatabase(dbPath: string) {
 async function main() {
   // Load environment variables
   dotenv.config();
-  
+
   // Set environment variable to prevent auto-start
-  process.env.MODULE_SENTINEL_SCRIPT_MODE = 'true';
-  
-  const cleanRebuild = process.argv.includes('--clean');
-  const projectPath = process.argv.find(arg => arg.startsWith('--project='))?.split('=')[1] || 
-                     process.env.PROJECT_PATH || 
-                     process.env.MODULE_SENTINEL_PROJECT_PATH || 
-                     '/home/warxh/planet_procgen';
-  
-  const dbPath = process.env.DATABASE_PATH || '.test-db/main.db';
-  
-  console.log(`🚀 Starting database rebuild...`);
-  console.log(`📁 Project path: ${projectPath}`);
-  console.log(`💾 Database path: ${dbPath}`);
-  console.log(`🔄 Clean rebuild: ${cleanRebuild ? 'YES' : 'NO'}`);
+  process.env.MODULE_SENTINEL_SCRIPT_MODE = "true";
+
+  const cleanRebuild = process.argv.includes("--clean");
+  const projectPath =
+    process.argv.find((arg) => arg.startsWith("--project="))?.split("=")[1] ||
+    process.env.PROJECT_PATH ||
+    process.env.MODULE_SENTINEL_PROJECT_PATH ||
+    "/home/warxh/planet_procgen";
+
+  const dbPath = process.env.DATABASE_PATH || ".test-db/main.db";
+
   console.log();
-  
+
   // Initialize database schema first
   await initializeDatabase(dbPath);
   console.log();
-  
+
   const server = new ModuleSentinelMCPServer({ skipAutoIndex: true });
-  
+
   try {
     // Use the public method to rebuild index
     const result = await (server as any).handleRebuildIndex({
       projectPath,
-      force: cleanRebuild
+      force: cleanRebuild,
     });
-    
+
     console.log(result.content?.[0]?.text || JSON.stringify(result, null, 2));
-    
-    console.log('\n✅ Database rebuild completed successfully!');
-    
+
+    console.log("\n✅ Database rebuild completed successfully!");
   } catch (error) {
-    console.error('❌ Database rebuild failed:', error);
+    console.error("❌ Database rebuild failed:", error);
     process.exit(1);
   } finally {
     // Server shutdown not needed for script execution

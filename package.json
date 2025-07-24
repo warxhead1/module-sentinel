@@ -17,6 +17,12 @@
     "start": "npm run build && tsx unified-server.ts",
     "test": "npm run build && tsx test/TestRunner.ts",
     "test:filter": "npm run build && tsx test/TestRunner.ts --filter",
+    "test:semantic": "npm run build && tsx test/TestRunner.ts --semantic",
+    "test:fast": "npm run build && tsx test/TestRunner.ts --skip-index",
+    "test:reset": "npm run build && tsx test/TestRunner.ts --rebuild",
+    "db:clear": "npm run build && tsx scripts/force-clear-db.ts",
+    "db:seed-languages": "npm run build && tsx src/scripts/seed-languages.ts",
+    "db:check-integrity": "npm run build && tsx src/scripts/check-data-integrity.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist dashboard/dist"
   },

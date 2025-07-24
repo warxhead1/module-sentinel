@@ -556,6 +556,12 @@ export class SymbolSelectorModal extends DashboardComponent {
         this.selectedIndex = 0;
       }
     } catch (error) {
+      // Don't log aborted requests as errors
+      if (error instanceof Error && error.name === 'AbortError') {
+        this._loading = false;
+        return;
+      }
+      
       console.error('Symbol search failed:', error);
       this.searchResults = [];
     }

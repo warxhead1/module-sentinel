@@ -7,6 +7,7 @@ export class DataService {
   private cache: Map<string, { data: any; timestamp: number }> = new Map();
   private cacheDuration = 30000; // 30 seconds cache
   private listeners: Map<string, Set<Function>> = new Map();
+  private activeRequests: Map<string, AbortController> = new Map();
 
   private constructor() {}
 
@@ -29,10 +30,32 @@ export class DataService {
       return cached.data;
     }
 
+    // Cancel any existing request for this endpoint
+    const existingController = this.activeRequests.get(cacheKey);
+    if (existingController) {
+      existingController.abort();
+    }
+
+    // Create new AbortController for this request
+    const controller = new AbortController();
+    this.activeRequests.set(cacheKey, controller);
+
     try {
-      const response = await fetch(endpoint);
+      const response = await fetch(endpoint, { 
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
       if (!response.ok) {
         throw new Error(`API request failed: ${response.statusText}`);
+      }
+      
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        throw new Error(`Expected JSON response, got: ${contentType}. Response: ${text.slice(0, 200)}`);
       }
       
       const result = await response.json();
@@ -51,11 +74,22 @@ export class DataService {
       // Cache the data
       this.cache.set(cacheKey, { data, timestamp: Date.now() });
       
+      // Clean up the controller
+      this.activeRequests.delete(cacheKey);
+      
       // Notify listeners
       this.notifyListeners(endpoint, data);
       
       return data;
     } catch (error) {
+      // Clean up the controller
+      this.activeRequests.delete(cacheKey);
+      
+      // Don't log aborted requests as errors
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error; // Re-throw but don't log
+      }
+      
       console.error(`Failed to fetch ${endpoint}:`, error);
       throw error;
     }

@@ -105,6 +105,10 @@ export interface VisitorHandlers {
     node: Parser.SyntaxNode,
     ctx: VisitorContext
   ) => RelationshipInfo | null;
+  onDeclaration?: (
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ) => RelationshipInfo | null;
   onTypeReference?: (
     node: Parser.SyntaxNode,
     ctx: VisitorContext
@@ -255,31 +259,27 @@ export class UnifiedASTVisitor {
 
     // Analyze member access patterns for all functions
     await this.analyzeMemberAccessPatterns(symbols, content, context);
-    
-    console.log(`[DEBUG] Member access analysis completed, preparing stats...`);
-    
+
     // Calculate duration after all processing is complete
     const duration = Date.now() - startTime;
-    
+
     const functionCount = symbols.filter((s) => s.kind === "function").length;
-    console.log(`[DEBUG] Function count calculated: ${functionCount}`);
-    
+
     const stats = `[UnifiedVisitor] Single-pass completed in ${duration}ms:
       - Nodes visited: ${context.stats.nodesVisited}
       - Symbols extracted: ${context.stats.symbolsExtracted}
       - Relationships found: ${context.relationships.length}
       - Patterns detected: ${context.patterns.length}
       - Complex functions identified: ${complexFunctions.length}/${functionCount}`;
-      
+
     console.log(stats);
-    
+
     // Force flush
     if (process.stdout.write) {
-      process.stdout.write('[DEBUG] About to return results...\n');
+      process.stdout.write("[DEBUG] About to return results...\n");
     } else {
-      console.log(`[DEBUG] About to return results...`);
     }
-    
+
     return {
       symbols,
       relationships: context.relationships,
@@ -366,7 +366,11 @@ export class UnifiedASTVisitor {
           if (result) {
             if (Array.isArray(result)) {
               // Check if it's an array of symbols or relationships
-              if (result.length > 0 && "name" in result[0] && "kind" in result[0]) {
+              if (
+                result.length > 0 &&
+                "name" in result[0] &&
+                "kind" in result[0]
+              ) {
                 // Array of symbols (from destructuring patterns)
                 for (const symbol of result as SymbolInfo[]) {
                   context.symbols.set(symbol.qualifiedName, symbol);

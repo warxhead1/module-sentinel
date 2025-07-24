@@ -38,7 +38,18 @@ export interface GraphConfig {
   };
   semanticZooming?: {
     enabled: boolean;
-    thresholds: { low: number; medium: number; high: number };
+    thresholds: { 
+      overview: number;     // 0.1-0.3: Major architectural components only
+      structure: number;    // 0.3-0.7: Classes and major functions
+      detail: number;       // 0.7-1.5: All symbols with basic info
+      inspection: number;   // 1.5+: Full detail with signatures and metrics
+    };
+    progressiveDisclosure?: {
+      hideImportsExports: boolean;    // Hide import/export details at low zoom
+      hidePrivateMembers: boolean;    // Hide private members at low zoom
+      hideParameters: boolean;        // Hide parameter details at low zoom
+      hideMetrics: boolean;          // Hide complexity metrics at low zoom
+    };
   };
 }
 
@@ -120,7 +131,18 @@ export class GraphVisualizationEngine {
       },
       semanticZooming: {
         enabled: true,
-        thresholds: { low: 0.5, medium: 1.0, high: 2.0 }
+        thresholds: { 
+          overview: 0.3,
+          structure: 0.7, 
+          detail: 1.5,
+          inspection: 2.5
+        },
+        progressiveDisclosure: {
+          hideImportsExports: true,
+          hidePrivateMembers: true,
+          hideParameters: true,
+          hideMetrics: true
+        }
       }
     };
 
@@ -399,8 +421,11 @@ export class GraphVisualizationEngine {
   private renderNodes(nodes: GraphNode[]): void {
     if (!this.g) return;
 
+    // Filter nodes based on visibility and semantic zoom level
+    const visibleNodes = this.applySemanticZoomFilter(nodes);
+
     const nodeSelection = this.g.selectAll('.node')
-      .data(nodes, (d: any) => d.id);
+      .data(visibleNodes, (d: any) => d.id);
 
     // Remove old nodes
     nodeSelection.exit()
@@ -545,17 +570,468 @@ export class GraphVisualizationEngine {
       .text((d: GraphNode) => (d as any).patternStyling?.icon || '')
       .style('pointer-events', 'none')
       .style('opacity', 0.8);
+
+    // Add class container specific styling
+    this.addClassContainerStyling(selection);
     
-    // Add labels
+    // Add language indicators
+    this.addLanguageIndicators(selection);
+    
+    // Add progressive detail labels
+    this.addProgressiveLabels(selection);
+  }
+
+  /**
+   * Add specialized styling for class container nodes
+   */
+  private addClassContainerStyling(selection: d3.Selection<any, GraphNode, any, any>): void {
+    // Filter to only class container nodes
+    const containerNodes = selection.filter((d: GraphNode) => 
+      d.type?.includes('-container') && d.containerType === 'class'
+    );
+
+    // Add method count badge
+    containerNodes
+      .append('circle')
+      .attr('class', 'method-count-badge')
+      .attr('cx', 20)
+      .attr('cy', -20)
+      .attr('r', 8)
+      .attr('fill', '#ff6b6b')
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 2)
+      .style('opacity', (d: GraphNode) => d.metrics?.methodCount ? 1 : 0);
+
+    containerNodes
+      .append('text')
+      .attr('class', 'method-count-text')
+      .attr('x', 20)
+      .attr('y', -15)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '10px')
+      .attr('fill', '#fff')
+      .attr('font-weight', 'bold')
+      .text((d: GraphNode) => d.metrics?.methodCount || 0)
+      .style('pointer-events', 'none')
+      .style('opacity', (d: GraphNode) => d.metrics?.methodCount ? 1 : 0);
+
+    // Add aggregated method badges in a curved pattern around the class
+    containerNodes.each(function(d: GraphNode) {
+      if (!d.aggregatedMethods || d.aggregatedMethods.length === 0) return;
+      
+      const node = d3.select(this);
+      const radius = 35; // Distance from center
+      const maxBadges = 8; // Maximum badges to show
+      const methodsToShow = d.aggregatedMethods.slice(0, maxBadges);
+      
+      methodsToShow.forEach((method, i) => {
+        const angle = (i / methodsToShow.length) * 2 * Math.PI - Math.PI / 2;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        
+        // Method badge circle
+        node.append('circle')
+          .attr('class', `method-badge method-${method.visibility}`)
+          .attr('cx', x)
+          .attr('cy', y)
+          .attr('r', 4)
+          .attr('fill', method.isPublic ? '#4ecdc4' : '#95a5a6')
+          .attr('stroke', '#2c3e50')
+          .attr('stroke-width', 1)
+          .style('cursor', 'pointer')
+          .on('click', (event: Event) => {
+            event.stopPropagation();
+            this.showMethodDetails(method, d);
+          });
+        
+        // Method badge tooltip on hover
+        node.append('title')
+          .text(`${method.name} (${method.type})\nComplexity: ${method.complexity}\nVisibility: ${method.visibility}`);
+      });
+      
+      // Show "..." indicator if there are more methods
+      if (d.aggregatedMethods.length > maxBadges) {
+        node.append('text')
+          .attr('x', 0)
+          .attr('y', radius + 15)
+          .attr('text-anchor', 'middle')
+          .attr('font-size', '10px')
+          .attr('fill', '#7f8c8d')
+          .text(`+${d.aggregatedMethods.length - maxBadges} more`)
+          .style('pointer-events', 'none');
+      }
+    });
+
+    // Add expansion indicator for class containers
+    containerNodes
+      .append('text')
+      .attr('class', 'container-expansion-indicator')
+      .attr('x', -25)
+      .attr('y', 5)
+      .attr('fill', '#3498db')
+      .attr('font-size', '12px')
+      .text((d: GraphNode) => d.isExpanded ? '▼' : '▶')
+      .style('cursor', 'pointer')
+      .on('click', (event: Event, d: GraphNode) => {
+        event.stopPropagation();
+        this.toggleClassContainer(d);
+      });
+  }
+
+  /**
+   * Add language indicators to nodes (only for known languages)
+   */
+  private addLanguageIndicators(selection: d3.Selection<any, GraphNode, any, any>): void {
+    // Language color mapping
+    const languageColors: Record<string, string> = {
+      'cpp': '#00599C',        // Blue
+      'python': '#3776AB',     // Python blue
+      'typescript': '#3178C6', // TS blue
+      'javascript': '#F7DF1E', // Yellow
+      'java': '#ED8B00',       // Orange
+      'csharp': '#239120',     // Green
+      'go': '#00ADD8',         // Go cyan
+      'rust': '#000000',       // Black
+      'unknown': '#7f8c8d'     // Gray
+    };
+
+    // Language abbreviations for display
+    const languageAbbrevs: Record<string, string> = {
+      'cpp': 'C++',
+      'python': 'Py',
+      'typescript': 'TS', 
+      'javascript': 'JS',
+      'java': 'Java',
+      'csharp': 'C#',
+      'go': 'Go',
+      'rust': 'Rs',
+      'unknown': '?'
+    };
+
+    // Filter to only nodes with known languages
+    const nodesWithLanguage = selection.filter((d: GraphNode) => 
+      !!(d.language && d.language !== 'unknown' && languageColors[d.language])
+    );
+
+    // Add language indicator badge (small colored circle in top-left)
+    nodesWithLanguage
+      .append('circle')
+      .attr('class', 'language-indicator')
+      .attr('cx', -18)
+      .attr('cy', -18)
+      .attr('r', 6)
+      .attr('fill', (d: GraphNode) => languageColors[d.language!])
+      .attr('stroke', '#fff')
+      .attr('stroke-width', 1)
+      .style('opacity', 0.9);
+
+    // Add language text inside the badge
+    nodesWithLanguage
+      .append('text')
+      .attr('class', 'language-text')
+      .attr('x', -18)
+      .attr('y', -14)
+      .attr('text-anchor', 'middle')
+      .attr('font-size', '7px')
+      .attr('font-weight', 'bold')
+      .attr('fill', '#fff')
+      .text((d: GraphNode) => languageAbbrevs[d.language!])
+      .style('pointer-events', 'none')
+      .style('text-shadow', '0 0 2px rgba(0,0,0,0.8)');
+
+    // Add language tooltip only for nodes with language badges
+    nodesWithLanguage
+      .append('title')
+      .text((d: GraphNode) => `Language: ${d.language}\nFile: ${d.filePath || 'Unknown'}`);
+  }
+
+  /**
+   * Show detailed information about a method in a popup
+   */
+  private showMethodDetails(method: any, classNode: GraphNode): void {
+    // Create a temporary tooltip/popup for method details
+    console.log('Method details:', method, 'in class:', classNode.name);
+    
+    // This will be enhanced with a proper popup system later
+    // For now, just log the details
+  }
+
+  /**
+   * Toggle expansion state of a class container
+   */
+  private toggleClassContainer(classNode: GraphNode): void {
+    classNode.isExpanded = !classNode.isExpanded;
+    
+    // Update visibility of child nodes
+    if (classNode.childNodes) {
+      classNode.childNodes.forEach(child => {
+        child.isVisible = classNode.isExpanded;
+      });
+    }
+    
+    // Trigger re-render to update the visualization
+    this.render();
+    
+    console.log(`${classNode.isExpanded ? 'Expanded' : 'Collapsed'} class:`, classNode.name);
+  }
+
+  /**
+   * Apply semantic zoom filtering based on current zoom level
+   */
+  private applySemanticZoomFilter(nodes: GraphNode[]): GraphNode[] {
+    if (!this.config.semanticZooming?.enabled) {
+      // If semantic zooming is disabled, just filter by visibility
+      return nodes.filter(node => {
+        return !node.parentContainerId || node.isVisible !== false;
+      });
+    }
+
+    const zoomLevel = this.currentTransform.k;
+    const thresholds = this.config.semanticZooming.thresholds;
+    
+    return nodes.filter(node => {
+      // First check basic visibility for hierarchical containers
+      if (node.parentContainerId && node.isVisible === false) {
+        return false;
+      }
+
+      // Apply zoom-level filtering
+      if (zoomLevel < thresholds.overview) {
+        // Overview level: Only show major architectural components
+        return this.isMajorArchitecturalComponent(node);
+      } else if (zoomLevel < thresholds.structure) {
+        // Structure level: Show classes, major functions, and architectural groups
+        return this.isStructuralComponent(node);
+      } else if (zoomLevel < thresholds.detail) {
+        // Detail level: Show all symbols but hide private details
+        if (this.config.semanticZooming?.progressiveDisclosure?.hidePrivateMembers) {
+          return node.visibility !== 'private' || this.isImportantPrivateSymbol(node);
+        }
+        return true;
+      } else {
+        // Inspection level: Show everything
+        return true;
+      }
+    });
+  }
+
+  /**
+   * Determine if a node is a major architectural component
+   */
+  private isMajorArchitecturalComponent(node: GraphNode): boolean {
+    // Show language groups, large modules, and important classes
+    return (
+      node.type?.includes('language-group') ||
+      node.type?.includes('module-group') ||
+      (node.type?.includes('class') && (node.metrics?.childCount || 0) > 5) ||
+      (node.type?.includes('namespace') && (node.metrics?.childCount || 0) > 10) ||
+      (node.patterns?.primaryPattern?.family === 'architectural')
+    );
+  }
+
+  /**
+   * Determine if a node is a structural component
+   */
+  private isStructuralComponent(node: GraphNode): boolean {
+    if (this.isMajorArchitecturalComponent(node)) return true;
+    
+    // Show all containers, classes, interfaces, and public functions
+    return (
+      node.type?.includes('-group') ||
+      node.type?.includes('-container') ||
+      node.type === 'class' ||
+      node.type === 'interface' ||
+      node.type === 'struct' ||
+      node.type === 'namespace' ||
+      (node.type === 'function' && node.visibility === 'public') ||
+      (node.type === 'method' && node.visibility === 'public' && (node.metrics?.callCount || 0) > 3)
+    );
+  }
+
+  /**
+   * Determine if a private symbol is important enough to show
+   */
+  private isImportantPrivateSymbol(node: GraphNode): boolean {
+    // Show private symbols that are heavily used or complex
+    return (
+      (node.metrics?.callCount || 0) > 10 ||
+      (node.metrics?.cyclomaticComplexity || 0) > 8 ||
+      node.patterns?.primaryPattern?.health === 'problematic'
+    );
+  }
+
+  /**
+   * Add progressive detail labels based on zoom level
+   */
+  private addProgressiveLabels(selection: d3.Selection<any, GraphNode, any, any>): void {
+    const zoomLevel = this.currentTransform.k;
+    const thresholds = this.config.semanticZooming?.thresholds;
+    
+    if (!thresholds) {
+      // Fallback to simple labels if semantic zooming is disabled
+      selection.append('text')
+        .attr('dy', '.35em')
+        .attr('text-anchor', 'middle')
+        .text((d: GraphNode) => d.name)
+        .style('font-size', '12px')
+        .style('pointer-events', 'none');
+      return;
+    }
+
+    // Primary label (always visible)
     selection.append('text')
+      .attr('class', 'node-label-primary')
       .attr('dy', '.35em')
       .attr('text-anchor', 'middle')
-      .text((d: GraphNode) => d.name)
-      .style('font-size', (d: GraphNode) => this.themeManager.getNodeFontSize(d, this.currentTransform.k))
-      .style('opacity', (d: GraphNode) => this.themeManager.getNodeLabelOpacity(d, this.currentTransform.k))
-      .style('font-weight', (d: GraphNode) => this.themeManager.getNodeFontWeight(d))
-      .style('text-shadow', (d: GraphNode) => this.themeManager.getNodeTextShadow(d))
+      .text((d: GraphNode) => this.getDisplayName(d, zoomLevel))
+      .style('font-size', (d: GraphNode) => this.getZoomAwareFontSize(d, zoomLevel))
+      .style('opacity', (d: GraphNode) => this.getZoomAwareLabelOpacity(d, zoomLevel))
+      .style('font-weight', (d: GraphNode) => this.getZoomAwareFontWeight(d, zoomLevel))
       .style('pointer-events', 'none');
+
+    // Secondary label (type/signature) - visible at detail level and above
+    if (zoomLevel >= thresholds.detail) {
+      selection.append('text')
+        .attr('class', 'node-label-secondary')
+        .attr('dy', '1.5em')
+        .attr('text-anchor', 'middle')
+        .text((d: GraphNode) => this.getSecondaryLabel(d, zoomLevel))
+        .style('font-size', `${Math.max(8, Math.min(10, zoomLevel * 6))}px`)
+        .style('opacity', 0.7)
+        .style('fill', '#95a5a6')
+        .style('pointer-events', 'none');
+    }
+
+    // Metrics label - visible at inspection level
+    if (zoomLevel >= thresholds.inspection && !this.config.semanticZooming?.progressiveDisclosure?.hideMetrics) {
+      selection.filter((d: GraphNode) => !!(d.metrics && (d.metrics.loc || d.metrics.cyclomaticComplexity)))
+        .append('text')
+        .attr('class', 'node-label-metrics')
+        .attr('dy', '-1.2em')
+        .attr('text-anchor', 'middle')
+        .text((d: GraphNode) => this.getMetricsLabel(d))
+        .style('font-size', '8px')
+        .style('opacity', 0.6)
+        .style('fill', '#f39c12')
+        .style('pointer-events', 'none');
+    }
+  }
+
+  /**
+   * Get display name based on zoom level
+   */
+  private getDisplayName(node: GraphNode, zoomLevel: number): string {
+    const thresholds = this.config.semanticZooming?.thresholds;
+    if (!thresholds) return node.name;
+
+    if (zoomLevel < thresholds.structure) {
+      // At overview/structure level, show abbreviated names for space
+      if (node.name.length > 15) {
+        return node.name.substring(0, 12) + '...';
+      }
+    } else if (zoomLevel >= thresholds.detail) {
+      // At detail level, show full qualified name if available
+      return node.qualifiedName || node.name;
+    }
+    
+    return node.name;
+  }
+
+  /**
+   * Get secondary label (type, signature, etc.)
+   */
+  private getSecondaryLabel(node: GraphNode, zoomLevel: number): string {
+    const thresholds = this.config.semanticZooming?.thresholds;
+    if (!thresholds) return '';
+
+    if (zoomLevel >= thresholds.inspection && node.signature && !this.config.semanticZooming?.progressiveDisclosure?.hideParameters) {
+      // Show full signature at inspection level
+      const maxLength = 40;
+      return node.signature.length > maxLength 
+        ? node.signature.substring(0, maxLength) + '...'
+        : node.signature;
+    } else if (zoomLevel >= thresholds.detail) {
+      // Show type and visibility at detail level
+      const parts = [];
+      if (node.visibility && node.visibility !== 'public') {
+        parts.push(node.visibility);
+      }
+      if (node.type && node.type !== 'unknown') {
+        parts.push(node.type);
+      }
+      if (node.returnType) {
+        parts.push(`-> ${node.returnType}`);
+      }
+      return parts.join(' ');
+    }
+    
+    return '';
+  }
+
+  /**
+   * Get metrics label for inspection level
+   */
+  private getMetricsLabel(node: GraphNode): string {
+    const metrics = [];
+    if (node.metrics?.loc) {
+      metrics.push(`${node.metrics.loc}L`);
+    }
+    if (node.metrics?.cyclomaticComplexity && node.metrics.cyclomaticComplexity > 1) {
+      metrics.push(`C:${node.metrics.cyclomaticComplexity}`);
+    }
+    if (node.metrics?.callCount) {
+      metrics.push(`${node.metrics.callCount}×`);
+    }
+    return metrics.join(' ');
+  }
+
+  /**
+   * Get zoom-aware font size
+   */
+  private getZoomAwareFontSize(node: GraphNode, zoomLevel: number): string {
+    const thresholds = this.config.semanticZooming?.thresholds;
+    if (!thresholds) return '12px';
+
+    if (zoomLevel < thresholds.overview) {
+      return '14px'; // Larger for major components at overview
+    } else if (zoomLevel < thresholds.structure) {
+      return node.type?.includes('-group') ? '13px' : '11px';
+    } else if (zoomLevel < thresholds.detail) {
+      return '12px';
+    } else {
+      return `${Math.max(10, Math.min(16, zoomLevel * 8))}px`;
+    }
+  }
+
+  /**
+   * Get zoom-aware label opacity
+   */
+  private getZoomAwareLabelOpacity(node: GraphNode, zoomLevel: number): number {
+    const thresholds = this.config.semanticZooming?.thresholds;
+    if (!thresholds) return 1;
+
+    if (zoomLevel < thresholds.structure) {
+      return node.type?.includes('-group') ? 1 : 0.8;
+    }
+    return 1;
+  }
+
+  /**
+   * Get zoom-aware font weight
+   */
+  private getZoomAwareFontWeight(node: GraphNode, zoomLevel: number): string {
+    const thresholds = this.config.semanticZooming?.thresholds;
+    if (!thresholds) return 'normal';
+
+    if (node.type?.includes('-group') || node.type?.includes('-container')) {
+      return 'bold';
+    }
+    
+    if (zoomLevel < thresholds.structure && this.isMajorArchitecturalComponent(node)) {
+      return 'bold';
+    }
+    
+    return 'normal';
   }
 
   /**

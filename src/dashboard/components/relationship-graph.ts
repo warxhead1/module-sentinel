@@ -27,7 +27,10 @@ import { GraphGroupManager } from "../utils/graph-group-manager.js";
 import { enhancedNodeTooltip } from "./enhanced-node-tooltip.js";
 import { PatternNodeCategorizer } from "../services/pattern-node-categorizer.js";
 import { PatternLegend, PatternFilter } from "./pattern-legend.js";
-import { PatternFilterPanel, AdvancedPatternFilter } from "./pattern-filter-panel.js";
+import {
+  PatternFilterPanel,
+  AdvancedPatternFilter,
+} from "./pattern-filter-panel.js";
 
 import { GraphNode, GraphEdge } from "../../shared/types/api";
 
@@ -52,7 +55,8 @@ export class RelationshipGraph extends DashboardComponent {
   private expandedGroups: Set<string> = new Set();
 
   // Pattern-based categorization components
-  private patternCategorizer: PatternNodeCategorizer = new PatternNodeCategorizer();
+  private patternCategorizer: PatternNodeCategorizer =
+    new PatternNodeCategorizer();
   private patternLegend: PatternLegend | null = null;
   private patternFilterPanel: PatternFilterPanel | null = null;
   private currentPatternFilters: AdvancedPatternFilter | null = null;
@@ -112,7 +116,7 @@ export class RelationshipGraph extends DashboardComponent {
       // Wait for render to complete before initializing visualization
       await new Promise((resolve) => setTimeout(resolve, 0));
       await this.initializeVisualizationEngine();
-      
+
       // Initialize pattern components after visualization engine
       this.initializePatternComponents();
     } catch (error) {
@@ -153,7 +157,6 @@ export class RelationshipGraph extends DashboardComponent {
     let attempts = 0;
 
     while (!container && attempts < 5) {
-      console.log(`Attempt ${attempts + 1} to find graph container...`);
       await new Promise((resolve) => requestAnimationFrame(resolve));
       container = this.shadow.getElementById("relationshipGraph");
       attempts++;
@@ -220,7 +223,18 @@ export class RelationshipGraph extends DashboardComponent {
       },
       semanticZooming: {
         enabled: true,
-        thresholds: { low: 0.5, medium: 1.0, high: 2.0 },
+        thresholds: { 
+          overview: 0.3,
+          structure: 0.7, 
+          detail: 1.5,
+          inspection: 2.5
+        },
+        progressiveDisclosure: {
+          hideImportsExports: true,
+          hidePrivateMembers: true,
+          hideParameters: true,
+          hideMetrics: true
+        }
       },
     };
 
@@ -914,9 +928,12 @@ export class RelationshipGraph extends DashboardComponent {
   private enhanceGraphDataWithLanguages(graphData: GraphData): void {
     // Add language information to nodes
     graphData.nodes.forEach((node) => {
-      const language = this.detectLanguageFromNode(node);
-      (node as any).language = language;
-      (node as any).languageBadge = this.renderLanguageBadge(language);
+      // Only detect language if it's not already set
+      if (!(node as any).language) {
+        const language = this.detectLanguageFromNode(node);
+        (node as any).language = language;
+      }
+      (node as any).languageBadge = this.renderLanguageBadge((node as any).language);
     });
 
     // Detect cross-language edges
@@ -1158,27 +1175,25 @@ export class RelationshipGraph extends DashboardComponent {
    */
   private applyPatternCategorization(graphData: GraphData): void {
     console.log("🎨 Applying pattern categorization to nodes...");
-    
+
     if (!graphData.nodes) return;
 
     let categorizedCount = 0;
-    graphData.nodes.forEach(node => {
+    graphData.nodes.forEach((node) => {
       const classification = this.patternCategorizer.categorizeNode(node);
       if (classification) {
         // Merge pattern classification into node
         if (!node.patterns) {
           node.patterns = {};
         }
-        
+
         node.patterns.primaryPattern = classification.primaryPattern;
         node.patterns.secondaryPatterns = classification.secondaryPatterns;
         node.patterns.patternMetrics = classification.patternMetrics;
-        
+
         categorizedCount++;
       }
     });
-
-    console.log(`✅ Pattern categorization complete: ${categorizedCount}/${graphData.nodes.length} nodes categorized`);
   }
 
   /**
@@ -1188,7 +1203,9 @@ export class RelationshipGraph extends DashboardComponent {
     console.log("🎨 Initializing pattern components...");
 
     // Initialize pattern legend
-    const legendContainer = this.shadow.getElementById('pattern-legend-container');
+    const legendContainer = this.shadow.getElementById(
+      "pattern-legend-container"
+    );
     if (legendContainer && this.hierarchicalGraphData) {
       this.patternLegend = new PatternLegend(
         legendContainer,
@@ -1199,7 +1216,7 @@ export class RelationshipGraph extends DashboardComponent {
           showHealthIndicators: true,
           showPatternIcons: true,
           collapsible: true,
-          position: 'top-right'
+          position: "top-right",
         }
       );
 
@@ -1213,7 +1230,9 @@ export class RelationshipGraph extends DashboardComponent {
     }
 
     // Initialize pattern filter panel
-    const filterContainer = this.shadow.getElementById('pattern-filter-container');
+    const filterContainer = this.shadow.getElementById(
+      "pattern-filter-container"
+    );
     if (filterContainer && this.hierarchicalGraphData) {
       this.patternFilterPanel = new PatternFilterPanel(
         filterContainer,
@@ -1223,7 +1242,7 @@ export class RelationshipGraph extends DashboardComponent {
           showMetricFilters: true,
           showSearchBox: true,
           collapsible: true,
-          position: 'left'
+          position: "left",
         }
       );
 
@@ -1231,9 +1250,11 @@ export class RelationshipGraph extends DashboardComponent {
       this.patternFilterPanel.updateNodes(this.hierarchicalGraphData.nodes);
 
       // Set up filter change callback
-      this.patternFilterPanel.onFilterChange((filters: AdvancedPatternFilter) => {
-        this.handleAdvancedPatternFilterChange(filters);
-      });
+      this.patternFilterPanel.onFilterChange(
+        (filters: AdvancedPatternFilter) => {
+          this.handleAdvancedPatternFilterChange(filters);
+        }
+      );
     }
 
     console.log("✅ Pattern components initialized successfully");
@@ -1244,11 +1265,11 @@ export class RelationshipGraph extends DashboardComponent {
    */
   private handlePatternFilterChange(filters: PatternFilter): void {
     console.log("🔍 Pattern filter changed:", filters);
-    
+
     if (!this.hierarchicalGraphData || !this.visualizationEngine) return;
 
     // Filter nodes based on pattern criteria
-    const filteredNodes = this.hierarchicalGraphData.nodes.filter(node => {
+    const filteredNodes = this.hierarchicalGraphData.nodes.filter((node) => {
       return this.patternLegend?.nodeMatchesFilters(node) ?? true;
     });
 
@@ -1259,17 +1280,20 @@ export class RelationshipGraph extends DashboardComponent {
   /**
    * Handle advanced pattern filter changes from the filter panel
    */
-  private handleAdvancedPatternFilterChange(filters: AdvancedPatternFilter): void {
+  private handleAdvancedPatternFilterChange(
+    filters: AdvancedPatternFilter
+  ): void {
     console.log("🔍 Advanced pattern filter changed:", filters);
-    
+
     this.currentPatternFilters = filters;
-    
+
     if (!this.hierarchicalGraphData || !this.visualizationEngine) return;
 
     // Filter nodes based on advanced pattern criteria
-    const filteredNodes = this.hierarchicalGraphData.nodes.filter(node => {
+    const filteredNodes = this.hierarchicalGraphData.nodes.filter((node) => {
       const legendMatch = this.patternLegend?.nodeMatchesFilters(node) ?? true;
-      const panelMatch = this.patternFilterPanel?.nodeMatchesFilters(node) ?? true;
+      const panelMatch =
+        this.patternFilterPanel?.nodeMatchesFilters(node) ?? true;
       return legendMatch && panelMatch;
     });
 
@@ -1284,17 +1308,18 @@ export class RelationshipGraph extends DashboardComponent {
     if (!this.visualizationEngine || !this.hierarchicalGraphData) return;
 
     // Create set of visible node IDs for fast lookup
-    const visibleNodeIds = new Set(filteredNodes.map(node => node.id));
+    const visibleNodeIds = new Set(filteredNodes.map((node) => node.id));
 
     // Filter edges to only show those between visible nodes
-    const filteredEdges = this.hierarchicalGraphData.edges.filter(edge => 
-      visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
+    const filteredEdges = this.hierarchicalGraphData.edges.filter(
+      (edge) =>
+        visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
     );
 
     // Update visualization with filtered data
     const filteredData: GraphData = {
       nodes: filteredNodes,
-      edges: filteredEdges
+      edges: filteredEdges,
     };
 
     // Apply pattern-based styling to filtered nodes
@@ -1302,8 +1327,6 @@ export class RelationshipGraph extends DashboardComponent {
 
     // Update the visualization engine with filtered data
     this.visualizationEngine.updateData(filteredData);
-
-    console.log(`📊 Applied filtering: ${filteredNodes.length}/${this.hierarchicalGraphData.nodes.length} nodes visible`);
   }
 
   /**
@@ -1313,18 +1336,18 @@ export class RelationshipGraph extends DashboardComponent {
     if (!this.visualizationEngine) return;
 
     const themeManager = this.visualizationEngine.getThemeManager();
-    
-    nodes.forEach(node => {
+
+    nodes.forEach((node) => {
       if (node.patterns?.primaryPattern) {
         // Apply pattern-based color
         const patternColor = themeManager.getPatternColor(node);
-        
+
         // Apply pattern-based size multiplier
         const sizeMultiplier = themeManager.getPatternSizeMultiplier(node);
-        
+
         // Apply pattern-based effects
         const patternEffect = themeManager.getPatternEffect(node);
-        
+
         // Apply pattern-based border
         const patternBorder = themeManager.getPatternBorder(node);
 
@@ -1335,7 +1358,7 @@ export class RelationshipGraph extends DashboardComponent {
           effect: patternEffect,
           border: patternBorder,
           shape: themeManager.getPatternShape(node),
-          icon: themeManager.getPatternIcon(node)
+          icon: themeManager.getPatternIcon(node),
         };
       }
     });

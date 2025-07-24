@@ -560,7 +560,7 @@ export class ComprehensiveParserCapabilitiesTest {
   private async testModernCppFeatures(allSymbols: any[], results: TestResult[]): Promise<void> {
     console.log(`\\n📋 MODERN C++ FEATURES TEST`);
     
-    const cppSymbols = allSymbols.filter(s => s.language_id === 1); // Assuming 1 is C++
+    const cppSymbols = allSymbols.filter(s => s.languageId === 1); // C++ language ID
     
     // Look for template indicators in signatures
     const templatedSymbols = cppSymbols.filter(s => 

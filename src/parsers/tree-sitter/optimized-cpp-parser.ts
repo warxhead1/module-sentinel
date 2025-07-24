@@ -70,34 +70,34 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     try {
       // Initialize base parser first
       // Initialize base parser first (note: initialize is abstract, calling from constructor)
-      
+
       // Use native tree-sitter-cpp (Node.js API) - modern v0.23.4
       try {
-        console.log("[CppParser] Attempting to load tree-sitter-cpp...");
-        
         // Try different import strategies for tree-sitter-cpp
         let cppLanguage;
         try {
           // Strategy 1: Direct require
           cppLanguage = require("tree-sitter-cpp");
-          console.log("[CppParser] Direct require succeeded");
         } catch (e1: any) {
-          console.log("[CppParser] Direct require failed:", e1.message);
           try {
             // Strategy 2: Dynamic import
             const module = await import("tree-sitter-cpp");
             cppLanguage = module.default || module;
-            console.log("[CppParser] Dynamic import succeeded");
           } catch (e2: any) {
-            console.log("[CppParser] Dynamic import failed:", e2.message);
-            throw new Error(`All import strategies failed: ${(e1 as any).message}, ${e2.message}`);
+            throw new Error(
+              `All import strategies failed: ${(e1 as any).message}, ${
+                e2.message
+              }`
+            );
           }
         }
-        
+
         if (cppLanguage && this.parser) {
           this.parser.setLanguage(cppLanguage);
           this.useTreeSitter = true;
-          console.log("✅ [CppParser] Successfully loaded tree-sitter-cpp v0.23.4!");
+          console.log(
+            "✅ [CppParser] Successfully loaded tree-sitter-cpp v0.23.4!"
+          );
           return;
         } else {
           throw new Error("Language or parser is null after loading");
@@ -109,7 +109,9 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
       // Fall back to pattern-based parsing
       this.useTreeSitter = false;
-      console.warn("⚠️ [CppParser] Using optimized pattern-based parsing for C++");
+      console.warn(
+        "⚠️ [CppParser] Using optimized pattern-based parsing for C++"
+      );
       this.debug("Using optimized pattern-based parsing for C++");
     } catch (error) {
       console.error("❌ [CppParser] Failed to initialize C++ parser:", error);
@@ -143,10 +145,12 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         if (!tree) {
           throw new Error("Parser returned null tree");
         }
-        
+
         // Check for parsing errors but don't fail - tree-sitter can still extract symbols from trees with errors
         if (tree.rootNode.hasError) {
-          this.debug(`Tree has parsing errors but continuing with symbol extraction for: ${filePath}`);
+          this.debug(
+            `Tree has parsing errors but continuing with symbol extraction for: ${filePath}`
+          );
         }
         // Create proper C++ visitor context
         const cppContext: CppVisitorContext = {
@@ -176,29 +180,33 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         };
 
         result = await this.visitor.traverseWithContext(tree, cppContext);
-        
+
         // Tree-sitter parsing completed successfully
       } catch (error) {
-        if (filePath.includes('RenderingTypes.ixx')) {
-          console.log(`❌ TARGETED: Tree-sitter failed for ${filePath}, falling back to patterns: ${error}`);
+        if (filePath.includes("RenderingTypes.ixx")) {
+          console.log(
+            `❌ TARGETED: Tree-sitter failed for ${filePath}, falling back to patterns: ${error}`
+          );
         }
         this.debug(
           `Tree-sitter parsing failed, falling back to patterns: ${error}`
         );
         result = await this.performPatternBasedExtraction(content, filePath);
-        
+
         // Note: Semantic intelligence will use pattern-based data only when tree-sitter fails
       }
     } else {
       // Only use pattern-based parsing if tree-sitter is completely unavailable
-      if (filePath.includes('RenderingTypes.ixx')) {
-        console.log(`❌ TARGETED: Tree-sitter unavailable, using pattern-based parsing for: ${filePath}`);
+      if (filePath.includes("RenderingTypes.ixx")) {
+        console.log(
+          `❌ TARGETED: Tree-sitter unavailable, using pattern-based parsing for: ${filePath}`
+        );
       }
       this.debug(
         `Tree-sitter unavailable, using pattern-based parsing for: ${filePath}`
       );
       result = await this.performPatternBasedExtraction(content, filePath);
-      
+
       // Note: Semantic intelligence will use pattern-based data only when tree-sitter unavailable
     }
 
@@ -229,6 +237,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       onCall: this.handleCall.bind(this),
       onInheritance: this.handleInheritance.bind(this),
       onImport: this.handleImport.bind(this),
+      onDeclaration: this.handleDeclaration.bind(this),
       onTypeReference: this.handleTypeReference.bind(this),
 
       // Pattern detection
@@ -278,6 +287,8 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       ["call_expression", "onCall"],
       ["base_class_clause", "onInheritance"],
       ["import_declaration", "onImport"],
+      ["preproc_include", "onImport"],
+      ["declaration", "onDeclaration"],
       ["type_identifier", "onTypeReference"],
 
       // Patterns
@@ -1354,24 +1365,24 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
   ): SymbolInfo | null {
     const context = ctx as CppVisitorContext;
     const content = context.content;
-    
+
     // Get function name
-    const nameNode = node.childForFieldName('declarator');
+    const nameNode = node.childForFieldName("declarator");
     if (!nameNode) return null;
-    
+
     // Extract function name from the declarator
-    let functionName = '';
+    let functionName = "";
     let isMethod = false;
-    
+
     // Handle different declarator types
-    if (nameNode.type === 'function_declarator') {
+    if (nameNode.type === "function_declarator") {
       // First try the 'declarator' field (works for methods in classes/structs)
-      const funcNameNode = nameNode.childForFieldName('declarator');
+      const funcNameNode = nameNode.childForFieldName("declarator");
       if (funcNameNode) {
-        if (funcNameNode.type === 'field_identifier') {
+        if (funcNameNode.type === "field_identifier") {
           functionName = this.getNodeText(funcNameNode, content);
           isMethod = true; // Function inside a class/struct
-        } else if (funcNameNode.type === 'identifier') {
+        } else if (funcNameNode.type === "identifier") {
           functionName = this.getNodeText(funcNameNode, content);
         } else {
           // Handle other declarator types (e.g., qualified_identifier)
@@ -1381,36 +1392,47 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         // Fallback: look for identifier/field_identifier in children
         for (let i = 0; i < nameNode.childCount; i++) {
           const child = nameNode.child(i);
-          if (child && (child.type === 'field_identifier' || child.type === 'identifier')) {
+          if (
+            child &&
+            (child.type === "field_identifier" || child.type === "identifier")
+          ) {
             functionName = this.getNodeText(child, content);
-            isMethod = child.type === 'field_identifier';
+            isMethod = child.type === "field_identifier";
             break;
           }
         }
       }
-    } else if (nameNode.type === 'identifier' || nameNode.type === 'field_identifier') {
+    } else if (
+      nameNode.type === "identifier" ||
+      nameNode.type === "field_identifier"
+    ) {
       // Direct identifier (simpler case)
       functionName = this.getNodeText(nameNode, content);
-      isMethod = nameNode.type === 'field_identifier';
+      isMethod = nameNode.type === "field_identifier";
     }
-    
+
     if (!functionName) {
-      this.debug(`Failed to extract function name from node type: ${nameNode.type}`);
+      this.debug(
+        `Failed to extract function name from node type: ${nameNode.type}`
+      );
       return null;
     }
-    
+
     // Get return type
-    const typeNode = node.childForFieldName('type');
-    const returnType = typeNode ? this.getNodeText(typeNode, content) : 'void';
-    
+    const typeNode = node.childForFieldName("type");
+    const returnType = typeNode ? this.getNodeText(typeNode, content) : "void";
+
     // Build qualified name by finding parent struct/class
     let parentScope: string | undefined;
     if (isMethod) {
       // For methods, find the containing struct/class
       let current = node.parent;
       while (current) {
-        if (current.type === 'struct_specifier' || current.type === 'class_specifier') {
-          const structNameNode = current.childForFieldName('name');
+        if (
+          current.type === "struct_specifier" ||
+          current.type === "class_specifier"
+        ) {
+          const structNameNode = current.childForFieldName("name");
           if (structNameNode) {
             const structName = this.getNodeText(structNameNode, content);
             parentScope = this.buildParentScope(structName, context, current);
@@ -1423,24 +1445,38 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       // For non-methods, use the namespace context
       parentScope = context.resolutionContext.currentNamespace;
     }
-    
-    const qualifiedName = parentScope ? `${parentScope}::${functionName}` : functionName;
-    
-    // Get function signature
-    const parametersNode = nameNode.childForFieldName('parameters');
+
+    const qualifiedName = parentScope
+      ? `${parentScope}::${functionName}`
+      : functionName;
+
+    // Extract function modifiers (virtual, constexpr, static, etc.)
+    const modifiers = this.extractFunctionModifiers(node, content);
+
+    // Get function signature with modifiers
+    const parametersNode = nameNode.childForFieldName("parameters");
     let signature = functionName;
     if (parametersNode) {
       const paramText = this.getNodeText(parametersNode, content);
       signature = `${functionName}${paramText}`;
     }
-    
+
+    // Prepend modifiers to signature
+    if (modifiers.length > 0) {
+      signature = `${modifiers.join(" ")} ${signature}`;
+    }
+
     // Check for const method
     let isConst = false;
     // Check in the declarator node for const qualifier (for methods)
-    if (nameNode.type === 'function_declarator') {
+    if (nameNode.type === "function_declarator") {
       for (let i = 0; i < nameNode.childCount; i++) {
         const child = nameNode.child(i);
-        if (child && child.type === 'type_qualifier' && this.getNodeText(child, content) === 'const') {
+        if (
+          child &&
+          child.type === "type_qualifier" &&
+          this.getNodeText(child, content) === "const"
+        ) {
           isConst = true;
           break;
         }
@@ -1450,28 +1486,68 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     if (!isConst) {
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
-        if (child && child.type === 'type_qualifier' && this.getNodeText(child, content) === 'const') {
+        if (
+          child &&
+          child.type === "type_qualifier" &&
+          this.getNodeText(child, content) === "const"
+        ) {
           isConst = true;
           break;
         }
       }
     }
-    
+
     if (isConst) {
-      signature += ' const';
+      signature += " const";
     }
+
+    // Detect constructors and destructors
+    let symbolKind: string;
+    let isConstructor = false;
+    let isDestructor = false;
     
+    if (isMethod && parentScope) {
+      // Extract class name from parent scope
+      const parentParts = parentScope.split("::");
+      const className = parentParts[parentParts.length - 1];
+      
+      // Check if this is a constructor (function name matches class name)
+      if (functionName === className) {
+        symbolKind = "constructor";
+        isConstructor = true;
+      }
+      // Check if this is a destructor (function name is ~ClassName)
+      else if (functionName === `~${className}` || functionName.startsWith("~")) {
+        symbolKind = "destructor";
+        isDestructor = true;
+      }
+      // Also check by AST node type if available
+      else if (node.type === "constructor_definition") {
+        symbolKind = "constructor";
+        isConstructor = true;
+      }
+      else if (node.type === "destructor_definition") {
+        symbolKind = "destructor";
+        isDestructor = true;
+      }
+      else {
+        symbolKind = "method";
+      }
+    } else {
+      symbolKind = "function";
+    }
+
     const symbol: SymbolInfo = {
       name: functionName,
       qualifiedName: qualifiedName,
-      kind: isMethod ? 'method' : 'function',
+      kind: symbolKind,
       filePath: context.filePath,
       line: node.startPosition.row + 1,
       column: node.startPosition.column,
       endLine: node.endPosition.row + 1,
       endColumn: node.endPosition.column,
       signature: signature,
-      returnType: returnType,
+      returnType: isConstructor || isDestructor ? undefined : returnType,
       semanticTags: [],
       complexity: 1,
       confidence: 0.9,
@@ -1479,12 +1555,18 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       isExported: false,
       isAsync: false,
       namespace: context.resolutionContext.currentNamespace,
-      parentScope: parentScope
+      parentScope: parentScope,
+      languageFeatures: {
+        isConstructor: isConstructor,
+        isDestructor: isDestructor,
+        isConst: isConst,
+        modifiers: modifiers
+      }
     };
-    
+
     // Cache for fast resolution
     this.cacheSymbol(symbol);
-    
+
     return symbol;
   }
 
@@ -1528,17 +1610,20 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     // Handle general declarations that might contain structured bindings or inline variables
     if (node.type === "declaration") {
       // Check if this is a structured binding by looking for structured_binding_declarator child
-      const hasStructuredBinding = this.findNodeByType(node, 'structured_binding_declarator');
+      const hasStructuredBinding = this.findNodeByType(
+        node,
+        "structured_binding_declarator"
+      );
       if (hasStructuredBinding) {
         return this.handleStructuredBindingFromDeclaration(node, ctx);
       }
-      
+
       // Check if this has inline keyword for inline variables
-      const hasInline = node.text.includes('inline');
+      const hasInline = node.text.includes("inline");
       if (hasInline) {
         return this.handleInlineVariableFromDeclaration(node, ctx);
       }
-      
+
       // Handle as regular declaration
       return this.handleRegularDeclaration(node, ctx);
     }
@@ -1573,14 +1658,20 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           const nameNode = parent.childForFieldName("name");
           if (nameNode) {
             const parentName = this.getNodeText(nameNode, context.content);
-            
+
             // Build parent scope manually to avoid duplication
             // The parent struct should have the same namespace context as the field
             parentScope = this.buildParentScope(parentName, context, parent);
 
             // Safeguard: Log any suspicious qualified names for debugging
-            if (parentScope && (parentScope.split('::').length > 3 || parentScope.includes(parentName + '::' + parentName))) {
-              console.log(`⚠️  SAFEGUARD: Suspicious parent scope detected: ${parentScope} for field ${name}`);
+            if (
+              parentScope &&
+              (parentScope.split("::").length > 3 ||
+                parentScope.includes(parentName + "::" + parentName))
+            ) {
+              console.log(
+                `⚠️  SAFEGUARD: Suspicious parent scope detected: ${parentScope} for field ${name}`
+              );
             }
 
             break;
@@ -1588,7 +1679,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         }
         parent = parent.parent;
       }
-      
+
       // Build qualified name using the found parent scope
       const qualifiedName = parentScope ? `${parentScope}::${name}` : name;
 
@@ -1630,10 +1721,13 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     if (node.type === "init_declarator") {
       // For init_declarator, we need to find the parent declaration for context
       let parentDeclaration = node.parent;
-      while (parentDeclaration && parentDeclaration.type !== "variable_declaration") {
+      while (
+        parentDeclaration &&
+        parentDeclaration.type !== "variable_declaration"
+      ) {
         parentDeclaration = parentDeclaration.parent;
       }
-      
+
       if (parentDeclaration) {
         // Process this as a variable declaration with the parent context
         return this.handleInitDeclarator(node, parentDeclaration, context);
@@ -1661,60 +1755,73 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       let isThreadLocal = false;
       let isExtern = false;
       let isMutable = false;
-      
+
       // First, check AST nodes for storage class specifiers and type qualifiers
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (!child) continue;
-        
+
         const childText = this.getNodeText(child, context.content);
-        
+
         // Check storage class specifiers
-        if (child.type === 'storage_class_specifier') {
+        if (child.type === "storage_class_specifier") {
           switch (childText) {
-            case 'inline': isInline = true; break;
-            case 'static': isStatic = true; break;
-            case 'extern': isExtern = true; break;
-            case 'thread_local': isThreadLocal = true; break;
+            case "inline":
+              isInline = true;
+              break;
+            case "static":
+              isStatic = true;
+              break;
+            case "extern":
+              isExtern = true;
+              break;
+            case "thread_local":
+              isThreadLocal = true;
+              break;
           }
         }
-        
+
         // Check type qualifiers
-        if (child.type === 'type_qualifier') {
+        if (child.type === "type_qualifier") {
           switch (childText) {
-            case 'const': isConst = true; break;
-            case 'mutable': isMutable = true; break;
+            case "const":
+              isConst = true;
+              break;
+            case "mutable":
+              isMutable = true;
+              break;
           }
         }
-        
+
         // Check for constexpr (which might appear as its own node type)
-        if (child.type === 'constexpr' || childText === 'constexpr') {
+        if (child.type === "constexpr" || childText === "constexpr") {
           isConstexpr = true;
         }
       }
-      
+
       // Fallback to text-based detection for cases where AST doesn't capture everything
       const fullText = node.text;
       if (!isInline && /\binline\b/.test(fullText)) isInline = true;
       if (!isConstexpr && /\bconstexpr\b/.test(fullText)) isConstexpr = true;
       if (!isConst && /\bconst\b/.test(fullText)) isConst = true;
       if (!isStatic && /\bstatic\b/.test(fullText)) isStatic = true;
-      if (!isThreadLocal && /\bthread_local\b/.test(fullText)) isThreadLocal = true;
+      if (!isThreadLocal && /\bthread_local\b/.test(fullText))
+        isThreadLocal = true;
       if (!isExtern && /\bextern\b/.test(fullText)) isExtern = true;
       if (!isMutable && /\bmutable\b/.test(fullText)) isMutable = true;
 
       // Build semantic tags based on modifiers
-      const tags = ['variable'];
+      const tags = ["variable"];
       if (isInline) {
-        tags.push('inline');
-        tags.push('modern_cpp'); // Inline variables are C++17 feature
+        tags.push("inline");
+        tags.push("modern_cpp"); // Inline variables are C++17 feature
       }
-      if (isConstexpr) tags.push('constexpr');
-      if (isConst) tags.push('const');
-      if (isStatic) tags.push('static');
-      if (isThreadLocal) tags.push('thread_local');
-      if (isExtern) tags.push('extern');
-      if (isMutable) tags.push('mutable');
+      if (isConstexpr) tags.push("constexpr");
+      if (isConst) tags.push("const");
+      if (isStatic) tags.push("static");
+      if (isThreadLocal) tags.push("thread_local");
+      if (isExtern) tags.push("extern");
+      if (isMutable) tags.push("mutable");
 
       const symbol: SymbolInfo = {
         name,
@@ -1742,8 +1849,8 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           isThreadLocal: isThreadLocal,
           isExtern: isExtern,
           isMutable: isMutable,
-          modifiers: tags.filter(tag => tag !== 'variable') // All modifiers except 'variable'
-        }
+          modifiers: tags.filter((tag) => tag !== "variable"), // All modifiers except 'variable'
+        },
       };
 
       // Enhanced debug logging for modern C++ features
@@ -1753,8 +1860,14 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       if (isConstexpr) {
         this.debug(`✅ Detected constexpr variable: ${name}`);
       }
-      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
-        this.debug(`🔍 Modern C++ variable detected: ${name} with tags: [${tags.join(', ')}]`);
+      if (
+        tags.some((tag) => ["inline", "constexpr", "modern_cpp"].includes(tag))
+      ) {
+        this.debug(
+          `🔍 Modern C++ variable detected: ${name} with tags: [${tags.join(
+            ", "
+          )}]`
+        );
       }
 
       return symbol;
@@ -1797,26 +1910,38 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       for (let i = 0; i < parentDeclaration.childCount; i++) {
         const child = parentDeclaration.child(i);
         if (!child) continue;
-        
+
         const childText = this.getNodeText(child, context.content);
-        
-        if (child.type === 'storage_class_specifier') {
+
+        if (child.type === "storage_class_specifier") {
           switch (childText) {
-            case 'inline': isInline = true; break;
-            case 'static': isStatic = true; break;
-            case 'extern': isExtern = true; break;
-            case 'thread_local': isThreadLocal = true; break;
+            case "inline":
+              isInline = true;
+              break;
+            case "static":
+              isStatic = true;
+              break;
+            case "extern":
+              isExtern = true;
+              break;
+            case "thread_local":
+              isThreadLocal = true;
+              break;
           }
         }
-        
-        if (child.type === 'type_qualifier') {
+
+        if (child.type === "type_qualifier") {
           switch (childText) {
-            case 'const': isConst = true; break;
-            case 'mutable': isMutable = true; break;
+            case "const":
+              isConst = true;
+              break;
+            case "mutable":
+              isMutable = true;
+              break;
           }
         }
-        
-        if (child.type === 'constexpr' || childText === 'constexpr') {
+
+        if (child.type === "constexpr" || childText === "constexpr") {
           isConstexpr = true;
         }
       }
@@ -1827,22 +1952,23 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       if (!isConstexpr && /\bconstexpr\b/.test(fullText)) isConstexpr = true;
       if (!isConst && /\bconst\b/.test(fullText)) isConst = true;
       if (!isStatic && /\bstatic\b/.test(fullText)) isStatic = true;
-      if (!isThreadLocal && /\bthread_local\b/.test(fullText)) isThreadLocal = true;
+      if (!isThreadLocal && /\bthread_local\b/.test(fullText))
+        isThreadLocal = true;
       if (!isExtern && /\bextern\b/.test(fullText)) isExtern = true;
       if (!isMutable && /\bmutable\b/.test(fullText)) isMutable = true;
 
       // Build semantic tags
-      const tags = ['variable'];
+      const tags = ["variable"];
       if (isInline) {
-        tags.push('inline');
-        tags.push('modern_cpp');
+        tags.push("inline");
+        tags.push("modern_cpp");
       }
-      if (isConstexpr) tags.push('constexpr');
-      if (isConst) tags.push('const');
-      if (isStatic) tags.push('static');
-      if (isThreadLocal) tags.push('thread_local');
-      if (isExtern) tags.push('extern');
-      if (isMutable) tags.push('mutable');
+      if (isConstexpr) tags.push("constexpr");
+      if (isConst) tags.push("const");
+      if (isStatic) tags.push("static");
+      if (isThreadLocal) tags.push("thread_local");
+      if (isExtern) tags.push("extern");
+      if (isMutable) tags.push("mutable");
 
       const symbol: SymbolInfo = {
         name,
@@ -1870,21 +1996,28 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           isThreadLocal: isThreadLocal,
           isExtern: isExtern,
           isMutable: isMutable,
-          modifiers: tags.filter(tag => tag !== 'variable'),
-          isInitDeclarator: true
-        }
+          modifiers: tags.filter((tag) => tag !== "variable"),
+          isInitDeclarator: true,
+        },
       };
 
       // Debug logging
       if (isInline) {
-        this.debug(`✅ Detected inline variable (via init_declarator): ${name} (C++17 feature)`);
+        this.debug(
+          `✅ Detected inline variable (via init_declarator): ${name} (C++17 feature)`
+        );
       }
-      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
-        this.debug(`🔍 Modern C++ variable (via init_declarator): ${name} with tags: [${tags.join(', ')}]`);
+      if (
+        tags.some((tag) => ["inline", "constexpr", "modern_cpp"].includes(tag))
+      ) {
+        this.debug(
+          `🔍 Modern C++ variable (via init_declarator): ${name} with tags: [${tags.join(
+            ", "
+          )}]`
+        );
       }
 
       return symbol;
-      
     } catch (error) {
       this.debug(`Error in handleInitDeclarator: ${error}`);
       return null;
@@ -1898,14 +2031,17 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     const context = ctx as CppVisitorContext;
     try {
       // Find the structured_binding_declarator node
-      const bindingDeclarator = this.findNodeByType(node, 'structured_binding_declarator');
+      const bindingDeclarator = this.findNodeByType(
+        node,
+        "structured_binding_declarator"
+      );
       if (!bindingDeclarator) return null;
 
       // Extract variable names from the structured binding declarator
       const bindingList: string[] = [];
       for (let i = 0; i < bindingDeclarator.childCount; i++) {
         const child = bindingDeclarator.child(i);
-        if (child && child.type === 'identifier') {
+        if (child && child.type === "identifier") {
           bindingList.push(this.getNodeText(child, context.content));
         }
       }
@@ -1915,28 +2051,30 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         return null;
       }
 
-      this.debug(`🔍 Structured binding from declaration: [${bindingList.join(', ')}]`);
+      this.debug(
+        `🔍 Structured binding from declaration: [${bindingList.join(", ")}]`
+      );
 
       // Create symbols for all binding variables
       const symbols: SymbolInfo[] = [];
-      
+
       for (let i = 0; i < bindingList.length; i++) {
         const varName = bindingList[i];
         const qualifiedName = this.buildQualifiedName(varName, context);
-        
+
         const symbol: SymbolInfo = {
           name: varName,
           qualifiedName,
-          kind: 'variable',
+          kind: "variable",
           filePath: context.filePath,
           line: node.startPosition.row + 1,
           column: node.startPosition.column + 1,
           endLine: node.endPosition.row + 1,
           endColumn: node.endPosition.column + 1,
           signature: node.text.trim(),
-          returnType: 'auto', // Type is deduced from structured binding
+          returnType: "auto", // Type is deduced from structured binding
           namespace: context.resolutionContext.currentNamespace,
-          semanticTags: ['structured_binding', 'auto_deduced', 'modern_cpp'],
+          semanticTags: ["structured_binding", "auto_deduced", "modern_cpp"],
           complexity: 0,
           confidence: 0.95,
           isDefinition: true,
@@ -1948,25 +2086,28 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
             totalBindings: bindingList.length,
             bindingIndex: i,
             hasAutoKeyword: true,
-            declarationType: 'declaration_node'
-          }
+            declarationType: "declaration_node",
+          },
         };
-        
+
         symbols.push(symbol);
-        
+
         // Add all symbols except the first to context directly
         if (i > 0) {
           context.symbols.set(symbol.qualifiedName, symbol);
         }
       }
-      
+
       if (symbols.length > 0) {
-        this.debug(`✅ Detected structured binding from declaration: ${bindingList.join(', ')} (${symbols.length} variables)`);
+        this.debug(
+          `✅ Detected structured binding from declaration: ${bindingList.join(
+            ", "
+          )} (${symbols.length} variables)`
+        );
         return symbols[0]; // Return the first symbol, others are added to context
       }
-      
+
       return null;
-      
     } catch (error) {
       this.debug(`Error in handleStructuredBindingFromDeclaration: ${error}`);
       return null;
@@ -1980,11 +2121,13 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     const context = ctx as CppVisitorContext;
     try {
       // Find init_declarator that contains the variable name
-      const initDeclarator = this.findNodeByType(node, 'init_declarator');
+      const initDeclarator = this.findNodeByType(node, "init_declarator");
       if (!initDeclarator) return null;
 
       // Get variable name from the declarator
-      const declarator = initDeclarator.childForFieldName('declarator') || initDeclarator.child(0);
+      const declarator =
+        initDeclarator.childForFieldName("declarator") ||
+        initDeclarator.child(0);
       if (!declarator) return null;
 
       const name = this.getNodeText(declarator, context.content);
@@ -1993,7 +2136,9 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       const qualifiedName = this.buildQualifiedName(name, context);
 
       // Get type information
-      const typeNode = node.childForFieldName("type") || this.findNodeByType(node, 'primitive_type');
+      const typeNode =
+        node.childForFieldName("type") ||
+        this.findNodeByType(node, "primitive_type");
       const returnType = typeNode
         ? this.getNodeText(typeNode, context.content)
         : "auto";
@@ -2006,14 +2151,14 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       const isStatic = /\bstatic\b/.test(fullText);
 
       // Build semantic tags
-      const tags = ['variable'];
+      const tags = ["variable"];
       if (isInline) {
-        tags.push('inline');
-        tags.push('modern_cpp'); // Inline variables are C++17 feature
+        tags.push("inline");
+        tags.push("modern_cpp"); // Inline variables are C++17 feature
       }
-      if (isConstexpr) tags.push('constexpr');
-      if (isConst) tags.push('const');
-      if (isStatic) tags.push('static');
+      if (isConstexpr) tags.push("constexpr");
+      if (isConst) tags.push("const");
+      if (isStatic) tags.push("static");
 
       const symbol: SymbolInfo = {
         name,
@@ -2038,21 +2183,28 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           isConstexpr: isConstexpr,
           isConst: isConst,
           isStatic: isStatic,
-          modifiers: tags.filter(tag => tag !== 'variable'),
-          declarationType: 'declaration_node'
-        }
+          modifiers: tags.filter((tag) => tag !== "variable"),
+          declarationType: "declaration_node",
+        },
       };
 
       // Debug logging
       if (isInline) {
-        this.debug(`✅ Detected inline variable from declaration: ${name} (C++17 feature)`);
+        this.debug(
+          `✅ Detected inline variable from declaration: ${name} (C++17 feature)`
+        );
       }
-      if (tags.some(tag => ['inline', 'constexpr', 'modern_cpp'].includes(tag))) {
-        this.debug(`🔍 Modern C++ variable from declaration: ${name} with tags: [${tags.join(', ')}]`);
+      if (
+        tags.some((tag) => ["inline", "constexpr", "modern_cpp"].includes(tag))
+      ) {
+        this.debug(
+          `🔍 Modern C++ variable from declaration: ${name} with tags: [${tags.join(
+            ", "
+          )}]`
+        );
       }
 
       return symbol;
-      
     } catch (error) {
       this.debug(`Error in handleInlineVariableFromDeclaration: ${error}`);
       return null;
@@ -2066,7 +2218,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     const context = ctx as CppVisitorContext;
     try {
       // Handle regular declarations that aren't structured bindings or inline variables
-      const initDeclarator = this.findNodeByType(node, 'init_declarator');
+      const initDeclarator = this.findNodeByType(node, "init_declarator");
       if (initDeclarator) {
         return this.handleInitDeclarator(initDeclarator, node, context);
       }
@@ -2074,7 +2226,6 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       // For other types of declarations, we might need different handling
       this.debug(`Unhandled declaration type: ${node.text.substring(0, 100)}`);
       return null;
-      
     } catch (error) {
       this.debug(`Error in handleRegularDeclaration: ${error}`);
       return null;
@@ -2097,23 +2248,33 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     try {
       let aliasName: string | null = null;
       let underlyingType: string | null = null;
-      
+
       // Handle different typedef/using patterns
-      if (node.type === 'alias_declaration') {
+      if (node.type === "alias_declaration") {
         // Modern C++ using alias: using Name = Type;
         for (let i = 0; i < node.childCount; i++) {
           const child = node.child(i);
           if (!child) continue;
-          
-          if (child.type === 'type_identifier' && i === 1) {
+
+          if (child.type === "type_identifier" && i === 1) {
             aliasName = child.text;
-          } else if (child.type === 'type_descriptor' || (child.text && child.text !== '=' && child.text !== 'using' && child.text !== ';')) {
-            if (aliasName && child.text !== aliasName && child.text.length > 1) {
+          } else if (
+            child.type === "type_descriptor" ||
+            (child.text &&
+              child.text !== "=" &&
+              child.text !== "using" &&
+              child.text !== ";")
+          ) {
+            if (
+              aliasName &&
+              child.text !== aliasName &&
+              child.text.length > 1
+            ) {
               underlyingType = child.text;
             }
           }
         }
-      } else if (node.type === 'using_declaration') {
+      } else if (node.type === "using_declaration") {
         // using namespace or using Name = Type
         const text = node.text;
         const usingMatch = text.match(/using\s+(\w+)\s*=\s*(.+);/);
@@ -2121,7 +2282,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           aliasName = usingMatch[1];
           underlyingType = usingMatch[2].trim();
         }
-      } else if (node.type === 'type_definition') {
+      } else if (node.type === "type_definition") {
         // Traditional typedef: typedef Type Name;
         const text = node.text;
         const typedefMatch = text.match(/typedef\s+(.+?)\s+(\w+);/);
@@ -2130,18 +2291,20 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           aliasName = typedefMatch[2];
         }
       }
-      
+
       if (!aliasName) {
-        this.debug(`Could not extract alias name from ${node.type}: ${node.text}`);
+        this.debug(
+          `Could not extract alias name from ${node.type}: ${node.text}`
+        );
         return null;
       }
-      
+
       const qualifiedName = this.buildQualifiedName(aliasName, context);
-      
+
       const symbol: SymbolInfo = {
         name: aliasName,
         qualifiedName,
-        kind: 'typedef',
+        kind: "typedef",
         filePath: context.filePath,
         line: node.startPosition.row + 1,
         column: node.startPosition.column + 1,
@@ -2150,21 +2313,22 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         signature: underlyingType || node.text,
         returnType: underlyingType || undefined,
         namespace: context.currentNamespace,
-        semanticTags: ['type_alias'],
+        semanticTags: ["type_alias"],
         complexity: 0,
         confidence: 0.95,
         isDefinition: true,
-        isExported: context.insideExportBlock || node.text.includes('export'),
+        isExported: context.insideExportBlock || node.text.includes("export"),
         isAsync: false,
         languageFeatures: {
           isTypeAlias: true,
-          underlyingType: underlyingType
-        }
+          underlyingType: underlyingType,
+        },
       };
 
-      this.debug(`✅ Detected type alias: ${aliasName} = ${underlyingType || 'unknown'}`);
+      this.debug(
+        `✅ Detected type alias: ${aliasName} = ${underlyingType || "unknown"}`
+      );
       return symbol;
-      
     } catch (error) {
       this.debug(`Error in handleTypedef: ${error}`);
       return null;
@@ -2181,76 +2345,88 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       let bindingList: string[] = [];
       let autoKeyword = false;
       let qualifiers: string[] = [];
-      
+
       // Find the binding list by traversing the AST
       for (let i = 0; i < node.childCount; i++) {
         const child = node.child(i);
         if (!child) continue;
-        
+
         // Look for 'auto' keyword
-        if (child.type === 'auto' || child.text === 'auto') {
+        if (child.type === "auto" || child.text === "auto") {
           autoKeyword = true;
         }
-        
+
         // Look for qualifiers (const, &, etc.)
-        if (child.type === 'type_qualifier' || ['const', '&', '&&'].includes(child.text)) {
+        if (
+          child.type === "type_qualifier" ||
+          ["const", "&", "&&"].includes(child.text)
+        ) {
           qualifiers.push(child.text);
         }
-        
+
         // Look for the binding list (usually in brackets)
-        if (child.type === 'structured_binding_declarator' || child.text.includes('[')) {
+        if (
+          child.type === "structured_binding_declarator" ||
+          child.text.includes("[")
+        ) {
           // Extract variable names from binding declarator
           const bindingText = this.getNodeText(child, context.content);
           const bracketMatch = bindingText.match(/\[([^\]]+)\]/);
           if (bracketMatch) {
             bindingList = bracketMatch[1]
-              .split(',')
-              .map(v => v.trim())
-              .filter(v => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v)); // Valid identifiers only
+              .split(",")
+              .map((v) => v.trim())
+              .filter((v) => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v)); // Valid identifiers only
           }
         }
       }
-      
+
       // Fallback to pattern matching if AST traversal fails
       if (bindingList.length === 0) {
         const text = node.text;
-        const bindingMatch = text.match(/auto\s*(?:&|\*|const)?\s*\[([^\]]+)\]/);
-        
+        const bindingMatch = text.match(
+          /auto\s*(?:&|\*|const)?\s*\[([^\]]+)\]/
+        );
+
         if (bindingMatch) {
           bindingList = bindingMatch[1]
-            .split(',')
-            .map(v => v.trim())
-            .filter(v => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v));
+            .split(",")
+            .map((v) => v.trim())
+            .filter((v) => v.length > 0 && /^[a-zA-Z_]\w*$/.test(v));
         }
       }
-      
+
       if (bindingList.length === 0) {
         this.debug(`Could not parse structured binding: ${node.text}`);
         return null;
       }
-      
-      this.debug(`🔍 Structured binding detected: [${bindingList.join(', ')}] with qualifiers: [${qualifiers.join(', ')}]`);
-      
+
+      this.debug(
+        `🔍 Structured binding detected: [${bindingList.join(
+          ", "
+        )}] with qualifiers: [${qualifiers.join(", ")}]`
+      );
+
       // Create symbols for all binding variables
       const symbols: SymbolInfo[] = [];
-      
+
       for (let i = 0; i < bindingList.length; i++) {
         const varName = bindingList[i];
         const qualifiedName = this.buildQualifiedName(varName, context);
-        
+
         const symbol: SymbolInfo = {
           name: varName,
           qualifiedName,
-          kind: 'variable',
+          kind: "variable",
           filePath: context.filePath,
           line: node.startPosition.row + 1,
           column: node.startPosition.column + 1,
           endLine: node.endPosition.row + 1,
           endColumn: node.endPosition.column + 1,
           signature: node.text.trim(),
-          returnType: 'auto', // Type is deduced
+          returnType: "auto", // Type is deduced
           namespace: context.resolutionContext.currentNamespace,
-          semanticTags: ['structured_binding', 'auto_deduced', 'modern_cpp'],
+          semanticTags: ["structured_binding", "auto_deduced", "modern_cpp"],
           complexity: 0,
           confidence: 0.95,
           isDefinition: true,
@@ -2262,25 +2438,28 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
             totalBindings: bindingList.length,
             bindingIndex: i,
             qualifiers: qualifiers,
-            hasAutoKeyword: autoKeyword
-          }
+            hasAutoKeyword: autoKeyword,
+          },
         };
-        
+
         symbols.push(symbol);
-        
+
         // Add all symbols except the first to context directly
         if (i > 0) {
           context.symbols.set(symbol.qualifiedName, symbol);
         }
       }
-      
+
       if (symbols.length > 0) {
-        this.debug(`✅ Detected structured binding: ${bindingList.join(', ')} (${symbols.length} variables)`);
+        this.debug(
+          `✅ Detected structured binding: ${bindingList.join(", ")} (${
+            symbols.length
+          } variables)`
+        );
         return symbols[0]; // Return the first symbol, others are added to context
       }
-      
+
       return null;
-      
     } catch (error) {
       this.debug(`Error in handleStructuredBinding: ${error}`);
       return null;
@@ -2302,7 +2481,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       targetName,
       context.resolutionContext
     );
-    
+
     // If simple name resolution fails, try qualified name resolution
     // This handles calls within the same class (methodA calling methodB)
     if (!resolved && context.scopeStack.length > 0) {
@@ -2390,8 +2569,251 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
     node: Parser.SyntaxNode,
     ctx: VisitorContext
   ): RelationshipInfo | null {
-    // Import handling
-    return null;
+    try {
+      if (node.type === "import_declaration") {
+        // Handle C++20 module imports: import ModuleName;
+        return this.handleModuleImport(node, ctx);
+      } else if (node.type === "preproc_include") {
+        // Handle traditional #include statements
+        return this.handleIncludeDirective(node, ctx);
+      }
+
+      return null;
+    } catch (error) {
+      console.warn(`⚠️ [CppParser] Error processing import:`, error);
+      return null;
+    }
+  }
+
+  private handleModuleImport(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): RelationshipInfo | null {
+    // Handle C++20 module imports: import ModuleName;
+    const moduleNameNode = node.namedChildren.find(
+      (child) =>
+        child.type === "identifier" || child.type === "qualified_identifier"
+    );
+
+    if (!moduleNameNode) {
+      return null;
+    }
+
+    const moduleName = moduleNameNode.text;
+    if (!moduleName) {
+      return null;
+    }
+
+    // Create import symbol
+    const importSymbol: SymbolInfo = {
+      name: moduleName,
+      qualifiedName: moduleName,
+      kind: "import",
+      filePath: ctx.filePath,
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column + 1,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column + 1,
+      signature: `import ${moduleName};`,
+      semanticTags: ["import", "module"],
+      complexity: 1,
+      confidence: 0.95,
+      isDefinition: true,
+      isExported: false,
+      isAsync: false,
+      namespace: ctx.currentNamespace,
+      languageFeatures: {
+        importType: "module",
+        syntax: "cpp20",
+        moduleImport: true,
+      },
+    };
+
+    ctx.symbols.set(moduleName, importSymbol);
+
+    // Create import relationship
+    const relationship: RelationshipInfo = {
+      fromName: ctx.currentNamespace || ctx.filePath,
+      toName: moduleName,
+      relationshipType: "imports",
+      confidence: 0.95,
+      lineNumber: node.startPosition.row + 1,
+      columnNumber: node.startPosition.column + 1,
+      crossLanguage: false,
+      sourceContext: `import ${moduleName};`,
+      metadata: {
+        importType: "module",
+        syntax: "cpp20",
+        moduleImport: true,
+      },
+    };
+
+    console.log(
+      `🔗 [CppParser] Detected C++20 module import: ${
+        ctx.currentNamespace || "global"
+      } imports ${moduleName}`
+    );
+    return relationship;
+  }
+
+  private handleIncludeDirective(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): RelationshipInfo | null {
+    // Handle traditional #include statements
+    const pathNode = node.namedChildren.find(
+      (child) =>
+        child.type === "system_lib_string" || child.type === "string_literal"
+    );
+
+    if (!pathNode) {
+      return null;
+    }
+
+    const pathText = pathNode.text;
+    if (!pathText) {
+      return null;
+    }
+
+    // Extract include path (remove quotes/brackets)
+    const includePath = pathText.replace(/[<>"]/g, "");
+    const includeBaseName = path.basename(
+      includePath,
+      path.extname(includePath)
+    );
+
+    // Create import symbol
+    const importSymbol: SymbolInfo = {
+      name: includeBaseName,
+      qualifiedName: includePath,
+      kind: "import",
+      filePath: ctx.filePath,
+      line: node.startPosition.row + 1,
+      column: node.startPosition.column + 1,
+      endLine: node.endPosition.row + 1,
+      endColumn: node.endPosition.column + 1,
+      signature: `#include ${pathText}`,
+      semanticTags: ["import", "include"],
+      complexity: 1,
+      confidence: 0.9,
+      isDefinition: true,
+      isExported: false,
+      isAsync: false,
+      namespace: ctx.currentNamespace,
+      languageFeatures: {
+        importType: "include",
+        syntax: "traditional",
+        includePath: includePath,
+        isSystemInclude: pathNode.type === "system_lib_string",
+      },
+    };
+
+    ctx.symbols.set(includeBaseName, importSymbol);
+
+    // Create import relationship
+    const relationship: RelationshipInfo = {
+      fromName: ctx.currentNamespace || ctx.filePath,
+      toName: includeBaseName,
+      relationshipType: "imports",
+      confidence: 0.9,
+      lineNumber: node.startPosition.row + 1,
+      columnNumber: node.startPosition.column + 1,
+      crossLanguage: false,
+      sourceContext: `#include ${pathText}`,
+      metadata: {
+        importType: "include",
+        syntax: "traditional",
+        includePath: includePath,
+        isSystemInclude: pathNode.type === "system_lib_string",
+      },
+    };
+
+    console.log(
+      `🔗 [CppParser] Detected #include: ${
+        ctx.currentNamespace || "global"
+      } imports ${includeBaseName} (${includePath})`
+    );
+    return relationship;
+  }
+
+  private handleDeclaration(
+    node: Parser.SyntaxNode,
+    ctx: VisitorContext
+  ): RelationshipInfo | null {
+    try {
+      // Check if this is a C++20 module import: "import ModuleName;"
+      // These are parsed as declaration nodes with type_identifier="import" and identifier=ModuleName
+      const children = node.namedChildren;
+      if (children.length >= 2) {
+        const firstChild = children[0];
+        const secondChild = children[1];
+
+        // Check for pattern: type_identifier("import") + identifier(ModuleName)
+        if (
+          firstChild.type === "type_identifier" &&
+          firstChild.text === "import" &&
+          secondChild.type === "identifier"
+        ) {
+          const moduleName = secondChild.text;
+          console.log(
+            `🔗 [CppParser] Detected C++20 module import (declaration): ${
+              ctx.currentNamespace || "global"
+            } imports ${moduleName}`
+          );
+
+          // Create import symbol
+          const importSymbol: SymbolInfo = {
+            name: moduleName,
+            qualifiedName: moduleName,
+            kind: "import",
+            filePath: ctx.filePath,
+            line: node.startPosition.row + 1,
+            column: node.startPosition.column + 1,
+            endLine: node.endPosition.row + 1,
+            endColumn: node.endPosition.column + 1,
+            signature: `import ${moduleName};`,
+            semanticTags: ["import", "module", "cpp20"],
+            complexity: 1,
+            confidence: 0.95,
+            isDefinition: true,
+            isExported: false,
+            isAsync: false,
+            namespace: ctx.currentNamespace,
+            languageFeatures: {
+              importType: "module",
+              syntax: "cpp20",
+              moduleImport: true,
+            },
+          };
+
+          ctx.symbols.set(moduleName, importSymbol);
+
+          // Create import relationship
+          const relationship: RelationshipInfo = {
+            fromName: ctx.currentNamespace || ctx.filePath,
+            toName: moduleName,
+            relationshipType: "imports",
+            confidence: 0.95,
+            lineNumber: node.startPosition.row + 1,
+            columnNumber: node.startPosition.column + 1,
+            crossLanguage: false,
+            sourceContext: `import ${moduleName};`,
+            metadata: {
+              importType: "module",
+              syntax: "cpp20",
+              moduleImport: true,
+            },
+          };
+
+          return relationship;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.warn(`⚠️ [CppParser] Error processing declaration:`, error);
+      return null;
+    }
   }
 
   private handleTypeReference(
@@ -2416,86 +2838,104 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
   ): SymbolInfo | null {
     const context = ctx as CppVisitorContext;
     const content = context.content;
-    
+
     // Extract template parameters
     const templateParams = this.extractTemplateParameters(node, content);
-    
+
     // Find the template declaration (class, function, etc.)
     let templateDeclaration: Parser.SyntaxNode | null = null;
-    let templateType = 'unknown';
-    
+    let templateType = "unknown";
+
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (!child) continue;
-      if (child.type === 'class_specifier' || child.type === 'struct_specifier') {
+      if (
+        child.type === "class_specifier" ||
+        child.type === "struct_specifier"
+      ) {
         templateDeclaration = child;
-        templateType = child.type === 'class_specifier' ? 'class' : 'struct';
+        templateType = child.type === "class_specifier" ? "class" : "struct";
         break;
-      } else if (child.type === 'function_definition' || child.type === 'declaration') {
+      } else if (
+        child.type === "function_definition" ||
+        child.type === "declaration"
+      ) {
         templateDeclaration = child;
-        templateType = 'function';
+        templateType = "function";
         break;
       }
     }
-    
+
     if (!templateDeclaration) {
       this.debug(`Template declaration not found in template node`);
       return null;
     }
-    
+
     // Get the name of the template
-    let name = 'UnknownTemplate';
-    if (templateType === 'class' || templateType === 'struct') {
-      const nameNode = templateDeclaration.childForFieldName('name');
+    let name = "UnknownTemplate";
+    if (templateType === "class" || templateType === "struct") {
+      const nameNode = templateDeclaration.childForFieldName("name");
       if (nameNode) {
         name = this.getNodeText(nameNode, content);
       }
-    } else if (templateType === 'function') {
+    } else if (templateType === "function") {
       // For function templates, we need to find the function name
-      const funcDeclarator = this.findNodeByType(templateDeclaration, 'function_declarator');
+      const funcDeclarator = this.findNodeByType(
+        templateDeclaration,
+        "function_declarator"
+      );
       if (funcDeclarator) {
-        const nameNode = funcDeclarator.childForFieldName('declarator') || funcDeclarator.child(0);
+        const nameNode =
+          funcDeclarator.childForFieldName("declarator") ||
+          funcDeclarator.child(0);
         if (nameNode) {
           name = this.getNodeText(nameNode, content);
         }
       }
     }
-    
+
     const qualifiedName = this.buildQualifiedName(name, context);
-    
+
     // Create template symbol
     const symbol: SymbolInfo = {
       name,
       qualifiedName,
-      kind: templateType === 'function' ? 'function' : templateType as any,
+      kind: templateType === "function" ? "function" : (templateType as any),
       line: node.startPosition.row + 1,
       column: node.startPosition.column,
       endLine: node.endPosition.row + 1,
       endColumn: node.endPosition.column,
       filePath: context.filePath,
-      signature: this.buildTemplateSignature(name, templateParams, templateType),
-      returnType: templateType === 'function' ? this.extractReturnType(templateDeclaration, content) : undefined,
-      complexity: templateType === 'function' ? 1 : 0,
-      semanticTags: ['template'],
+      signature: this.buildTemplateSignature(
+        name,
+        templateParams,
+        templateType
+      ),
+      returnType:
+        templateType === "function"
+          ? this.extractReturnType(templateDeclaration, content)
+          : undefined,
+      complexity: templateType === "function" ? 1 : 0,
+      semanticTags: ["template"],
       isDefinition: true,
       isExported: false,
       isAsync: false,
       namespace: context.resolutionContext.currentNamespace,
-      parentScope: this.buildParentScope('', context, node),
+      parentScope: this.buildParentScope("", context, node),
       confidence: 0.95,
       languageFeatures: {
         isTemplate: true,
         templateParameters: templateParams,
-        templateType: templateType
-      }
+        templateType: templateType,
+      },
     };
-    
+
     // Store template parameters as separate symbols
     for (const param of templateParams) {
       const paramSymbol: SymbolInfo = {
         name: param.name,
         qualifiedName: `${qualifiedName}::${param.name}`,
-        kind: 'parameter',
+        kind: "parameter",
         line: param.line,
         column: param.column,
         endLine: param.line,
@@ -2503,7 +2943,7 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         filePath: context.filePath,
         signature: `${param.type} ${param.name}`,
         complexity: 0,
-        semanticTags: ['template_parameter'],
+        semanticTags: ["template_parameter"],
         isDefinition: true,
         isExported: false,
         isAsync: false,
@@ -2512,15 +2952,17 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         confidence: 0.9,
         languageFeatures: {
           isTemplateParameter: true,
-          parameterType: param.type
-        }
+          parameterType: param.type,
+        },
       };
-      
+
       context.symbols.set(paramSymbol.qualifiedName, paramSymbol);
     }
-    
-    this.debug(`✅ Detected template ${templateType}: ${qualifiedName} with ${templateParams.length} parameters`);
-    
+
+    this.debug(
+      `✅ Detected template ${templateType}: ${qualifiedName} with ${templateParams.length} parameters`
+    );
+
     context.symbols.set(symbol.qualifiedName, symbol);
     return symbol;
   }
@@ -2551,123 +2993,197 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
   /**
    * Extract template parameters from template_parameter_list node
    */
-  private extractTemplateParameters(node: Parser.SyntaxNode, content: string): Array<{
+  private extractTemplateParameters(
+    node: Parser.SyntaxNode,
+    content: string
+  ): Array<{
     name: string;
     type: string;
     line: number;
     column: number;
   }> {
-    const params: Array<{ name: string; type: string; line: number; column: number }> = [];
-    
+    const params: Array<{
+      name: string;
+      type: string;
+      line: number;
+      column: number;
+    }> = [];
+
     // Find template_parameter_list node
-    const paramListNode = this.findNodeByType(node, 'template_parameter_list');
+    const paramListNode = this.findNodeByType(node, "template_parameter_list");
     if (!paramListNode) {
       return params;
     }
-    
+
     // Process each parameter
     for (let i = 0; i < paramListNode.childCount; i++) {
       const child = paramListNode.child(i);
       if (!child) continue;
-      
-      if (child.type === 'type_parameter_declaration') {
+
+      if (child.type === "type_parameter_declaration") {
         // Handle typename/class template parameters: typename T, class U
-        const typeKeyword = this.findNodeByType(child, 'typename') || this.findNodeByType(child, 'class');
-        const nameNode = this.findNodeByType(child, 'type_identifier');
-        
+        const typeKeyword =
+          this.findNodeByType(child, "typename") ||
+          this.findNodeByType(child, "class");
+        const nameNode = this.findNodeByType(child, "type_identifier");
+
         if (nameNode && typeKeyword) {
           params.push({
             name: this.getNodeText(nameNode, content),
             type: this.getNodeText(typeKeyword, content),
             line: nameNode.startPosition.row + 1,
-            column: nameNode.startPosition.column
+            column: nameNode.startPosition.column,
           });
         } else if (nameNode) {
           params.push({
             name: this.getNodeText(nameNode, content),
-            type: 'typename',
+            type: "typename",
             line: nameNode.startPosition.row + 1,
-            column: nameNode.startPosition.column
+            column: nameNode.startPosition.column,
           });
         }
-      } else if (child.type === 'parameter_declaration') {
+      } else if (child.type === "parameter_declaration") {
         // Handle non-type template parameters: int N, size_t Size
         const typeNode = child.child(0); // First child is usually the type
         const nameNode = child.child(1); // Second child is usually the name
-        
+
         if (typeNode && nameNode) {
           params.push({
             name: this.getNodeText(nameNode, content),
             type: this.getNodeText(typeNode, content),
             line: nameNode.startPosition.row + 1,
-            column: nameNode.startPosition.column
+            column: nameNode.startPosition.column,
           });
         }
       }
     }
-    
+
     return params;
   }
 
   /**
    * Build template signature
    */
-  private buildTemplateSignature(name: string, params: Array<{ name: string; type: string }>, templateType: string): string {
+  private buildTemplateSignature(
+    name: string,
+    params: Array<{ name: string; type: string }>,
+    templateType: string
+  ): string {
     if (params.length === 0) {
       return `template<> ${templateType} ${name}`;
     }
-    
-    const paramList = params.map(p => `${p.type} ${p.name}`).join(', ');
+
+    const paramList = params.map((p) => `${p.type} ${p.name}`).join(", ");
     return `template<${paramList}> ${templateType} ${name}`;
+  }
+
+  /**
+   * Extract function modifiers like virtual, constexpr, static, etc.
+   */
+  private extractFunctionModifiers(
+    node: Parser.SyntaxNode,
+    content: string
+  ): string[] {
+    const modifiers: string[] = [];
+
+    // Check for modifiers in the function declaration
+    for (let i = 0; i < node.childCount; i++) {
+      const child = node.child(i);
+      if (!child) continue;
+
+      const childText = this.getNodeText(child, content).trim();
+
+      // Check for common C++ function modifiers
+      if (child.type === "virtual_specifier" || childText === "virtual") {
+        modifiers.push("virtual");
+      } else if (
+        child.type === "storage_class_specifier" ||
+        ["static", "extern", "inline", "constexpr"].includes(childText)
+      ) {
+        modifiers.push(childText);
+      } else if (
+        child.type === "type_qualifier" &&
+        ["const", "volatile", "mutable"].includes(childText)
+      ) {
+        modifiers.push(childText);
+      }
+    }
+
+    // For method declarations, also check parent nodes
+    let parent = node.parent;
+    while (parent && parent.type !== "translation_unit") {
+      for (let i = 0; i < parent.childCount; i++) {
+        const child = parent.child(i);
+        if (!child || child === node) continue;
+
+        const childText = this.getNodeText(child, content).trim();
+        if (["virtual", "constexpr", "static", "inline"].includes(childText)) {
+          if (!modifiers.includes(childText)) {
+            modifiers.push(childText);
+          }
+        }
+      }
+      parent = parent.parent;
+    }
+
+    return modifiers;
   }
 
   /**
    * Find node by type (recursive search)
    */
-  private findNodeByType(node: Parser.SyntaxNode, type: string): Parser.SyntaxNode | null {
+  private findNodeByType(
+    node: Parser.SyntaxNode,
+    type: string
+  ): Parser.SyntaxNode | null {
     if (node.type === type) {
       return node;
     }
-    
+
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (!child) continue;
       const found = this.findNodeByType(child, type);
       if (found) return found;
     }
-    
+
     return null;
   }
 
   /**
    * Extract return type from function declaration
    */
-  private extractReturnType(node: Parser.SyntaxNode, content: string): string | undefined {
+  private extractReturnType(
+    node: Parser.SyntaxNode,
+    content: string
+  ): string | undefined {
     // Look for the return type in function declaration
     const children = [];
     for (let i = 0; i < node.childCount; i++) {
       children.push(node.child(i));
     }
-    
+
     // Find the type before the function declarator
     for (let i = 0; i < children.length; i++) {
       const child = children[i];
       if (!child) continue;
-      if (child.type === 'function_declarator') {
+      if (child.type === "function_declarator") {
         // Look backwards for the type
         for (let j = i - 1; j >= 0; j--) {
           const prevChild = children[j];
           if (!prevChild) continue;
-          if (prevChild.type === 'primitive_type' || 
-              prevChild.type === 'type_identifier' ||
-              prevChild.type === 'qualified_identifier') {
+          if (
+            prevChild.type === "primitive_type" ||
+            prevChild.type === "type_identifier" ||
+            prevChild.type === "qualified_identifier"
+          ) {
             return this.getNodeText(prevChild, content);
           }
         }
         break;
       }
     }
-    
+
     return undefined;
   }
 
@@ -2688,68 +3204,108 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
 
     parts.push(name);
     const result = parts.join("::");
-    
+
     // Safeguard: Detect and warn about duplications
-    const nameParts = result.split('::');
-    const duplicates = nameParts.filter((part, index) => 
-      index > 0 && part === nameParts[index - 1]
+    const nameParts = result.split("::");
+    const duplicates = nameParts.filter(
+      (part, index) => index > 0 && part === nameParts[index - 1]
     );
     if (duplicates.length > 0) {
-      console.log(`⚠️  SAFEGUARD: Detected duplication in qualified name: ${result} (duplicates: ${duplicates.join(', ')})`);
+      console.log(
+        `⚠️  SAFEGUARD: Detected duplication in qualified name: ${result} (duplicates: ${duplicates.join(
+          ", "
+        )})`
+      );
     }
 
     return result;
   }
 
-  private buildParentScope(parentName: string, context: CppVisitorContext, parentNode: Parser.SyntaxNode): string {
-    // Build parent scope by traversing AST hierarchy, not using context scope stack
-    // This avoids duplication issues from manually managed scope stacks
-    
+  private buildParentScope(
+    parentName: string,
+    context: CppVisitorContext,
+    parentNode: Parser.SyntaxNode
+  ): string {
+    // Build parent scope by traversing AST hierarchy, with improved logic
+    // to handle nested classes and Impl patterns more accurately
+
     const parts: string[] = [];
-    
+    const maxScopeDepth = 4; // Prevent overly complex scopes
+
     // Traverse up from the parent struct to find containing namespaces/classes
     let current = parentNode.parent;
-    while (current) {
+    while (current && parts.length < maxScopeDepth) {
       if (current.type === "namespace_definition") {
         const nameNode = current.childForFieldName("name");
         if (nameNode) {
           const nsName = this.getNodeText(nameNode, context.content);
-          parts.unshift(nsName); // Add to beginning to maintain order
+          if (nsName && !parts.includes(nsName)) {
+            parts.unshift(nsName); // Add to beginning to maintain order
+          }
         }
-      } else if (current.type === "class_specifier" || current.type === "struct_specifier") {
+      } else if (
+        current.type === "class_specifier" ||
+        current.type === "struct_specifier"
+      ) {
         const nameNode = current.childForFieldName("name");
         if (nameNode) {
           const className = this.getNodeText(nameNode, context.content);
-          parts.unshift(className);
+          if (className && !parts.includes(className)) {
+            parts.unshift(className);
+          }
         }
       }
       current = current.parent;
     }
-    
-    // Add the parent struct name itself
-    parts.push(parentName);
-    
-    const result = parts.join("::");
-    
-    // Safeguard: Ensure no duplication in parent scope
-    const duplicateCheck = result.split('::');
-    for (let i = 1; i < duplicateCheck.length; i++) {
-      if (duplicateCheck[i] === duplicateCheck[i-1]) {
-        console.log(`⚠️  SAFEGUARD: buildParentScope detected duplication in ${result}, removing duplicate`);
-        duplicateCheck.splice(i, 1);
-        i--; // Adjust index after removal
-      }
+
+    // Only add the parent struct name if it's not already in the hierarchy
+    // and if it's not an Impl class (which creates redundant scoping)
+    if (parentName && !parts.includes(parentName) && parentName !== "Impl") {
+      parts.push(parentName);
     }
-    
-    return duplicateCheck.join('::');
+
+    const result = parts.join("::");
+
+    // Enhanced safeguard: Check for suspicious patterns
+    if (result.length > 100 || 
+        result.split("::").length > maxScopeDepth ||
+        result.includes("::Impl::") ||
+        /(.+)::\1/.test(result)) { // regex for duplicate patterns like "Class::Class"
+      
+      // For debugging complex scope issues
+      if (this.debugMode) {
+        console.log(
+          `⚠️  SAFEGUARD: Complex scope detected: ${result} for parent ${parentName}, simplifying`
+        );
+      }
+      
+      // Simplify by removing Impl patterns and duplicates
+      const simplified = result
+        .split("::")
+        .filter((part, index, arr) => 
+          part !== "Impl" && 
+          part !== "" && 
+          arr.indexOf(part) === index // Remove duplicates
+        )
+        .slice(0, maxScopeDepth) // Enforce depth limit
+        .join("::");
+      
+      return simplified;
+    }
+
+    return result;
   }
 
-  private buildStructQualifiedName(structName: string, structNode: Parser.SyntaxNode, context: CppVisitorContext): string {
+  private buildStructQualifiedName(
+    structName: string,
+    structNode: Parser.SyntaxNode,
+    context: CppVisitorContext
+  ): string {
     // Build struct qualified name by traversing AST hierarchy
     // This ensures consistency with field parent scope resolution
-    
+
     const parts: string[] = [];
-    
+
     // Traverse up from the struct to find containing namespaces/classes
     let current = structNode.parent;
     while (current) {
@@ -2759,7 +3315,10 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
           const nsName = this.getNodeText(nameNode, context.content);
           parts.unshift(nsName); // Add to beginning to maintain order
         }
-      } else if (current.type === "class_specifier" || current.type === "struct_specifier") {
+      } else if (
+        current.type === "class_specifier" ||
+        current.type === "struct_specifier"
+      ) {
         const nameNode = current.childForFieldName("name");
         if (nameNode) {
           const className = this.getNodeText(nameNode, context.content);
@@ -2768,29 +3327,35 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
       }
       current = current.parent;
     }
-    
+
     // Add the struct name itself
     parts.push(structName);
-    
+
     const result = parts.join("::");
-    
+
     // Safeguard: Ensure no duplication in struct qualified name
-    const duplicateCheck = result.split('::');
+    const duplicateCheck = result.split("::");
     for (let i = 1; i < duplicateCheck.length; i++) {
-      if (duplicateCheck[i] === duplicateCheck[i-1]) {
-        console.log(`⚠️  SAFEGUARD: buildStructQualifiedName detected duplication in ${result}, removing duplicate`);
+      if (duplicateCheck[i] === duplicateCheck[i - 1]) {
+        console.log(
+          `⚠️  SAFEGUARD: buildStructQualifiedName detected duplication in ${result}, removing duplicate`
+        );
         duplicateCheck.splice(i, 1);
         i--; // Adjust index after removal
       }
     }
-    
+
     // Additional safeguard: Verify struct and parent scope will match
-    const expectedParentScope = duplicateCheck.join('::');
+    const expectedParentScope = duplicateCheck.join("::");
     if (structName === "GenericResourceDesc") {
-      console.log(`🔍 SAFEGUARD: Struct ${structName} will have qualifiedName: ${expectedParentScope}`);
-      console.log(`🔍 SAFEGUARD: Fields should have parentScope: ${expectedParentScope}`);
+      console.log(
+        `🔍 SAFEGUARD: Struct ${structName} will have qualifiedName: ${expectedParentScope}`
+      );
+      console.log(
+        `🔍 SAFEGUARD: Fields should have parentScope: ${expectedParentScope}`
+      );
     }
-    
+
     return expectedParentScope;
   }
 

@@ -1,13 +1,17 @@
 /**
  * GraphPluginSystem - Extensible plugin architecture for graph visualizations
- * 
+ *
  * Provides a flexible plugin system that allows extending the graph visualization engine
  * with custom behaviors, renderers, layouts, and interaction patterns.
  */
 
-import { GraphNode, GraphEdge } from '../../shared/types/api';
-import { GraphVisualizationEngine, GraphConfig, GraphData } from './graph-viz-engine';
-import * as d3 from 'd3';
+import { GraphNode, GraphEdge } from "../../shared/types/api";
+import {
+  GraphVisualizationEngine,
+  GraphConfig,
+  GraphData,
+} from "./graph-viz-engine";
+import * as d3 from "d3";
 
 export interface PluginContext {
   engine: GraphVisualizationEngine;
@@ -23,29 +27,53 @@ export interface GraphPlugin {
   version: string;
   description: string;
   dependencies?: string[];
-  
+
   // Lifecycle hooks
   initialize?(context: PluginContext): void | Promise<void>;
   beforeRender?(context: PluginContext): void | Promise<void>;
   afterRender?(context: PluginContext): void | Promise<void>;
-  beforeDataUpdate?(context: PluginContext, newData: GraphData): void | Promise<void>;
-  afterDataUpdate?(context: PluginContext, newData: GraphData): void | Promise<void>;
+  beforeDataUpdate?(
+    context: PluginContext,
+    newData: GraphData
+  ): void | Promise<void>;
+  afterDataUpdate?(
+    context: PluginContext,
+    newData: GraphData
+  ): void | Promise<void>;
   destroy?(context: PluginContext): void | Promise<void>;
-  
+
   // Event handlers
   onNodeClick?(node: GraphNode, event: Event, context: PluginContext): void;
-  onNodeHover?(node: GraphNode | null, event: Event, context: PluginContext): void;
+  onNodeHover?(
+    node: GraphNode | null,
+    event: Event,
+    context: PluginContext
+  ): void;
   onEdgeClick?(edge: GraphEdge, event: Event, context: PluginContext): void;
-  onEdgeHover?(edge: GraphEdge | null, event: Event, context: PluginContext): void;
+  onEdgeHover?(
+    edge: GraphEdge | null,
+    event: Event,
+    context: PluginContext
+  ): void;
   onZoom?(transform: d3.ZoomTransform, context: PluginContext): void;
-  
+
   // Custom rendering
-  customNodeRenderer?(selection: d3.Selection<any, GraphNode, any, any>, context: PluginContext): void;
-  customEdgeRenderer?(selection: d3.Selection<any, GraphEdge, any, any>, context: PluginContext): void;
-  
+  customNodeRenderer?(
+    selection: d3.Selection<any, GraphNode, any, any>,
+    context: PluginContext
+  ): void;
+  customEdgeRenderer?(
+    selection: d3.Selection<any, GraphEdge, any, any>,
+    context: PluginContext
+  ): void;
+
   // Layout algorithms
-  customLayout?(nodes: GraphNode[], edges: GraphEdge[], config: GraphConfig): void;
-  
+  customLayout?(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    config: GraphConfig
+  ): void;
+
   // Settings/configuration
   getSettings?(): PluginSettings;
   applySettings?(settings: PluginSettings): void;
@@ -88,14 +116,19 @@ export class GraphPluginSystem {
 
     // Check dependencies
     if (plugin.dependencies) {
-      const missingDeps = plugin.dependencies.filter(dep => !this.plugins.has(dep));
+      const missingDeps = plugin.dependencies.filter(
+        (dep) => !this.plugins.has(dep)
+      );
       if (missingDeps.length > 0) {
-        throw new Error(`Plugin ${plugin.name} has missing dependencies: ${missingDeps.join(', ')}`);
+        throw new Error(
+          `Plugin ${plugin.name} has missing dependencies: ${missingDeps.join(
+            ", "
+          )}`
+        );
       }
     }
 
     this.plugins.set(plugin.name, plugin);
-    console.log(`Plugin ${plugin.name} v${plugin.version} registered successfully`);
   }
 
   /**
@@ -109,11 +142,16 @@ export class GraphPluginSystem {
     }
 
     // Check if other plugins depend on this one
-    const dependents = Array.from(this.plugins.values())
-      .filter(p => p.dependencies?.includes(name));
-    
+    const dependents = Array.from(this.plugins.values()).filter((p) =>
+      p.dependencies?.includes(name)
+    );
+
     if (dependents.length > 0) {
-      throw new Error(`Cannot unregister plugin ${name}. It is required by: ${dependents.map(p => p.name).join(', ')}`);
+      throw new Error(
+        `Cannot unregister plugin ${name}. It is required by: ${dependents
+          .map((p) => p.name)
+          .join(", ")}`
+      );
     }
 
     // Destroy plugin
@@ -125,25 +163,23 @@ export class GraphPluginSystem {
     this.plugins.delete(name);
     this.pluginContexts.delete(name);
     this.loadedManifests.delete(name);
-    
-    console.log(`Plugin ${name} unregistered successfully`);
   }
 
   /**
    * Initialize all plugins
    */
-  public async initializePlugins(context: Omit<PluginContext, 'engine'>): Promise<void> {
+  public async initializePlugins(
+    context: Omit<PluginContext, "engine">
+  ): Promise<void> {
     const fullContext: PluginContext = { engine: this.engine, ...context };
 
     for (const [name, plugin] of this.plugins) {
       try {
         this.pluginContexts.set(name, fullContext);
-        
+
         if (plugin.initialize) {
           await plugin.initialize(fullContext);
         }
-        
-        console.log(`Plugin ${name} initialized successfully`);
       } catch (error) {
         console.error(`Failed to initialize plugin ${name}:`, error);
       }
@@ -183,9 +219,14 @@ export class GraphPluginSystem {
   /**
    * Execute data update hooks
    */
-  public async executeDataUpdateHooks(context: PluginContext, newData: GraphData, phase: 'before' | 'after'): Promise<void> {
-    const hookName = phase === 'before' ? 'beforeDataUpdate' : 'afterDataUpdate';
-    
+  public async executeDataUpdateHooks(
+    context: PluginContext,
+    newData: GraphData,
+    phase: "before" | "after"
+  ): Promise<void> {
+    const hookName =
+      phase === "before" ? "beforeDataUpdate" : "afterDataUpdate";
+
     for (const [name, plugin] of this.plugins) {
       try {
         const hook = plugin[hookName];
@@ -201,7 +242,11 @@ export class GraphPluginSystem {
   /**
    * Execute event handlers
    */
-  public executeNodeClickHandlers(node: GraphNode, event: Event, context: PluginContext): void {
+  public executeNodeClickHandlers(
+    node: GraphNode,
+    event: Event,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.onNodeClick) {
@@ -213,7 +258,11 @@ export class GraphPluginSystem {
     }
   }
 
-  public executeNodeHoverHandlers(node: GraphNode | null, event: Event, context: PluginContext): void {
+  public executeNodeHoverHandlers(
+    node: GraphNode | null,
+    event: Event,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.onNodeHover) {
@@ -225,7 +274,11 @@ export class GraphPluginSystem {
     }
   }
 
-  public executeEdgeClickHandlers(edge: GraphEdge, event: Event, context: PluginContext): void {
+  public executeEdgeClickHandlers(
+    edge: GraphEdge,
+    event: Event,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.onEdgeClick) {
@@ -237,7 +290,11 @@ export class GraphPluginSystem {
     }
   }
 
-  public executeEdgeHoverHandlers(edge: GraphEdge | null, event: Event, context: PluginContext): void {
+  public executeEdgeHoverHandlers(
+    edge: GraphEdge | null,
+    event: Event,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.onEdgeHover) {
@@ -249,7 +306,10 @@ export class GraphPluginSystem {
     }
   }
 
-  public executeZoomHandlers(transform: d3.ZoomTransform, context: PluginContext): void {
+  public executeZoomHandlers(
+    transform: d3.ZoomTransform,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.onZoom) {
@@ -264,7 +324,10 @@ export class GraphPluginSystem {
   /**
    * Execute custom renderers
    */
-  public executeCustomNodeRenderers(selection: d3.Selection<any, GraphNode, any, any>, context: PluginContext): void {
+  public executeCustomNodeRenderers(
+    selection: d3.Selection<any, GraphNode, any, any>,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.customNodeRenderer) {
@@ -276,7 +339,10 @@ export class GraphPluginSystem {
     }
   }
 
-  public executeCustomEdgeRenderers(selection: d3.Selection<any, GraphEdge, any, any>, context: PluginContext): void {
+  public executeCustomEdgeRenderers(
+    selection: d3.Selection<any, GraphEdge, any, any>,
+    context: PluginContext
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.customEdgeRenderer) {
@@ -291,7 +357,11 @@ export class GraphPluginSystem {
   /**
    * Execute custom layouts
    */
-  public executeCustomLayouts(nodes: GraphNode[], edges: GraphEdge[], config: GraphConfig): void {
+  public executeCustomLayouts(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    config: GraphConfig
+  ): void {
     for (const [name, plugin] of this.plugins) {
       try {
         if (plugin.customLayout) {
@@ -311,25 +381,24 @@ export class GraphPluginSystem {
       // Dynamic import of the plugin module
       const module = await import(manifest.main);
       const PluginClass = module.default || module[manifest.name];
-      
+
       if (!PluginClass) {
         throw new Error(`Plugin class not found in ${manifest.main}`);
       }
-      
+
       // Create plugin instance
       const plugin: GraphPlugin = new PluginClass();
-      
+
       // Validate plugin structure
       if (!plugin.name || !plugin.version) {
-        throw new Error('Plugin must have name and version properties');
+        throw new Error("Plugin must have name and version properties");
       }
-      
+
       // Store manifest
       this.loadedManifests.set(plugin.name, manifest);
-      
+
       // Register plugin
       this.registerPlugin(plugin);
-      
     } catch (error) {
       console.error(`Failed to load plugin from ${manifest.main}:`, error);
       throw error;
@@ -387,11 +456,11 @@ export class GraphPluginSystem {
    */
   public getDependencyGraph(): { [plugin: string]: string[] } {
     const graph: { [plugin: string]: string[] } = {};
-    
+
     for (const [name, plugin] of this.plugins) {
       graph[name] = plugin.dependencies || [];
     }
-    
+
     return graph;
   }
 
@@ -400,16 +469,20 @@ export class GraphPluginSystem {
    */
   public validateDependencies(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
-    
+
     for (const [name, plugin] of this.plugins) {
       if (plugin.dependencies) {
-        const missingDeps = plugin.dependencies.filter(dep => !this.plugins.has(dep));
+        const missingDeps = plugin.dependencies.filter(
+          (dep) => !this.plugins.has(dep)
+        );
         if (missingDeps.length > 0) {
-          errors.push(`Plugin ${name} has missing dependencies: ${missingDeps.join(', ')}`);
+          errors.push(
+            `Plugin ${name} has missing dependencies: ${missingDeps.join(", ")}`
+          );
         }
       }
     }
-    
+
     return { valid: errors.length === 0, errors };
   }
 
@@ -427,7 +500,7 @@ export class GraphPluginSystem {
         }
       }
     }
-    
+
     this.plugins.clear();
     this.pluginContexts.clear();
     this.loadedManifests.clear();
@@ -441,27 +514,51 @@ export abstract class BaseGraphPlugin implements GraphPlugin {
   abstract name: string;
   abstract version: string;
   abstract description: string;
-  
+
   dependencies?: string[];
-  
+
   // Default implementations - can be overridden
   initialize?(context: PluginContext): void | Promise<void>;
   beforeRender?(context: PluginContext): void | Promise<void>;
   afterRender?(context: PluginContext): void | Promise<void>;
-  beforeDataUpdate?(context: PluginContext, newData: GraphData): void | Promise<void>;
-  afterDataUpdate?(context: PluginContext, newData: GraphData): void | Promise<void>;
+  beforeDataUpdate?(
+    context: PluginContext,
+    newData: GraphData
+  ): void | Promise<void>;
+  afterDataUpdate?(
+    context: PluginContext,
+    newData: GraphData
+  ): void | Promise<void>;
   destroy?(context: PluginContext): void | Promise<void>;
-  
+
   onNodeClick?(node: GraphNode, event: Event, context: PluginContext): void;
-  onNodeHover?(node: GraphNode | null, event: Event, context: PluginContext): void;
+  onNodeHover?(
+    node: GraphNode | null,
+    event: Event,
+    context: PluginContext
+  ): void;
   onEdgeClick?(edge: GraphEdge, event: Event, context: PluginContext): void;
-  onEdgeHover?(edge: GraphEdge | null, event: Event, context: PluginContext): void;
+  onEdgeHover?(
+    edge: GraphEdge | null,
+    event: Event,
+    context: PluginContext
+  ): void;
   onZoom?(transform: d3.ZoomTransform, context: PluginContext): void;
-  
-  customNodeRenderer?(selection: d3.Selection<any, GraphNode, any, any>, context: PluginContext): void;
-  customEdgeRenderer?(selection: d3.Selection<any, GraphEdge, any, any>, context: PluginContext): void;
-  customLayout?(nodes: GraphNode[], edges: GraphEdge[], config: GraphConfig): void;
-  
+
+  customNodeRenderer?(
+    selection: d3.Selection<any, GraphNode, any, any>,
+    context: PluginContext
+  ): void;
+  customEdgeRenderer?(
+    selection: d3.Selection<any, GraphEdge, any, any>,
+    context: PluginContext
+  ): void;
+  customLayout?(
+    nodes: GraphNode[],
+    edges: GraphEdge[],
+    config: GraphConfig
+  ): void;
+
   getSettings?(): PluginSettings;
   applySettings?(settings: PluginSettings): void;
 }
@@ -472,9 +569,9 @@ export abstract class BaseGraphPlugin implements GraphPlugin {
  * Mini-map plugin for graph navigation
  */
 export class MiniMapPlugin extends BaseGraphPlugin {
-  name = 'minimap';
-  version = '1.0.0';
-  description = 'Provides a mini-map for graph navigation';
+  name = "minimap";
+  version = "1.0.0";
+  description = "Provides a mini-map for graph navigation";
 
   private miniMapContainer: HTMLElement | null = null;
   private miniMapSvg: d3.Selection<any, unknown, null, undefined> | null = null;
@@ -485,8 +582,8 @@ export class MiniMapPlugin extends BaseGraphPlugin {
 
   private createMiniMap(context: PluginContext): void {
     // Create mini-map container
-    this.miniMapContainer = document.createElement('div');
-    this.miniMapContainer.id = 'graph-minimap';
+    this.miniMapContainer = document.createElement("div");
+    this.miniMapContainer.id = "graph-minimap";
     this.miniMapContainer.style.cssText = `
       position: absolute;
       top: 10px;
@@ -498,20 +595,22 @@ export class MiniMapPlugin extends BaseGraphPlugin {
       border-radius: 4px;
       z-index: 1000;
     `;
-    
+
     // Add to container
-    const mainContainer = context.engine.getState().data.nodes.length > 0 
-      ? document.querySelector('#relationshipGraph')?.parentElement 
-      : null;
-    
+    const mainContainer =
+      context.engine.getState().data.nodes.length > 0
+        ? document.querySelector("#relationshipGraph")?.parentElement
+        : null;
+
     if (mainContainer) {
       mainContainer.appendChild(this.miniMapContainer);
-      
+
       // Create mini-map SVG
-      this.miniMapSvg = d3.select(this.miniMapContainer)
-        .append('svg')
-        .attr('width', 200)
-        .attr('height', 150);
+      this.miniMapSvg = d3
+        .select(this.miniMapContainer)
+        .append("svg")
+        .attr("width", 200)
+        .attr("height", 150);
     }
   }
 
@@ -521,21 +620,22 @@ export class MiniMapPlugin extends BaseGraphPlugin {
 
   private updateMiniMap(context: PluginContext): void {
     if (!this.miniMapSvg) return;
-    
+
     const data = context.data;
     // Simplified mini-map rendering
-    this.miniMapSvg.selectAll('*').remove();
-    
+    this.miniMapSvg.selectAll("*").remove();
+
     // Draw simplified nodes
-    this.miniMapSvg.selectAll('.mini-node')
+    this.miniMapSvg
+      .selectAll(".mini-node")
       .data(data.nodes)
       .enter()
-      .append('circle')
-      .attr('class', 'mini-node')
-      .attr('cx', d => (d.x || 0) * 0.2)
-      .attr('cy', d => (d.y || 0) * 0.15)
-      .attr('r', 2)
-      .attr('fill', '#4ecdc4');
+      .append("circle")
+      .attr("class", "mini-node")
+      .attr("cx", (d) => (d.x || 0) * 0.2)
+      .attr("cy", (d) => (d.y || 0) * 0.15)
+      .attr("r", 2)
+      .attr("fill", "#4ecdc4");
   }
 
   destroy(context: PluginContext): void {
@@ -549,9 +649,9 @@ export class MiniMapPlugin extends BaseGraphPlugin {
  * Graph metrics plugin for real-time analysis
  */
 export class GraphMetricsPlugin extends BaseGraphPlugin {
-  name = 'metrics';
-  version = '1.0.0';
-  description = 'Displays real-time graph metrics and analytics';
+  name = "metrics";
+  version = "1.0.0";
+  description = "Displays real-time graph metrics and analytics";
 
   private metricsPanel: HTMLElement | null = null;
 
@@ -560,8 +660,8 @@ export class GraphMetricsPlugin extends BaseGraphPlugin {
   }
 
   private createMetricsPanel(): void {
-    this.metricsPanel = document.createElement('div');
-    this.metricsPanel.id = 'graph-metrics';
+    this.metricsPanel = document.createElement("div");
+    this.metricsPanel.id = "graph-metrics";
     this.metricsPanel.style.cssText = `
       position: absolute;
       bottom: 10px;
@@ -574,8 +674,9 @@ export class GraphMetricsPlugin extends BaseGraphPlugin {
       z-index: 1000;
       min-width: 150px;
     `;
-    
-    const mainContainer = document.querySelector('#relationshipGraph')?.parentElement;
+
+    const mainContainer =
+      document.querySelector("#relationshipGraph")?.parentElement;
     if (mainContainer) {
       mainContainer.appendChild(this.metricsPanel);
     }
@@ -591,18 +692,21 @@ export class GraphMetricsPlugin extends BaseGraphPlugin {
 
   private updateMetrics(context: PluginContext): void {
     if (!this.metricsPanel) return;
-    
+
     const data = context.data;
     const nodeCount = data.nodes.length;
     const edgeCount = data.edges.length;
-    const density = nodeCount > 1 ? (2 * edgeCount) / (nodeCount * (nodeCount - 1)) : 0;
-    
+    const density =
+      nodeCount > 1 ? (2 * edgeCount) / (nodeCount * (nodeCount - 1)) : 0;
+
     this.metricsPanel.innerHTML = `
       <div><strong>Graph Metrics</strong></div>
       <div>Nodes: ${nodeCount}</div>
       <div>Edges: ${edgeCount}</div>
       <div>Density: ${density.toFixed(3)}</div>
-      <div>Avg Degree: ${nodeCount > 0 ? (2 * edgeCount / nodeCount).toFixed(1) : '0'}</div>
+      <div>Avg Degree: ${
+        nodeCount > 0 ? ((2 * edgeCount) / nodeCount).toFixed(1) : "0"
+      }</div>
     `;
   }
 

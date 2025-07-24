@@ -1,14 +1,14 @@
 /**
  * Data Flow Analyzer
- * 
+ *
  * Tracks data types, transformations, and flow patterns across services.
  * Understands how data moves through sockets, gRPC calls, REST APIs, etc.
  */
 
-import { Database } from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { eq, and } from 'drizzle-orm';
-import * as schema from '../database/drizzle/schema.js';
+import { Database } from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { eq, and } from "drizzle-orm";
+import * as schema from "../database/drizzle/schema.js";
 
 export interface DataFlowNode {
   id: string;
@@ -29,13 +29,18 @@ export interface DataFlowEdge {
   id: string;
   fromNode: string;
   toNode: string;
-  communicationType: 'grpc' | 'websocket' | 'rest' | 'message_queue' | 'direct_call';
+  communicationType:
+    | "grpc"
+    | "websocket"
+    | "rest"
+    | "message_queue"
+    | "direct_call";
   protocol: string;
   dataTransformation?: {
     inputType: string;
     outputType: string;
     transformationFunction?: string;
-    serialization?: 'json' | 'protobuf' | 'binary' | 'custom';
+    serialization?: "json" | "protobuf" | "binary" | "custom";
   };
   metadata: {
     confidence: number;
@@ -57,7 +62,12 @@ export interface TypeDefinition {
   language: string;
   definition: string;
   fields: TypeField[];
-  source: 'protobuf' | 'typescript_interface' | 'go_struct' | 'java_class' | 'python_dataclass';
+  source:
+    | "protobuf"
+    | "typescript_interface"
+    | "go_struct"
+    | "java_class"
+    | "python_dataclass";
   filePath: string;
 }
 
@@ -73,7 +83,11 @@ export interface TypeField {
 export interface DataContract {
   id: string;
   servicePair: [string, string]; // [producer, consumer]
-  contractType: 'grpc_service' | 'websocket_event' | 'rest_endpoint' | 'message_topic';
+  contractType:
+    | "grpc_service"
+    | "websocket_event"
+    | "rest_endpoint"
+    | "message_topic";
   inputSchema: string;
   outputSchema: string;
   bidirectional: boolean;
@@ -96,7 +110,7 @@ export class DataFlowAnalyzer {
       nodes: [],
       edges: [],
       typeDefinitions: new Map(),
-      dataContracts: []
+      dataContracts: [],
     };
   }
 
@@ -104,8 +118,6 @@ export class DataFlowAnalyzer {
    * Analyze data flow for a specific project
    */
   async analyzeDataFlow(projectId: number): Promise<DataFlowGraph> {
-    console.log(`🔍 Analyzing data flow for project ${projectId}...`);
-
     // Step 1: Extract type definitions from all languages
     await this.extractTypeDefinitions(projectId);
 
@@ -121,7 +133,6 @@ export class DataFlowAnalyzer {
     // Step 5: Generate data contracts
     await this.generateDataContracts(projectId);
 
-    console.log(`✅ Data flow analysis complete: ${this.dataFlowGraph.nodes.length} nodes, ${this.dataFlowGraph.edges.length} edges`);
     return this.dataFlowGraph;
   }
 
@@ -135,7 +146,7 @@ export class DataFlowAnalyzer {
       .where(
         and(
           eq(schema.universalSymbols.projectId, projectId),
-          eq(schema.universalSymbols.kind, 'interface') // TypeScript interfaces
+          eq(schema.universalSymbols.kind, "interface") // TypeScript interfaces
         )
       );
 
@@ -154,7 +165,7 @@ export class DataFlowAnalyzer {
       .where(
         and(
           eq(schema.universalSymbols.projectId, projectId),
-          eq(schema.universalSymbols.kind, 'struct') // Go structs
+          eq(schema.universalSymbols.kind, "struct") // Go structs
         )
       );
 
@@ -165,8 +176,6 @@ export class DataFlowAnalyzer {
         this.dataFlowGraph.typeDefinitions.set(typeDef.name, typeDef);
       }
     }
-
-    console.log(`📋 Extracted ${this.typeDefinitions.size} type definitions`);
   }
 
   /**
@@ -184,13 +193,13 @@ export class DataFlowAnalyzer {
     // Group symbols by service (file-based grouping for microservices)
     for (const symbol of symbols) {
       const serviceName = this.extractServiceName(symbol.filePath);
-      
+
       if (!services.has(serviceName)) {
         services.set(serviceName, {
           name: serviceName,
-          language: symbol.languageId.toString() || 'unknown',
+          language: symbol.languageId.toString() || "unknown",
           symbols: [],
-          endpoints: []
+          endpoints: [],
         });
       }
 
@@ -210,15 +219,13 @@ export class DataFlowAnalyzer {
           location: {
             filePath: symbol.filePath,
             line: symbol.line,
-            column: symbol.column
-          }
+            column: symbol.column,
+          },
         };
 
         this.dataFlowGraph.nodes.push(node);
       }
     }
-
-    console.log(`🏗️ Built ${this.dataFlowGraph.nodes.length} data flow nodes`);
   }
 
   /**
@@ -237,8 +244,6 @@ export class DataFlowAnalyzer {
         this.dataFlowGraph.edges.push(edge);
       }
     }
-
-    console.log(`🔗 Identified ${this.dataFlowGraph.edges.length} data flow edges`);
   }
 
   /**
@@ -251,8 +256,6 @@ export class DataFlowAnalyzer {
         edge.dataTransformation = transformation;
       }
     }
-
-    console.log(`🔄 Analyzed data transformations for ${this.dataFlowGraph.edges.length} edges`);
   }
 
   /**
@@ -263,18 +266,20 @@ export class DataFlowAnalyzer {
 
     for (const edge of this.dataFlowGraph.edges) {
       const contractId = `${edge.fromNode}_${edge.toNode}_${edge.communicationType}`;
-      
+
       if (!contractMap.has(contractId)) {
         const contract: DataContract = {
           id: contractId,
           servicePair: [
             this.getServiceFromNode(edge.fromNode),
-            this.getServiceFromNode(edge.toNode)
+            this.getServiceFromNode(edge.toNode),
           ],
-          contractType: this.mapCommunicationTypeToContract(edge.communicationType),
-          inputSchema: edge.dataTransformation?.inputType || 'unknown',
-          outputSchema: edge.dataTransformation?.outputType || 'unknown',
-          bidirectional: edge.metadata.bidirectional
+          contractType: this.mapCommunicationTypeToContract(
+            edge.communicationType
+          ),
+          inputSchema: edge.dataTransformation?.inputType || "unknown",
+          outputSchema: edge.dataTransformation?.outputType || "unknown",
+          bidirectional: edge.metadata.bidirectional,
         };
 
         contractMap.set(contractId, contract);
@@ -282,43 +287,48 @@ export class DataFlowAnalyzer {
     }
 
     this.dataFlowGraph.dataContracts = Array.from(contractMap.values());
-    console.log(`📝 Generated ${this.dataFlowGraph.dataContracts.length} data contracts`);
   }
 
   // Helper methods
-  private async parseTypeDefinition(symbol: any): Promise<TypeDefinition | null> {
+  private async parseTypeDefinition(
+    symbol: any
+  ): Promise<TypeDefinition | null> {
     if (!symbol.signature) return null;
 
     // Parse TypeScript interface
     const fields = this.parseInterfaceFields(symbol.signature);
-    
+
     return {
       name: symbol.name,
-      language: symbol.language || 'typescript',
+      language: symbol.language || "typescript",
       definition: symbol.signature,
       fields,
-      source: 'typescript_interface',
-      filePath: symbol.filePath
+      source: "typescript_interface",
+      filePath: symbol.filePath,
     };
   }
 
-  private async parseStructDefinition(symbol: any): Promise<TypeDefinition | null> {
+  private async parseStructDefinition(
+    symbol: any
+  ): Promise<TypeDefinition | null> {
     if (!symbol.languageFeatures?.fields) return null;
 
-    const fields: TypeField[] = symbol.languageFeatures.fields.map((field: any) => ({
-      name: field.name,
-      type: field.type,
-      optional: false,
-      repeated: false
-    }));
+    const fields: TypeField[] = symbol.languageFeatures.fields.map(
+      (field: any) => ({
+        name: field.name,
+        type: field.type,
+        optional: false,
+        repeated: false,
+      })
+    );
 
     return {
       name: symbol.name,
-      language: 'go',
+      language: "go",
       definition: symbol.signature || `type ${symbol.name} struct`,
       fields,
-      source: 'go_struct',
-      filePath: symbol.filePath
+      source: "go_struct",
+      filePath: symbol.filePath,
     };
   }
 
@@ -326,16 +336,17 @@ export class DataFlowAnalyzer {
     const fields: TypeField[] = [];
     // Simplified field parsing - would need more sophisticated parsing
     const fieldMatches = signature.match(/(\w+)(\?)?:\s*([^;,}]+)/g);
-    
+
     if (fieldMatches) {
       for (const match of fieldMatches) {
-        const [, name, optional, type] = match.match(/(\w+)(\?)?:\s*(.+)/) || [];
+        const [, name, optional, type] =
+          match.match(/(\w+)(\?)?:\s*(.+)/) || [];
         if (name && type) {
           fields.push({
             name,
             type: type.trim(),
             optional: !!optional,
-            repeated: type.includes('[]')
+            repeated: type.includes("[]"),
           });
         }
       }
@@ -347,22 +358,24 @@ export class DataFlowAnalyzer {
   private extractServiceName(filePath: string): string {
     // Extract service name from microservices path pattern
     const match = filePath.match(/src\/([^\/]+)\//);
-    return match ? match[1] : 'unknown';
+    return match ? match[1] : "unknown";
   }
 
   private isDataEndpoint(symbol: any): boolean {
     // Check if symbol represents a data handling endpoint
-    const isGrpcMethod = symbol.languageFeatures?.parameters?.some((p: any) => 
-      p.type?.includes('pb.') || p.type?.includes('Request')
+    const isGrpcMethod = symbol.languageFeatures?.parameters?.some(
+      (p: any) => p.type?.includes("pb.") || p.type?.includes("Request")
     );
-    
-    const isHttpHandler = symbol.signature?.includes('http') || 
-                         symbol.signature?.includes('Request') ||
-                         symbol.signature?.includes('Response');
 
-    const isSocketHandler = symbol.signature?.includes('socket') ||
-                           symbol.signature?.includes('emit') ||
-                           symbol.signature?.includes('on');
+    const isHttpHandler =
+      symbol.signature?.includes("http") ||
+      symbol.signature?.includes("Request") ||
+      symbol.signature?.includes("Response");
+
+    const isSocketHandler =
+      symbol.signature?.includes("socket") ||
+      symbol.signature?.includes("emit") ||
+      symbol.signature?.includes("on");
 
     return isGrpcMethod || isHttpHandler || isSocketHandler;
   }
@@ -377,26 +390,30 @@ export class DataFlowAnalyzer {
       return symbol.languageFeatures.parameters[0].type;
     }
 
-    return 'unknown';
+    return "unknown";
   }
 
-  private async createDataFlowEdge(relationship: any): Promise<DataFlowEdge | null> {
+  private async createDataFlowEdge(
+    relationship: any
+  ): Promise<DataFlowEdge | null> {
     if (!relationship.metadata?.crossLanguageType) return null;
 
-    const communicationType = this.mapRelationshipTypeToCommunication(relationship.type);
-    
+    const communicationType = this.mapRelationshipTypeToCommunication(
+      relationship.type
+    );
+
     return {
       id: `${relationship.fromSymbolId}_${relationship.toSymbolId}`,
-      fromNode: relationship.fromName || 'unknown',
-      toNode: relationship.toName || 'unknown',
+      fromNode: relationship.fromName || "unknown",
+      toNode: relationship.toName || "unknown",
       communicationType,
-      protocol: relationship.metadata.crossLanguageType || 'unknown',
+      protocol: relationship.metadata.crossLanguageType || "unknown",
       metadata: {
         confidence: relationship.confidence || 0.5,
         crossLanguage: true,
         async: relationship.metadata.isAsync || false,
-        bidirectional: relationship.metadata.bidirectional || false
-      }
+        bidirectional: relationship.metadata.bidirectional || false,
+      },
     };
   }
 
@@ -404,30 +421,40 @@ export class DataFlowAnalyzer {
     // Analyze data transformation between services
     // This would examine the actual data types and serialization methods
     return {
-      inputType: 'Request',
-      outputType: 'Response',
-      serialization: edge.protocol === 'grpc' ? 'protobuf' : 'json'
+      inputType: "Request",
+      outputType: "Response",
+      serialization: edge.protocol === "grpc" ? "protobuf" : "json",
     };
   }
 
   private getServiceFromNode(nodeId: string): string {
-    return nodeId.split('_')[0];
+    return nodeId.split("_")[0];
   }
 
-  private mapCommunicationTypeToContract(commType: string): DataContract['contractType'] {
+  private mapCommunicationTypeToContract(
+    commType: string
+  ): DataContract["contractType"] {
     switch (commType) {
-      case 'grpc': return 'grpc_service';
-      case 'websocket': return 'websocket_event';
-      case 'rest': return 'rest_endpoint';
-      default: return 'grpc_service';
+      case "grpc":
+        return "grpc_service";
+      case "websocket":
+        return "websocket_event";
+      case "rest":
+        return "rest_endpoint";
+      default:
+        return "grpc_service";
     }
   }
 
-  private mapRelationshipTypeToCommunication(relType: string): DataFlowEdge['communicationType'] {
+  private mapRelationshipTypeToCommunication(
+    relType: string
+  ): DataFlowEdge["communicationType"] {
     switch (relType) {
-      case 'invokes':
-      case 'calls': return 'grpc';
-      default: return 'direct_call';
+      case "invokes":
+      case "calls":
+        return "grpc";
+      default:
+        return "direct_call";
     }
   }
 
@@ -445,7 +472,7 @@ export class DataFlowAnalyzer {
           language: node.language,
           endpoints: [],
           incomingData: [],
-          outgoingData: []
+          outgoingData: [],
         });
       }
     }
@@ -459,7 +486,7 @@ export class DataFlowAnalyzer {
         serviceDataFlow.get(fromService).outgoingData.push({
           target: toService,
           type: edge.communicationType,
-          dataType: edge.dataTransformation?.outputType
+          dataType: edge.dataTransformation?.outputType,
         });
       }
 
@@ -467,7 +494,7 @@ export class DataFlowAnalyzer {
         serviceDataFlow.get(toService).incomingData.push({
           source: fromService,
           type: edge.communicationType,
-          dataType: edge.dataTransformation?.inputType
+          dataType: edge.dataTransformation?.inputType,
         });
       }
     }
@@ -476,7 +503,7 @@ export class DataFlowAnalyzer {
       services: Array.from(serviceDataFlow.values()),
       totalDataFlows: this.dataFlowGraph.edges.length,
       typeDefinitions: this.dataFlowGraph.typeDefinitions.size,
-      dataContracts: this.dataFlowGraph.dataContracts.length
+      dataContracts: this.dataFlowGraph.dataContracts.length,
     };
   }
 }

@@ -49,6 +49,10 @@ export class GraphFilterSidebar extends DashboardComponent {
 
       this.render();
     } catch (error) {
+      // Ignore abort errors - they're expected when navigating away
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       console.error('Failed to load filter options:', error);
       this.render();
     }

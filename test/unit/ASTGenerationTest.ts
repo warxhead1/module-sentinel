@@ -5,20 +5,21 @@
  * This test checks specific files that are known to have parsing issues.
  */
 
-import { BaseTest } from '../helpers/BaseTest.js';
+import Database from 'better-sqlite3';
+import { TestResult } from '../helpers/JUnitReporter.js';
 import { OptimizedCppTreeSitterParser } from '../../src/parsers/tree-sitter/optimized-cpp-parser.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 
-export class ASTGenerationTest extends BaseTest {
+export class ASTGenerationTest {
   private parser: OptimizedCppTreeSitterParser;
+  private db: Database.Database;
 
-  constructor() {
-    super('ASTGenerationTest');
+  constructor(db: Database.Database) {
+    this.db = db;
   }
 
   async setup(): Promise<void> {
-    await super.setup();
     
     // Initialize the C++ parser
     this.parser = new OptimizedCppTreeSitterParser(this.db, {
@@ -31,7 +32,10 @@ export class ASTGenerationTest extends BaseTest {
     await this.parser.initialize();
   }
 
-  async run(): Promise<void> {
+  async run(): Promise<TestResult[]> {
+    const results: TestResult[] = [];
+    
+    await this.setup();
     console.log('\n🔍 Testing AST Generation for specific problematic files...');
     
     // Test files that are known to have issues
@@ -93,6 +97,16 @@ export class ASTGenerationTest extends BaseTest {
 
     // Additional diagnostics
     await this.runDiagnostics();
+    
+    // Return test results
+    results.push({
+      name: 'ASTGenerationTest',
+      status: failureCount === 0 ? 'passed' : 'failed',
+      message: `${successCount} passed, ${failureCount} failed`,
+      duration: 0
+    });
+    
+    return results;
   }
 
   private async testTreeSitterParsing(filePath: string, content: string): Promise<{
@@ -161,9 +175,13 @@ export class ASTGenerationTest extends BaseTest {
       console.log(`  ❌ tree-sitter-cpp loading failed: ${error}`);
     }
 
-    // Check parser initialization
-    const useTreeSitter = (this.parser as any).useTreeSitter;
-    console.log(`  🌳 Tree-sitter enabled: ${useTreeSitter}`);
+    // Check parser initialization - safely access private property
+    try {
+      const useTreeSitter = (this.parser as any).useTreeSitter;
+      console.log(`  🌳 Tree-sitter enabled: ${useTreeSitter}`);
+    } catch (error) {
+      console.log(`  🌳 Tree-sitter status: Cannot access private property (parser likely working)`);
+    }
     
     // Check if parser instance exists
     const parser = (this.parser as any).parser;

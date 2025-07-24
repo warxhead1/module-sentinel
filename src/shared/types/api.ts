@@ -128,6 +128,8 @@ export interface GraphNode {
     controlStructures?: number; // Number of if/for/while/switch/try statements
     memberCount?: number; // Number of class members (for classes)
     templateComplexity?: number; // Complexity of template instantiation
+    methodCount?: number; // Number of methods (for class containers)
+    propertyCount?: number; // Number of properties (for class containers)
   };
   
   // Pattern detection results
@@ -185,6 +187,21 @@ export interface GraphNode {
     hasFileIO?: boolean; // Contains file I/O operations
     hasNetworkCalls?: boolean; // Contains network operations
   };
+  
+  // Container node properties for hierarchical visualization
+  containerType?: 'class' | 'namespace' | 'module';
+  childNodes?: GraphNode[]; // Child nodes when acting as container
+  aggregatedMethods?: Array<{
+    id: string;
+    name: string;
+    type: string;
+    visibility?: string;
+    metrics?: any;
+    isPublic?: boolean;
+    complexity?: number;
+  }>; // Simple methods shown as badges
+  parentContainerId?: string; // Reference to parent container
+  isVisible?: boolean; // Visibility state for child nodes
   
   // D3 simulation properties
   x?: number;
@@ -257,6 +274,44 @@ export interface Relationship {
   contextColumn?: number;
   contextSnippet?: string;
   metadata?: Record<string, any>;
+  
+  // Enhanced fields from joins
+  from_name?: string;
+  from_qualified_name?: string;
+  from_kind?: string;
+  from_namespace?: string;
+  from_language?: string;
+  to_name?: string;
+  to_qualified_name?: string;
+  to_kind?: string;
+  to_namespace?: string;
+  to_language?: string;
+  
+  // Additional rich data fields
+  from_file_path?: string;
+  from_line?: number;
+  from_column?: number;
+  from_signature?: string;
+  from_return_type?: string;
+  from_visibility?: string;
+  from_is_exported?: boolean;
+  from_is_async?: boolean;
+  from_is_abstract?: boolean;
+  from_language_features?: string;
+  from_semantic_tags?: string;
+  from_confidence?: number;
+  to_file_path?: string;
+  to_line?: number;
+  to_column?: number;
+  to_signature?: string;
+  to_return_type?: string;
+  to_visibility?: string;
+  to_is_exported?: boolean;
+  to_is_async?: boolean;
+  to_is_abstract?: boolean;
+  to_language_features?: string;
+  to_semantic_tags?: string;
+  to_confidence?: number;
 }
 
 export interface SearchQuery {

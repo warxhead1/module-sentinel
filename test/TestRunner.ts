@@ -40,6 +40,7 @@ export class TestRunner extends EventEmitter {
   private testFilter?: string;
   private maxFiles?: number;
   private skipIndex: boolean;
+  private enableSemanticAnalysis: boolean;
   private junitReporter: JUnitReporter;
 
   constructor(options?: {
@@ -47,12 +48,14 @@ export class TestRunner extends EventEmitter {
     testFilter?: string;
     maxFiles?: number;
     skipIndex?: boolean;
+    enableSemanticAnalysis?: boolean;
   }) {
     super();
     this.forceRebuild = options?.forceRebuild ?? false;
     this.testFilter = options?.testFilter;
     this.maxFiles = options?.maxFiles;
     this.skipIndex = options?.skipIndex ?? false;
+    this.enableSemanticAnalysis = options?.enableSemanticAnalysis ?? false;
     this.junitReporter = new JUnitReporter();
 
     // Set NODE_ENV to test
@@ -70,11 +73,22 @@ export class TestRunner extends EventEmitter {
     try {
       // Use centralized database initializer
       const dbInitializer = DatabaseInitializer.getInstance();
-      const db = await dbInitializer.resetDatabase(this.dbPath);
+      const db = this.forceRebuild 
+        ? await dbInitializer.resetDatabase(this.dbPath)
+        : await dbInitializer.initializeDatabase(this.dbPath);
+      
+      if (this.forceRebuild) {
+        console.log("🔄 Database reset completed (--rebuild flag set)");
+      } else {
+        console.log("📊 Using existing database (use --rebuild to reset)");
+      }
 
       // Build test index (unless skipped)
       if (!this.skipIndex) {
         console.log("🔨 Building test index...");
+        if (!this.enableSemanticAnalysis) {
+          console.log("⚡ Semantic analysis disabled for faster testing (use --semantic to enable)");
+        }
         await this.buildTestIndex(db);
       } else {
         console.log("⏭️  Skipping test index build (--skip-index flag set)");
@@ -129,15 +143,15 @@ export class TestRunner extends EventEmitter {
     }
   }
 
-  private async buildTestIndex(db: Database): Promise<void> {
+  private async buildTestIndex(db: Database.Database): Promise<void> {
     const testDataPath = path.join(this.projectPath, "test/complex-files");
 
     const indexer = new UniversalIndexer(db, {
       projectPath: testDataPath,
       projectName: "test-project",
       languages: ["cpp", "python", "typescript", "javascript"],
-      debugMode: true,
-      enableSemanticAnalysis: true, // Enable control flow for all tests
+      debugMode: false,
+      enableSemanticAnalysis: this.enableSemanticAnalysis, // Can be enabled with --semantic flag
       maxFiles: this.maxFiles,
     });
 
@@ -150,7 +164,7 @@ export class TestRunner extends EventEmitter {
     TreeSitterBaseParser.logPerformanceSummary();
   }
 
-  private async runTests(db: Database): Promise<TestResult[]> {
+  private async runTests(db: Database.Database): Promise<TestResult[]> {
     const results: TestResult[] = [];
 
     // Define test classes to run (order matters - DrizzleOrmTest first to verify schema)
@@ -263,6 +277,8 @@ if (require.main === module) {
       options.maxFiles = parseInt(args[++i], 10);
     } else if (args[i] === "--skip-index" || args[i] === "-s") {
       options.skipIndex = true;
+    } else if (args[i] === "--semantic" || args[i] === "--enable-semantic") {
+      options.enableSemanticAnalysis = true;
     }
   }
 
