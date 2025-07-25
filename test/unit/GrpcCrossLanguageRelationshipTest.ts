@@ -3,7 +3,7 @@ import { TestResult } from '../helpers/JUnitReporter.js';
 import Database from 'better-sqlite3';
 import { GoLanguageParser } from '../../src/parsers/adapters/go-language-parser.js';
 import { CSharpLanguageParser } from '../../src/parsers/adapters/csharp-language-parser.js';
-import { SemanticRelationshipEnhancer } from '../../src/services/semantic-relationship-enhancer.js';
+// import { SemanticRelationshipEnhancer } from '../../src/services/semantic-relationship-enhancer.js';
 
 export class GrpcCrossLanguageRelationshipTest extends BaseTest {
   constructor(db: Database.Database) {

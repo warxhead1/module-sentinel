@@ -70,7 +70,6 @@ export class BreadcrumbTrail extends DashboardComponent {
       '/impact': 'Impact Analysis',
       '/code-flow': 'Code Flow',
       '/multi-language-flow': 'Multi-Language',
-      '/enhanced-flow': 'Enhanced Flow'
     };
     
     const basePath = route.split('?')[0];

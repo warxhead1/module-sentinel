@@ -1,6 +1,5 @@
 import Database from "better-sqlite3";
 import * as fs from "fs";
-import * as path from "path";
 
 export class DatabaseManager {
   private db: Database.Database | null = null;
@@ -88,6 +87,10 @@ export class DatabaseManager {
       const result = this.db
         .prepare("SELECT name FROM sqlite_master WHERE type='table' LIMIT 1")
         .get();
+      
+      if (!result) {
+        throw new Error("Database appears to be empty - no tables found");
+      }
 
       // Check if we have the expected tables for universal schema
       const tables = this.db

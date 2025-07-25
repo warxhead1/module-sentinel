@@ -1,47 +1,119 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Module Sentinel Test Suite" tests="11" failures="2" skipped="0" time="39.486">
-  <testsuite name="Module Sentinel" tests="11" failures="2" skipped="0" time="39.486">
-    <testcase classname="CrossLanguageFlowTest" name="CrossLanguageFlowTest" time="0">
+<testsuites name="Module Sentinel Test Suite" tests="57" passed="31" failures="26" skipped="0" time="8.229">
+  <testsuite name="Module Sentinel" tests="57" passed="31" failures="26" skipped="0" time="8.229">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Struct extraction" time="0.042124000001422246">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="Index multi-language microservices project" time="11150">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Class extraction" time="0.007021000001259381">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="Detect cross-language relationships" time="1">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Constructor detection" time="0.0049139999991894">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="Detect gRPC/Protobuf usage" time="0">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Destructor detection" time="0.005215999999563792">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="Detect HTTP/REST API patterns" time="0">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Method extraction" time="0.007220999999844935">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="CrossLanguageDetector pattern detection" time="1">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Field extraction" time="0.004813999999896623">
     </testcase>
-    <testcase classname="CrossLanguageMicroservicesTest" name="Analyze service-to-service communication" time="1">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Inheritance relationships" time="0.016949999999269494">
     </testcase>
-    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect gRPC client calls in Go" time="2">
-      <failure message="❌ Assertion failed: Should track calling method (expected: checkoutService.getUserCart, actual: unknown)">
-Error: ❌ Assertion failed: Should track calling method (expected: checkoutService.getUserCart, actual: unknown)
-    at GrpcCrossLanguageRelationshipTest.assert (/workspace/test/helpers/BaseTest.ts:34:13)
-    at GrpcCrossLanguageRelationshipTest.assertEqual (/workspace/test/helpers/BaseTest.ts:43:10)
-    at &lt;anonymous&gt; (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:46:12)
-    at async GrpcCrossLanguageRelationshipTest.runTest (/workspace/test/helpers/BaseTest.ts:153:7)
-    at async GrpcCrossLanguageRelationshipTest.run (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:17:18)
-    at async TestRunner.runTests (/workspace/test/TestRunner.ts:234:29)
-    at async TestRunner.run (/workspace/test/TestRunner.ts:101:23)
-      </failure>
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Override detection" time="0.024371999999857508">
     </testcase>
-    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect gRPC service implementation in C#" time="0">
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Virtual method detection" time="0.00591800000074727">
     </testcase>
-    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Link gRPC clients to service implementations" time="95">
-      <failure message="❌ Assertion failed: From language should be Go (expected: go, actual: cpp)">
-Error: ❌ Assertion failed: From language should be Go (expected: go, actual: cpp)
-    at GrpcCrossLanguageRelationshipTest.assert (/workspace/test/helpers/BaseTest.ts:34:13)
-    at GrpcCrossLanguageRelationshipTest.assertEqual (/workspace/test/helpers/BaseTest.ts:43:10)
-    at &lt;anonymous&gt; (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:180:14)
-    at GrpcCrossLanguageRelationshipTest.runTest (/workspace/test/helpers/BaseTest.ts:153:13)
-    at GrpcCrossLanguageRelationshipTest.run (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:87:29)
-    at async TestRunner.runTests (/workspace/test/TestRunner.ts:234:29)
-    at async TestRunner.run (/workspace/test/TestRunner.ts:101:23)
-      </failure>
+    <testcase classname="CppParserComparisonTest" name="basic_structs_classes.cpp: Access level tracking" time="0.012236000000484637">
     </testcase>
-    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect Python gRPC stub usage" time="8">
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Inline variable detection" time="0.019759000000703963">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Constexpr detection" time="0.005617000000711414">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Template detection" time="0.00902700000006007">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Auto return type" time="0.01524500000050466">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Coroutine detection" time="0.004011999999420368">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Lambda detection" time="0.011031999998522224">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Structured binding" time="0.015847000000576372">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="modern_cpp_features.cpp: Import relationships" time="0.006719000000884989">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Template class detection" time="0.03731100000004517">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Template function detection" time="0.04673899999943387">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Template specialization" time="0.014242000001104316">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Variadic template detection" time="0.01444199999968987">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Template parameters" time="0.04001900000002934">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="complex_templates.cpp: Operator overloading" time="0.010229999999864958">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Namespace detection" time="0.018654999999853317">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Nested namespace support" time="0.02246700000068813">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Using declarations" time="0.01364100000137114">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Anonymous namespace" time="0.010931999999229447">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Scope resolution" time="0.041823999999905936">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="namespaces_scoping.cpp: Qualified names" time="0.016748999998526415">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Function calls detection" time="0.02186500000061642">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Control flow blocks" time="0.012236999999004183">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Conditional blocks" time="0.014643000000432949">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Loop blocks" time="0.010530999999900814">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Switch blocks" time="0.009928999999829102">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Exception handling" time="0.010229999999864958">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="control_flow_analysis.cpp: Complexity calculation" time="0.01674999999886495">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.h: Header class detection" time="0.024874000000636443">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.h: Method declarations" time="0.028383999999277876">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.h: Inline functions" time="0.007121000000552158">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.cpp: Method definitions" time="0.03670899999997346">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.cpp: Include relationships" time="0.0072220000001834705">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="vector3.cpp: Member access" time="0.01594699999986915">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Namespace count" time="0.020259999999325373">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Class count" time="0.005515999999261112">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Method count" time="0.016949999999269494">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Constructor detection" time="0.011132999999972526">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Inheritance relationship" time="0.01344000000062806">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Override detection" time="0.012737999999444582">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="simple_test_validation.cpp: Call relationships" time="0.007922999999209424">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Total symbols" time="0.0431349999998929">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Total relationships" time="0.004514000000199303">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Module declarations" time="0.016050000000177533">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Export declarations" time="0.014847000000372645">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Template instantiations" time="0.010632999999870663">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Parse time under 5s" time="0.004011999999420368">
+    </testcase>
+    <testcase classname="CppParserComparisonTest" name="BufferCore.ixx: Memory efficiency" time="0.002006999999139225">
     </testcase>
   </testsuite>
 </testsuites>

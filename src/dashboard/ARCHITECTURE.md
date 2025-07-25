@@ -21,11 +21,9 @@
   - Advanced D3.js relationship visualization
   - Hierarchical grouping and semantic zooming
   
-- `enhanced-code-flow.ts` → Uses **ControlFlowEngine**
+- `code-flow-explorer.ts` → Uses **ExecutionAnalyzer**
   - Static code analysis and complexity metrics
   - Navigation breadcrumbs and hotspot detection
-  
-- `code-flow-explorer.ts` → Uses **ExecutionAnalyzer**
   - Runtime behavior and execution paths
   - Branch coverage and dead code detection
 

@@ -240,7 +240,7 @@ export class UniversalPatternEngine {
     if (!pattern.criteria.requiredSymbols) return 1.0;
     
     let totalScore = 0;
-    let totalRequirements = pattern.criteria.requiredSymbols.length;
+    const totalRequirements = pattern.criteria.requiredSymbols.length;
     
     for (const requirement of pattern.criteria.requiredSymbols) {
       const candidates = this.findSymbolCandidates(symbols, requirement);
@@ -318,7 +318,7 @@ export class UniversalPatternEngine {
     if (!pattern.criteria.requiredRelationships) return 1.0;
     
     let totalScore = 0;
-    let totalRequirements = pattern.criteria.requiredRelationships.length;
+    const totalRequirements = pattern.criteria.requiredRelationships.length;
     
     for (const requirement of pattern.criteria.requiredRelationships) {
       const fromSymbols = matchedSymbols.get(requirement.fromRole) || [];
@@ -358,7 +358,7 @@ export class UniversalPatternEngine {
   private scoreNamingMatch(
     pattern: UniversalPatternDefinition,
     symbols: UniversalSymbol[],
-    language: string
+    _language: string
   ): number {
     if (!pattern.criteria.namingPatterns) return 1.0;
     

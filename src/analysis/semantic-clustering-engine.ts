@@ -7,19 +7,19 @@
 
 import { Database } from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq, and } from "drizzle-orm";
+import { eq as _eq, and as _and } from "drizzle-orm";
 import {
-  semanticClusters,
-  clusterMembership,
-  universalSymbols,
+  semanticClusters as _semanticClusters,
+  clusterMembership as _clusterMembership,
+  universalSymbols as _universalSymbols,
 } from "../database/drizzle/schema.js";
 import {
   CodeEmbedding,
-  SimilarityResult,
+  SimilarityResult as _SimilarityResult,
   LocalCodeEmbeddingEngine,
 } from "./local-code-embedding.js";
-import { SymbolInfo } from "../parsers/tree-sitter/parser-types.js";
-import { SemanticContext } from "./semantic-context-engine.js";
+import { SymbolInfo as _SymbolInfo } from "../parsers/tree-sitter/parser-types.js";
+import { SemanticContext } from "./semantic-orchestrator.js";
 
 export interface SemanticCluster {
   id: number;
@@ -165,7 +165,8 @@ export class SemanticClusteringEngine {
       // Do not store clusters here to avoid ID mismatches
       // await this.storeClusters(clustersWithInsights);
 
-      const duration = Date.now() - startTime;
+      const _duration = Date.now() - startTime;
+      // TODO: Use duration for clustering performance metrics
 
       return clustersWithInsights;
     } catch (error) {
@@ -212,7 +213,7 @@ export class SemanticClusteringEngine {
       // K-means iteration with enhanced convergence detection
       while (iterations < maxIterations) {
 
-        const newAssignments = embeddings.map((embedding, index) => {
+        const newAssignments = embeddings.map((embedding, _index) => {
           return this.findClosestCentroid(embedding.embedding, centroids);
         });
 
@@ -448,7 +449,7 @@ export class SemanticClusteringEngine {
    */
   private async generateClusterInsights(
     cluster: SemanticCluster,
-    semanticContexts: Map<string, SemanticContext>
+    _semanticContexts: Map<string, SemanticContext>
   ): Promise<ClusterInsight[]> {
     const insights: ClusterInsight[] = [];
 
@@ -524,7 +525,7 @@ export class SemanticClusteringEngine {
    * Store clusters in database
    * @deprecated Use SemanticDataPersister.persistSemanticClusters instead to ensure proper ID management
    */
-  private async storeClusters(clusters: SemanticCluster[]): Promise<void> {
+  private async storeClusters(_clusters: SemanticCluster[]): Promise<void> {
     // This method is deprecated and should not be used
     // Clusters should be stored through SemanticDataPersister to ensure consistent ID assignment
     console.warn(
@@ -538,7 +539,8 @@ export class SemanticClusteringEngine {
     numClusters: number
   ): number[][] {
     const centroids: number[][] = [];
-    const embeddingDim = embeddings[0].embedding.length;
+    const _embeddingDim = embeddings[0].embedding.length;
+    // TODO: Use embedding dimension for validation or logging
 
     // Use K-means++ initialization for better results
     const firstCentroid =
@@ -595,7 +597,8 @@ export class SemanticClusteringEngine {
     numClusters: number
   ): number[][] {
     const centroids: number[][] = [];
-    const embeddingDim = embeddings[0].embedding.length;
+    const _embeddingDim = embeddings[0].embedding.length;
+    // TODO: Use embedding dimension for validation or logging
 
     for (let i = 0; i < numClusters; i++) {
       const clusterEmbeddings = embeddings

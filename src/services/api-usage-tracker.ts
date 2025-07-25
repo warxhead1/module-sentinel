@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { createLogger } from "../utils/logger.js";
 
 /**
  * Tracks specific API usage patterns like Vulkan, OpenGL, etc.
@@ -6,6 +7,7 @@ import Database from "better-sqlite3";
  */
 export class APIUsageTracker {
   private db: Database.Database;
+  private logger = createLogger("APIUsageTracker");
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -326,7 +328,12 @@ export class APIUsageTracker {
           confidence,
           description
         );
-    } catch (error) {
+    } catch {
+      this.logger.debug("Relationship already exists", { 
+        relationship: relationshipType,
+        from: fromSymbolId,
+        to: toSymbolId 
+      });
       // Ignore duplicates
     }
   }
@@ -351,6 +358,10 @@ export class APIUsageTracker {
         }
       }
     } catch (error) {
+      this.logger.debug("Failed to add semantic tag", error, { 
+        symbolId,
+        tag 
+      });
       // Ignore errors
     }
   }
@@ -393,7 +404,9 @@ if (require.main === module) {
     .then(async () => {
       const stats = await tracker.getAPIUsageStats();
       console.log("\n📊 API Usage Statistics:");
-      stats.forEach((stat: any) => {});
+      stats.forEach((stat: any) => {
+        console.log(`  - ${stat.endpoint}: ${stat.calls} calls (${stat.duration}ms avg)`);
+      });
 
       tracker.close();
       console.log("✅ API usage tracking complete!");

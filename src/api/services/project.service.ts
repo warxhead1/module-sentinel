@@ -261,7 +261,7 @@ export class ProjectService {
 
           console.error(`   Error: ${cascadeError.message}`);
 
-          // Manual deletion in correct order to handle foreign key constraints
+          // Manual deletion in transaction for atomicity
           const deletions = [
             // Clear self-references first
             "UPDATE universal_symbols SET parent_symbol_id = NULL WHERE project_id = ?",
@@ -286,18 +286,26 @@ export class ProjectService {
             "DELETE FROM project_languages WHERE project_id = ?",
           ];
 
-          for (const sql of deletions) {
-            try {
-              const paramCount = (sql.match(/\?/g) || []).length;
-              const params = Array(paramCount).fill(projectId);
-              const result = this.rawDb.prepare(sql).run(...params);
-              if (result.changes > 0) {
-                const tableName = sql.includes("UPDATE")
-                  ? "universal_symbols (cleared parent refs)"
-                  : sql.match(/DELETE FROM (\w+)/)?.[1] || "unknown";
+          // Execute all deletions in a single transaction for atomicity
+          const deleteTransaction = this.rawDb.transaction(() => {
+            for (const sql of deletions) {
+              try {
+                const paramCount = (sql.match(/\?/g) || []).length;
+                const params = Array(paramCount).fill(projectId);
+                const result = this.rawDb.prepare(sql).run(...params);
+                if (result.changes > 0) {
+                  const tableName = sql.includes("UPDATE")
+                    ? "universal_symbols (cleared parent refs)"
+                    : sql.match(/DELETE FROM (\w+)/)?.[1] || "unknown";
+                }
+              } catch (e: any) {
+                // Re-throw to trigger transaction rollback
+                throw e;
               }
-            } catch (e: any) {}
-          }
+            }
+          });
+          
+          deleteTransaction();
 
           // Try to delete project again
           await this.db.delete(projects).where(eq(projects.id, projectId));

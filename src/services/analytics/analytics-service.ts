@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { Symbol, Relationship } from '../../shared/types/api';
-import { RippleEffectTracker, ImpactPrediction, RippleNode } from '../../visualization/ripple-effect-tracker.js';
-import { ChangeImpactPredictor, ChangeScenario, ImpactVisualization } from '../../visualization/change-impact-predictor.js';
+import { RippleEffectTracker, ImpactPrediction, RippleNode } from '../../analysis/ripple-effect-tracker.js';
+import { ChangeImpactPredictor, ChangeScenario, ImpactVisualization } from '../../analysis/change-impact-predictor.js';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -774,16 +774,30 @@ export class AnalyticsService {
   }
 
   private calculateCognitiveComplexity(symbol: Symbol): number {
-    // Simplified calculation
-    let complexity = 1;
-    
-    // Add for nesting
-    if (symbol.depth) complexity += symbol.depth;
-    
-    // Add for conditionals in name (heuristic)
-    if (symbol.name.includes('if') || symbol.name.includes('switch')) complexity += 2;
-    
-    return complexity;
+    // Use consolidated CodeMetricsAnalyzer instead of simplified calculation
+    try {
+      const { CodeMetricsAnalyzer } = require('../../analysis/code-metrics-analyzer.js');
+      const analyzer = new CodeMetricsAnalyzer();
+      
+      const input = {
+        symbol: {
+          name: symbol.name,
+          kind: symbol.kind,
+          signature: symbol.signature
+        },
+        language: 'typescript', // Default for analytics service
+        maxLines: 100
+      };
+      
+      const metrics = analyzer.analyzeComplexity(input);
+      return metrics.cognitiveComplexity;
+    } catch (error) {
+      // Fallback to simple calculation if consolidated analyzer fails
+      let complexity = 1;
+      if (symbol.depth) complexity += symbol.depth;
+      if (symbol.name.includes('if') || symbol.name.includes('switch')) complexity += 2;
+      return complexity;
+    }
   }
 
   private calculateDataFlowComplexity(symbolId: number): number {

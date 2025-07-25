@@ -21,7 +21,9 @@ import {
   ParseOptions,
   ParseResult,
 } from "./parser-types.js";
-import { SemanticIntelligenceOrchestrator } from "../../analysis/semantic-intelligence-orchestrator.js";
+import { SemanticOrchestrator } from "../../analysis/semantic-orchestrator.js";
+import { MemoryMonitor, MemoryCheckpoint } from "../../utils/memory-monitor.js";
+import { createLogger } from "../../utils/logger.js";
 
 export abstract class OptimizedTreeSitterBaseParser {
   protected parser: Parser;
@@ -30,7 +32,9 @@ export abstract class OptimizedTreeSitterBaseParser {
   protected visitor: UnifiedASTVisitor;
   protected options: ParseOptions;
   protected debugMode: boolean = false;
-  protected semanticOrchestrator?: SemanticIntelligenceOrchestrator;
+  protected semanticOrchestrator?: SemanticOrchestrator;
+  protected memoryMonitor: MemoryMonitor;
+  protected logger = createLogger('OptimizedTreeSitterBaseParser');
 
   // Parser instance pool for reuse
   private static parserPool = new Map<string, Parser>();
@@ -65,6 +69,13 @@ export abstract class OptimizedTreeSitterBaseParser {
     this.drizzleDb = drizzle(db);
     this.options = options;
     this.debugMode = options.debugMode || false;
+    
+    // Initialize memory monitor with custom thresholds for parsers
+    this.memoryMonitor = new MemoryMonitor({
+      warningPercent: 60,
+      criticalPercent: 80,
+      maxHeapMB: 1536 // 1.5GB for parser operations
+    });
 
     // Get or create parser instance
     const parserKey = this.constructor.name;
@@ -83,7 +94,7 @@ export abstract class OptimizedTreeSitterBaseParser {
 
     // Initialize semantic intelligence orchestrator only if enabled
     if (this.options.enableSemanticAnalysis) {
-      this.semanticOrchestrator = new SemanticIntelligenceOrchestrator(db, {
+      this.semanticOrchestrator = new SemanticOrchestrator(db, {
         debugMode: this.debugMode,
         embeddingDimensions: 256,
       });
@@ -124,12 +135,26 @@ export abstract class OptimizedTreeSitterBaseParser {
    */
   async parseFile(filePath: string, content: string): Promise<ParseResult> {
     const startTime = Date.now();
+    
+    // Create memory checkpoint for this file
+    const memoryCheckpoint = this.memoryMonitor.createCheckpoint(`parse:${filePath}`);
+    
+    // Check memory before processing
+    const memStats = this.memoryMonitor.checkMemory();
+    if (memStats.percentUsed > 80) {
+      this.logger.warn('High memory usage before parsing', {
+        file: filePath,
+        memoryPercent: memStats.percentUsed
+      });
+    }
 
     // Check cache first
     const cached = this.getCachedParse(filePath);
     if (cached) {
       this.debug(`Cache hit for ${filePath}`);
       await this.storeParsedData(filePath, cached);
+      // Complete the memory checkpoint even for cached results
+      memoryCheckpoint.complete();
       return cached as ParseResult;
     }
 
@@ -266,9 +291,10 @@ export abstract class OptimizedTreeSitterBaseParser {
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         parseErrors.push(`Semantic analysis failed: ${errorMsg}`);
-        console.warn(
-          `⚠️ Semantic analysis failed for ${filePath}: ${errorMsg}`
-        );
+        this.logger.warn('Semantic analysis failed', {
+          file: filePath,
+          error: errorMsg
+        });
         // Continue without semantic analysis
       }
     }
@@ -281,6 +307,24 @@ export abstract class OptimizedTreeSitterBaseParser {
 
     const duration = Date.now() - startTime;
     this.debug(`Parsed ${filePath} in ${duration}ms`);
+    
+    // Complete memory checkpoint
+    const memoryUsage = memoryCheckpoint.complete();
+    
+    // If file used significant memory, suggest clearing cache
+    if (memoryUsage.memoryDelta > 100 * 1024 * 1024) { // 100MB
+      this.logger.warn('Large file parsed - consider memory optimization', {
+        file: filePath,
+        memoryUsed: `${(memoryUsage.memoryDelta / 1024 / 1024).toFixed(2)} MB`,
+        parseTime: duration
+      });
+      
+      // Clear old cache entries if memory is high
+      const currentMemory = this.memoryMonitor.checkMemory();
+      if (currentMemory.percentUsed > 70) {
+        this.clearOldCacheEntries();
+      }
+    }
 
     // Return the result
     return result as ParseResult;
@@ -312,6 +356,27 @@ export abstract class OptimizedTreeSitterBaseParser {
       OptimizedTreeSitterBaseParser.parseCache.delete(filePath);
     }
     return null;
+  }
+
+  /**
+   * Clear old cache entries to free memory
+   */
+  protected clearOldCacheEntries(): void {
+    const cache = OptimizedTreeSitterBaseParser.parseCache;
+    const now = Date.now();
+    const ttl = this.getCacheTTL();
+    let cleared = 0;
+    
+    for (const [path, entry] of cache.entries()) {
+      if (now - entry.timestamp > ttl) {
+        cache.delete(path);
+        cleared++;
+      }
+    }
+    
+    if (cleared > 0) {
+      this.logger.info('Cleared old cache entries', { count: cleared });
+    }
   }
 
   /**

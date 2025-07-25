@@ -155,6 +155,7 @@ export class MultiLanguageDashboardIntegrationTest extends BaseTest {
     const foundLanguages = languagesData.data || [];
     
     console.log(`📊 Found ${foundLanguages.length} languages in database`);
+    console.log(`📊 Expected to support at least: ${expectedLanguages.join(', ')}`);
     
     // Log detected languages for verification
     foundLanguages.forEach((lang: any) => {

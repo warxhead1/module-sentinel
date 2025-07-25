@@ -3,12 +3,13 @@
  */
 import Database from 'better-sqlite3';
 import type { Symbol, Relationship } from '../../shared/types/api.js';
+import { ensureDatabasePrepare } from "../../utils/database-compatibility.js";
 
 export class DatabaseService {
   private db: Database.Database;
 
   constructor(database: Database.Database) {
-    this.db = database;
+    this.db = ensureDatabasePrepare(database);
   }
 
   /**

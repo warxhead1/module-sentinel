@@ -7,7 +7,7 @@
 
 import Database from 'better-sqlite3';
 import * as path from 'path';
-import * as fs from 'fs/promises';
+// import * as fs from 'fs/promises';
 import { 
   DatabaseAdapter, 
   DatabaseAdapterFactory, 

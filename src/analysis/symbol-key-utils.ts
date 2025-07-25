@@ -104,7 +104,7 @@ export function parseSymbolKey(
     if (isNaN(line) || isNaN(column)) return null;
 
     return { name, filePath, line, column };
-  } catch (error) {
+  } catch {
     return null;
   }
 }
@@ -124,6 +124,8 @@ export function debugKeyGeneration(
   filePath?: string,
   componentName?: string
 ): void {
-  const key = generateSymbolKey(symbol, filePath);
-  const component = componentName ? `[${componentName}] ` : "";
+  const _key = generateSymbolKey(symbol, filePath);
+  const _component = componentName ? `[${componentName}] ` : "";
+  // TODO: Implement debug logging for key generation
+  // Should log: symbol name, generated key, component name
 }

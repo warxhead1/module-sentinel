@@ -7,8 +7,8 @@ import {
   universalSymbols, 
   pythonFeatures, 
   typescriptFeatures,
-  languages,
-  projects
+  languages
+  // projects
 } from '../../src/database/drizzle/schema.js';
 import * as path from 'path';
 

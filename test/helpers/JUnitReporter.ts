@@ -1,5 +1,4 @@
 import * as fs from 'fs/promises';
-import * as path from 'path';
 
 export interface TestResult {
   name: string;
@@ -19,13 +18,14 @@ export class JUnitReporter {
 
   async writeReport(outputPath: string = 'test-results.xml'): Promise<void> {
     const totalTime = (Date.now() - this.startTime) / 1000;
+    // Count test results by status
     const passed = this.results.filter(r => r.status === 'passed').length;
     const failed = this.results.filter(r => r.status === 'failed').length;
     const skipped = this.results.filter(r => r.status === 'skipped').length;
 
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    xml += `<testsuites name="Module Sentinel Test Suite" tests="${this.results.length}" failures="${failed}" skipped="${skipped}" time="${totalTime}">\n`;
-    xml += `  <testsuite name="Module Sentinel" tests="${this.results.length}" failures="${failed}" skipped="${skipped}" time="${totalTime}">\n`;
+    xml += `<testsuites name="Module Sentinel Test Suite" tests="${this.results.length}" passed="${passed}" failures="${failed}" skipped="${skipped}" time="${totalTime}">\n`;
+    xml += `  <testsuite name="Module Sentinel" tests="${this.results.length}" passed="${passed}" failures="${failed}" skipped="${skipped}" time="${totalTime}">\n`;
 
     for (const result of this.results) {
       xml += `    <testcase classname="${result.className}" name="${result.name}" time="${result.time}">\n`;

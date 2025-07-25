@@ -7,6 +7,7 @@
  */
 
 import { GraphNode } from '../../shared/types/api.js';
+import { CodeMetricsAnalyzer } from '../../analysis/code-metrics-analyzer.js';
 
 export interface PatternClassification {
   primaryPattern: {
@@ -45,9 +46,11 @@ export interface PatternDefinition {
 
 export class PatternNodeCategorizer {
   private patternDefinitions: Map<string, PatternDefinition>;
+  private metricsAnalyzer: CodeMetricsAnalyzer;
   
   constructor() {
     this.patternDefinitions = new Map();
+    this.metricsAnalyzer = new CodeMetricsAnalyzer();
     this.initializePatternDefinitions();
   }
 
@@ -410,6 +413,46 @@ export class PatternNodeCategorizer {
   }
 
   /**
+   * Map pattern health to quality assessment
+   */
+  private mapHealthToQuality(
+    health: 'healthy' | 'warning' | 'problematic' | 'anti-pattern',
+    patternConsistency: number
+  ): { refactoringPriority: 'none' | 'low' | 'medium' | 'high' | 'critical'; evolutionStage: 'emerging' | 'stable' | 'mature' | 'degrading' | 'legacy' } {
+    
+    // Determine refactoring priority based on health
+    let refactoringPriority: 'none' | 'low' | 'medium' | 'high' | 'critical';
+    switch (health) {
+      case 'healthy':
+        refactoringPriority = 'none';
+        break;
+      case 'warning':
+        refactoringPriority = 'low';
+        break;
+      case 'problematic':
+        refactoringPriority = 'medium';
+        break;
+      case 'anti-pattern':
+        refactoringPriority = 'critical';
+        break;
+    }
+
+    // Determine evolution stage based on consistency and health
+    let evolutionStage: 'emerging' | 'stable' | 'mature' | 'degrading' | 'legacy';
+    if (patternConsistency >= 0.8) {
+      evolutionStage = health === 'healthy' ? 'mature' : 'stable';
+    } else if (patternConsistency >= 0.6) {
+      evolutionStage = 'stable';
+    } else if (patternConsistency >= 0.4) {
+      evolutionStage = health === 'anti-pattern' ? 'degrading' : 'emerging';
+    } else {
+      evolutionStage = health === 'anti-pattern' ? 'legacy' : 'degrading';
+    }
+
+    return { refactoringPriority, evolutionStage };
+  }
+
+  /**
    * Calculate comprehensive pattern metrics
    */
   private calculatePatternMetrics(node: GraphNode, primaryPattern: {name: string, family: any, strength: number}): {
@@ -426,22 +469,9 @@ export class PatternNodeCategorizer {
     // Calculate pattern consistency (how well it matches the standard pattern)
     const patternConsistency = primaryPattern.strength;
 
-    // Determine refactoring priority
-    const antiPatternCount = (node.patterns?.antiPatterns || []).length;
-    const codeSmellCount = (node.patterns?.codeSmells || []).length;
-    
-    let refactoringPriority: 'none' | 'low' | 'medium' | 'high' | 'critical' = 'none';
-    if (antiPatternCount > 2 || codeSmellCount > 3) refactoringPriority = 'critical';
-    else if (antiPatternCount > 1 || codeSmellCount > 2) refactoringPriority = 'high';
-    else if (antiPatternCount > 0 || codeSmellCount > 1) refactoringPriority = 'medium';
-    else if (patternConsistency < 60) refactoringPriority = 'low';
-
-    // Determine evolution stage
-    let evolutionStage: 'emerging' | 'stable' | 'mature' | 'degrading' | 'legacy' = 'stable';
-    if (patternConsistency < 40) evolutionStage = 'emerging';
-    else if (patternConsistency > 80 && antiPatternCount === 0) evolutionStage = 'mature';
-    else if (antiPatternCount > 1 || codeSmellCount > 2) evolutionStage = 'degrading';
-    else if (codeSmellCount > 3) evolutionStage = 'legacy';
+    // Use consolidated refactoring priority assessment
+    const health = this.assessPatternHealth(node, primaryPattern.name);
+    const { refactoringPriority, evolutionStage } = this.mapHealthToQuality(health, patternConsistency);
 
     return {
       patternComplexity,

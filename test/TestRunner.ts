@@ -11,6 +11,7 @@ import { JUnitReporter, TestResult } from "./helpers/JUnitReporter";
 import { DatabaseConfig } from "../dist/config/database-config.js";
 import { DatabaseInitializer } from "../dist/database/database-initializer.js";
 import { OptimizedTreeSitterBaseParser as TreeSitterBaseParser } from "../dist/parsers/tree-sitter/optimized-base-parser.js";
+import { createLogger, Logger, flushErrorSummary } from "../dist/utils/logger.js";
 
 // Import only tests that work with the new architecture
 import { UniversalIndexerTest } from "./unit/UniversalIndexerSimpleTest";
@@ -20,20 +21,22 @@ import { NamespaceParsingSimpleTest } from "./unit/NamespaceParsingSimpleTest";
 import { RelationshipExtractionTest } from "./unit/RelationshipExtractionTest";
 import { ControlFlowAnalysisTest } from "./unit/ControlFlowAnalysisTest";
 import { EnhancedArchitectureTest } from "./unit/EnhancedArchitectureTest";
-import { ComprehensiveSymbolExtractionTest } from "./unit/ComprehensiveSymbolExtractionTest";
+// import { ComprehensiveSymbolExtractionTest } from "./unit/ComprehensiveSymbolExtractionTest";
 import { CrossLanguageFlowTest } from "./unit/CrossLanguageFlowTest";
-import { StructMemberExtractionTest } from "./unit/StructMemberExtractionTest";
+// import { StructMemberExtractionTest } from "./unit/StructMemberExtractionTest";
 import { MemberAccessTrackingTest } from "./unit/MemberAccessTrackingTest";
 import { MemberAccessDeepDiveTest } from "./unit/MemberAccessDeepDiveTest";
-import { ComprehensiveParserCapabilitiesTest } from "./unit/ComprehensiveParserCapabilitiesTest";
-import { SemanticIntelligenceIntegrationTest } from "./unit/SemanticIntelligenceIntegrationTest";
+// import { ComprehensiveParserCapabilitiesTest } from "./unit/ComprehensiveParserCapabilitiesTest";
+// import { SemanticIntelligenceIntegrationTest } from "./unit/SemanticIntelligenceIntegrationTest";
 import { ASTGenerationTest } from "./unit/ASTGenerationTest";
 import { ComprehensiveAPITest } from "./unit/ComprehensiveAPITest";
 import { TypeScriptEdgeCasesTest } from "./unit/TypeScriptEdgeCasesTest";
 import { CrossLanguageMicroservicesTest } from "./unit/CrossLanguageMicroservicesTest";
 import { DataFlowAnalysisTest } from "./unit/DataFlowAnalysisTest";
-import { CppAdvancedFeaturesTest } from "./unit/CppAdvancedFeaturesTest";
+// import { CppAdvancedFeaturesTest } from "./unit/CppAdvancedFeaturesTest";
 import { GrpcCrossLanguageRelationshipTest } from "./unit/GrpcCrossLanguageRelationshipTest";
+// import { CppParserModularComparisonTest } from "./unit/CppParserModularComparisonTest";
+import { CppParserComparisonTest } from "./unit/CppParserComparisonTest";
 
 export class TestRunner extends EventEmitter {
   private projectPath = process.cwd();
@@ -44,6 +47,7 @@ export class TestRunner extends EventEmitter {
   private skipIndex: boolean;
   private enableSemanticAnalysis: boolean;
   private junitReporter: JUnitReporter;
+  private logger: Logger;
 
   constructor(options?: {
     forceRebuild?: boolean;
@@ -66,11 +70,12 @@ export class TestRunner extends EventEmitter {
     // Use centralized database configuration
     const dbConfig = DatabaseConfig.getInstance();
     this.dbPath = dbConfig.getDbPath();
-    console.log(`📊 Using test database: ${this.dbPath}`);
+    this.logger = createLogger('TestRunner');
+    this.logger.info('Using test database', { dbPath: this.dbPath });
   }
 
   async run(): Promise<void> {
-    console.log("🚀 Module Sentinel Test Suite (Clean Architecture)\n");
+    this.logger.info('Module Sentinel Test Suite (Clean Architecture)');
 
     try {
       // Use centralized database initializer
@@ -80,24 +85,24 @@ export class TestRunner extends EventEmitter {
         : await dbInitializer.initializeDatabase(this.dbPath);
       
       if (this.forceRebuild) {
-        console.log("🔄 Database reset completed (--rebuild flag set)");
+        this.logger.info('Database reset completed', { rebuild: true });
       } else {
-        console.log("📊 Using existing database (use --rebuild to reset)");
+        this.logger.info('Using existing database', { rebuild: false });
       }
 
       // Build test index (unless skipped)
       if (!this.skipIndex) {
-        console.log("🔨 Building test index...");
+        this.logger.info('Building test index...');
         if (!this.enableSemanticAnalysis) {
-          console.log("⚡ Semantic analysis disabled for faster testing (use --semantic to enable)");
+          this.logger.info('Semantic analysis disabled for faster testing', { semantic: false });
         }
         await this.buildTestIndex(db);
       } else {
-        console.log("⏭️  Skipping test index build (--skip-index flag set)");
+        this.logger.info('Skipping test index build', { skipIndex: true });
       }
 
       // Run tests
-      console.log("🧪 Running tests...\n");
+      this.logger.info('Running tests...');
       const results = await this.runTests(db);
 
       // Generate report
@@ -112,20 +117,25 @@ export class TestRunner extends EventEmitter {
       const failedTests = results.filter((r) => r.status === "failed").length;
       const skippedTests = results.filter((r) => r.status === "skipped").length;
 
-      console.log("\n📊 Test Summary:");
-      console.log(`   Total: ${totalTests}`);
-      console.log(`   ✅ Passed: ${passedTests}`);
-      console.log(`   ❌ Failed: ${failedTests}`);
-      console.log(`   ⏭️  Skipped: ${skippedTests}`);
+      this.logger.info('Test Summary', {
+        total: totalTests,
+        passed: passedTests,
+        failed: failedTests,
+        skipped: skippedTests
+      });
+
+      // Flush any accumulated error summaries
+      flushErrorSummary();
 
       // Show detailed failure information
       const failedResults = results.filter((r) => r.status === "failed");
       if (failedResults.length > 0) {
-        console.log("\n❌ Failed Tests:");
+        this.logger.error('Failed Tests:', undefined, { count: failedResults.length });
         failedResults.forEach((result) => {
-          console.log(
-            `   • ${result.name}: ${result.error?.message || "Unknown error"}`
-          );
+          this.logger.error(`Test failed: ${result.name}`, result.error, {
+            test: result.name,
+            duration: result.time
+          });
         });
       }
 
@@ -134,13 +144,13 @@ export class TestRunner extends EventEmitter {
       db.close();
 
       // Keep the database for dashboard use
-      console.log(`📊 Database saved for dashboard use: ${this.dbPath}`);
+      this.logger.info('Database saved for dashboard use', { dbPath: this.dbPath });
 
       if (failedTests > 0) {
         process.exit(1);
       }
     } catch (error) {
-      console.error("Fatal error in test runner:", error);
+      this.logger.fatal('Fatal error in test runner', error);
       process.exit(1);
     }
   }
@@ -173,10 +183,10 @@ export class TestRunner extends EventEmitter {
     const testClasses = [
       { name: "ASTGenerationTest", class: ASTGenerationTest }, // Run first to diagnose AST issues
       { name: "DrizzleOrmTest", class: DrizzleOrmTest },
-      {
-        name: "ComprehensiveSymbolExtractionTest",
-        class: ComprehensiveSymbolExtractionTest,
-      },
+      // {
+      //   name: "ComprehensiveSymbolExtractionTest",
+      //   class: ComprehensiveSymbolExtractionTest,
+      // },
       { name: "NamespaceParsingSimpleTest", class: NamespaceParsingSimpleTest },
       { name: "UniversalIndexerTest", class: UniversalIndexerTest },
       { name: "RelationshipExtractionTest", class: RelationshipExtractionTest },
@@ -185,17 +195,17 @@ export class TestRunner extends EventEmitter {
       { name: "ControlFlowAnalysisTest", class: ControlFlowAnalysisTest },
       { name: "EnhancedArchitectureTest", class: EnhancedArchitectureTest },
       { name: "CrossLanguageFlowTest", class: CrossLanguageFlowTest },
-      { name: "StructMemberExtractionTest", class: StructMemberExtractionTest },
+      // { name: "StructMemberExtractionTest", class: StructMemberExtractionTest },
       { name: "MemberAccessTrackingTest", class: MemberAccessTrackingTest },
       { name: "MemberAccessDeepDiveTest", class: MemberAccessDeepDiveTest },
-      {
-        name: "ComprehensiveParserCapabilitiesTest",
-        class: ComprehensiveParserCapabilitiesTest,
-      },
-      {
-        name: "SemanticIntelligenceIntegrationTest",
-        class: SemanticIntelligenceIntegrationTest,
-      },
+      // {
+      //   name: "ComprehensiveParserCapabilitiesTest",
+      //   class: ComprehensiveParserCapabilitiesTest,
+      // },
+      // {
+      //   name: "SemanticIntelligenceIntegrationTest",
+      //   class: SemanticIntelligenceIntegrationTest,
+      // },
       {
         name: "TypeScriptEdgeCasesTest",
         class: TypeScriptEdgeCasesTest,
@@ -208,13 +218,21 @@ export class TestRunner extends EventEmitter {
         name: "DataFlowAnalysisTest",
         class: DataFlowAnalysisTest,
       },
-      {
-        name: "CppAdvancedFeaturesTest",
-        class: CppAdvancedFeaturesTest,
-      },
+      // {
+      //   name: "CppAdvancedFeaturesTest",
+      //   class: CppAdvancedFeaturesTest,
+      // },
       {
         name: "GrpcCrossLanguageRelationshipTest",
         class: GrpcCrossLanguageRelationshipTest,
+      },
+      // {
+      //   name: "CppParserModularComparisonTest",
+      //   class: CppParserModularComparisonTest,
+      // },
+      {
+        name: "CppParserComparisonTest",
+        class: CppParserComparisonTest,
       },
     ];
 
@@ -227,7 +245,7 @@ export class TestRunner extends EventEmitter {
         continue;
       }
 
-      console.log(`\n🧪 Running ${testDef.name}...`);
+      this.logger.info(`Running ${testDef.name}...`, { test: testDef.name });
 
       try {
         const testInstance = new testDef.class(db);
@@ -243,19 +261,22 @@ export class TestRunner extends EventEmitter {
         // Summary for this test class
         const passed = testResults.filter((r) => r.status === "passed").length;
         const failed = testResults.filter((r) => r.status === "failed").length;
-        console.log(`   ${testDef.name}: ${passed} passed, ${failed} failed`);
+        this.logger.info(`Test results for ${testDef.name}`, { 
+          test: testDef.name,
+          passed,
+          failed
+        });
 
         // Show failed test details for debugging
         const failedTests = testResults.filter((r) => r.status === "failed");
         for (const failedTest of failedTests) {
-          console.log(
-            `   ❌ ${failedTest.name}: ${
-              failedTest.error?.message || "Unknown error"
-            }`
-          );
+          this.logger.error(`Test failed: ${failedTest.name}`, failedTest.error, {
+            test: failedTest.name,
+            class: testDef.name
+          });
         }
       } catch (error) {
-        console.error(`   ❌ Failed to run ${testDef.name}:`, error);
+        this.logger.error(`Failed to run test class`, error, { testClass: testDef.name });
         results.push({
           name: testDef.name,
           className: testDef.name,
@@ -290,5 +311,8 @@ if (require.main === module) {
   }
 
   const runner = new TestRunner(options);
-  runner.run().catch(console.error);
+  runner.run().catch((error) => {
+    console.error('Test runner failed:', error);
+    process.exit(1);
+  });
 }

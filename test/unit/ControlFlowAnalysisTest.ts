@@ -1,5 +1,5 @@
 import { BaseTest } from '../helpers/BaseTest';
-import { ControlFlowAnalyzer } from '../../src/analysis/control-flow-analyzer.js';
+import { UnifiedControlFlowAnalyzer } from '../../src/analysis/unified-control-flow-analyzer.js';
 import Database from 'better-sqlite3';
 import Parser from 'tree-sitter';
 import * as fs from 'fs';
@@ -7,7 +7,7 @@ import * as path from 'path';
 import { TestResult } from '../helpers/JUnitReporter';
 
 export class ControlFlowAnalysisTest extends BaseTest {
-  private analyzer!: ControlFlowAnalyzer;
+  private analyzer!: UnifiedControlFlowAnalyzer;
   private parser!: Parser;
   
   constructor(db: Database.Database) {
@@ -16,7 +16,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
   
   async specificSetup(): Promise<void> {
     const testDb = this.db;
-    this.analyzer = new ControlFlowAnalyzer(testDb);
+    this.analyzer = new UnifiedControlFlowAnalyzer(testDb);
     
     this.parser = new Parser();
     
@@ -25,7 +25,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
       const CppLanguage = require('tree-sitter-cpp');
       this.parser.setLanguage(CppLanguage);
     } catch (error) {
-      console.warn('⚠️  tree-sitter-cpp not available, skipping AST-based tests');
+      console.warn('⚠️  tree-sitter-cpp not available, skipping AST-based tests', error);
       // We'll skip the test if parser isn't available
     }
   }
@@ -69,7 +69,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
         return { name: testName, status: 'skipped', time: 0, error: new Error(errorMessage) };
       }
     } catch (error) {
-      errorMessage = '   ⏭️  Skipping - tree-sitter-cpp not available';
+      errorMessage = `   ⏭️  Skipping - tree-sitter-cpp not available: ${error}`;
       console.log(errorMessage);
       return { name: testName, status: 'skipped', time: 0, error: new Error(errorMessage) };
     }
@@ -105,9 +105,9 @@ export class ControlFlowAnalysisTest extends BaseTest {
     
     // Analyze the control flow
     console.log(`📊 Analyzing control flow for symbol ID: ${symbol.id}`);
-    let cfg;
+    let analysis;
     try {
-      cfg = await this.analyzer.analyzeSymbol(symbol.id, tree, content);
+      analysis = await this.analyzer.analyzeSymbol(symbol.id, tree, content);
     } catch (e: any) {
       errorMessage = `Error analyzing symbol: ${e.message}`;
       status = 'failed';
@@ -117,14 +117,14 @@ export class ControlFlowAnalysisTest extends BaseTest {
 
     // Check the results
     console.log(`\n📈 Control Flow Analysis Results:`);
-    console.log(`  - Total blocks: ${cfg.blocks.length}`);
-    console.log(`  - Cyclomatic complexity: ${cfg.complexity}`);
-    console.log(`  - Entry point: line ${cfg.blocks.find(b => b.type === 'entry')?.startLine}`);
+    console.log(`  - Total blocks: ${analysis.blocks.length}`);
+    console.log(`  - Cyclomatic complexity: ${analysis.statistics.cyclomaticComplexity}`);
+    console.log(`  - Entry point: line ${analysis.blocks.find(b => b.type === 'entry')?.startLine}`);
     
     // Find specific blocks we expect
-    const switchBlock = cfg.blocks.find(b => b.type === 'switch');
-    const loopBlocks = cfg.blocks.filter(b => b.type === 'loop');
-    const conditionalBlocks = cfg.blocks.filter(b => b.type === 'conditional');
+    const switchBlock = analysis.blocks.find(b => b.type === 'switch');
+    const loopBlocks = analysis.blocks.filter(b => b.type === 'loop');
+    const conditionalBlocks = analysis.blocks.filter(b => b.type === 'conditional');
     
     console.log(`\n🔍 Block Analysis:`);
     if (switchBlock) {
@@ -164,7 +164,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
     
     // Verify we have the expected blocks based on the code structure
     try {
-      this.assert(cfg.blocks.length >= 7, `Expected at least 7 blocks, got ${cfg.blocks.length}`);
+      this.assert(analysis.blocks.length >= 7, `Expected at least 7 blocks, got ${analysis.blocks.length}`);
       this.assert(switchBlock !== undefined, 'Should have a switch block');
       this.assert(loopBlocks.length >= 2, `Expected at least 2 loops, got ${loopBlocks.length}`);
     } catch (e: any) {
@@ -173,7 +173,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
     }
     
     // Check that blocks have proper ranges
-    const problemBlocks = cfg.blocks.filter(b => 
+    const problemBlocks = analysis.blocks.filter(b => 
       b.type !== 'entry' && b.type !== 'exit' && b.startLine === b.endLine
     );
     
@@ -260,7 +260,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
     
     // Check control flow blocks have calls within their ranges
     console.log(`\n🔗 Verifying function calls within control flow blocks:`);
-    for (const block of cfg.blocks) {
+    for (const block of analysis.blocks) {
       if (block.type === 'entry' || block.type === 'exit') continue;
       
       const callsInBlock = allCalls.filter(call => 

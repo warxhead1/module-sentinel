@@ -1,308 +1,399 @@
 /**
- * Analysis of SemanticDataPersister bottlenecks
+ * Performance Analysis Test for SemanticDataPersister
  * 
- * This test examines the actual implementation to identify
- * why we're generating 626,778 relationships from 1,870 symbols.
+ * This test analyzes the performance characteristics and behavior
+ * of the SemanticDataPersister to identify bottlenecks and optimize
+ * relationship generation.
  */
 
+import { BaseTest } from '../helpers/BaseTest.js';
+import { TestResult } from '../helpers/JUnitReporter.js';
 import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as path from 'path';
-import { DatabaseInitializer } from '../../src/database/database-initializer.js';
 import { SemanticDataPersister } from '../../src/analysis/semantic-data-persister.js';
+import { LocalCodeEmbeddingEngine } from '../../src/analysis/local-code-embedding.js';
+import { PatternRecognitionEngine } from '../../src/analysis/pattern-recognition-engine.js';
+import { performance } from 'perf_hooks';
+import { MemoryMonitor, checkMemory } from '../../src/utils/memory-monitor.js';
 
-// Mock data for analysis
-interface MockSymbolData {
-  id: number;
-  name: string;
-  embedding: number[];
+interface PerformanceMetrics {
+  operationName: string;
+  duration: number;
+  symbolCount: number;
+  relationshipCount: number;
+  memoryUsed: number;
+  throughput: number;
 }
 
-interface AnalysisResult {
-  totalSymbols: number;
-  totalPossiblePairs: number;
-  actualRelationships: number;
-  averageSimilarity: number;
-  similarityDistribution: {
-    veryHigh: number;  // > 0.9
-    high: number;      // 0.8-0.9
-    medium: number;    // 0.7-0.8
-    low: number;       // 0.6-0.7
-    veryLow: number;   // < 0.6
-  };
-  topConnectedSymbols: Array<{
-    symbolId: number;
-    connectionCount: number;
-  }>;
-  memoryFootprint: {
-    embeddings: number;
-    relationships: number;
-    total: number;
-  };
-}
+export class SemanticPersisterAnalysisTest extends BaseTest {
+  private persister!: SemanticDataPersister;
+  private embeddingEngine!: LocalCodeEmbeddingEngine;
+  private patternEngine!: PatternRecognitionEngine;
+  private metrics: PerformanceMetrics[] = [];
 
-class SemanticPersisterAnalyzer {
-  private db: Database.Database;
-  private drizzleDb: ReturnType<typeof drizzle>;
-
-  constructor() {
-    this.db = new Database(':memory:');
-    this.drizzleDb = drizzle(this.db);
+  constructor(db: Database) {
+    super('SemanticPersisterAnalysisTest', db);
   }
 
-  async analyzeRelationshipGeneration(symbolCount: number = 1870): Promise<AnalysisResult> {
-    console.log(`\n🔍 Analyzing Semantic Relationship Generation`);
-    console.log(`   Symbol Count: ${symbolCount}`);
-    console.log(`   Theoretical Max Relationships: ${(symbolCount * (symbolCount - 1)) / 2}`);
-    console.log('');
-
-    // Initialize database
-    const dbInit = DatabaseInitializer.getInstance();
-    await dbInit.initializeDatabase(':memory:');
-
-    // Generate mock symbol data with embeddings
-    const symbols = this.generateMockSymbols(symbolCount);
+  async setup(): Promise<void> {
+    await super.setup();
     
-    // Analyze relationship generation
-    const analysis = await this.performAnalysis(symbols);
+    // Initialize dependencies
+    this.embeddingEngine = new LocalCodeEmbeddingEngine(this.db);
+    this.patternEngine = new PatternRecognitionEngine(this.db);
     
-    this.printAnalysis(analysis);
-    this.suggestOptimizations(analysis);
+    // Initialize the persister
+    this.persister = new SemanticDataPersister(
+      this.db,
+      this.embeddingEngine,
+      this.patternEngine,
+      { debugMode: false }
+    );
     
-    return analysis;
+    this.logger.info('SemanticDataPersister initialized for performance analysis');
   }
 
-  private generateMockSymbols(count: number): MockSymbolData[] {
-    const symbols: MockSymbolData[] = [];
+  async run(): Promise<TestResult[]> {
+    const results: TestResult[] = [];
     
-    // Create different categories of symbols to simulate real-world clustering
-    const categories = [
-      { prefix: 'Controller', ratio: 0.1 },
-      { prefix: 'Service', ratio: 0.15 },
-      { prefix: 'Model', ratio: 0.2 },
-      { prefix: 'Util', ratio: 0.1 },
-      { prefix: 'Config', ratio: 0.05 },
-      { prefix: 'Test', ratio: 0.1 },
-      { prefix: 'Helper', ratio: 0.1 },
-      { prefix: 'Component', ratio: 0.2 }
-    ];
+    // Test 1: Analyze small batch performance
+    results.push(await this.analyzeSmallBatchPerformance());
+    
+    // Test 2: Analyze large batch performance
+    results.push(await this.analyzeLargeBatchPerformance());
+    
+    // Test 3: Analyze relationship generation patterns
+    results.push(await this.analyzeRelationshipGeneration());
+    
+    // Test 4: Memory usage analysis
+    results.push(await this.analyzeMemoryUsage());
+    
+    // Generate performance report
+    this.generatePerformanceReport();
+    
+    return results;
+  }
 
-    let id = 1;
-    for (const category of categories) {
-      const categoryCount = Math.floor(count * category.ratio);
-      const baseEmbedding = this.generateCategoryEmbedding();
+  private async analyzeSmallBatchPerformance(): Promise<TestResult> {
+    const testName = 'small_batch_performance';
+    const startTime = performance.now();
+    
+    try {
+      // Create test symbols
+      const testSymbols = this.createTestSymbols(10);
+      const memStart = process.memoryUsage().heapUsed;
       
-      for (let i = 0; i < categoryCount; i++) {
-        symbols.push({
-          id: id++,
-          name: `${category.prefix}_${i}`,
-          embedding: this.perturbEmbedding(baseEmbedding, 0.2) // 20% variation within category
+      // Measure persisting performance
+      const persistStart = performance.now();
+      const result = await this.persister.persistSemanticData(1, testSymbols);
+      const persistDuration = performance.now() - persistStart;
+      
+      const memEnd = process.memoryUsage().heapUsed;
+      const memoryUsed = memEnd - memStart;
+      
+      // Record metrics
+      this.metrics.push({
+        operationName: 'small_batch',
+        duration: persistDuration,
+        symbolCount: testSymbols.length,
+        relationshipCount: result.relationshipsStored || 0,
+        memoryUsed: memoryUsed / 1024 / 1024, // MB
+        throughput: testSymbols.length / (persistDuration / 1000) // symbols/sec
+      });
+      
+      // Assertions
+      this.assert(result.success, 'Small batch persistence should succeed');
+      this.assert(
+        persistDuration < 1000, 
+        `Small batch should complete in under 1s, took ${persistDuration.toFixed(2)}ms`
+      );
+      
+      this.logger.info(`Small batch processed ${testSymbols.length} symbols in ${persistDuration.toFixed(2)}ms`);
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: performance.now() - startTime
+      };
+    } catch (error) {
+      this.logger.error('Small batch performance test failed', error);
+      return {
+        name: testName,
+        status: 'failed',
+        time: performance.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  private async analyzeLargeBatchPerformance(): Promise<TestResult> {
+    const testName = 'large_batch_performance';
+    const startTime = performance.now();
+    
+    try {
+      // Create larger test set
+      const testSymbols = this.createTestSymbols(100);
+      const memStart = process.memoryUsage().heapUsed;
+      
+      // Measure persisting performance
+      const persistStart = performance.now();
+      const result = await this.persister.persistSemanticData(1, testSymbols);
+      const persistDuration = performance.now() - persistStart;
+      
+      const memEnd = process.memoryUsage().heapUsed;
+      const memoryUsed = memEnd - memStart;
+      
+      // Record metrics
+      this.metrics.push({
+        operationName: 'large_batch',
+        duration: persistDuration,
+        symbolCount: testSymbols.length,
+        relationshipCount: result.relationshipsStored || 0,
+        memoryUsed: memoryUsed / 1024 / 1024, // MB
+        throughput: testSymbols.length / (persistDuration / 1000) // symbols/sec
+      });
+      
+      // Calculate relationship ratio
+      const relationshipRatio = (result.relationshipsStored || 0) / testSymbols.length;
+      
+      // Assertions
+      this.assert(result.success, 'Large batch persistence should succeed');
+      this.assert(
+        relationshipRatio < 100, 
+        `Relationship explosion detected: ${relationshipRatio.toFixed(2)} relationships per symbol`
+      );
+      
+      this.logger.info(
+        `Large batch: ${testSymbols.length} symbols → ${result.relationshipsStored} relationships ` +
+        `(${relationshipRatio.toFixed(2)}x ratio)`
+      );
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: performance.now() - startTime
+      };
+    } catch (error) {
+      this.logger.error('Large batch performance test failed', error);
+      return {
+        name: testName,
+        status: 'failed',
+        time: performance.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  private async analyzeRelationshipGeneration(): Promise<TestResult> {
+    const testName = 'relationship_generation_analysis';
+    const startTime = performance.now();
+    
+    try {
+      // Create symbols with known relationships
+      const classSymbol = this.createSymbol(1, 'TestClass', 'class');
+      const methodSymbol = this.createSymbol(2, 'testMethod', 'method');
+      const calledFunction = this.createSymbol(3, 'helperFunction', 'function');
+      
+      // Add relationships
+      methodSymbol.relationships = [{
+        fromName: 'testMethod',
+        toName: 'helperFunction',
+        relationshipType: 'calls',
+        confidence: 0.9,
+        crossLanguage: false
+      }];
+      
+      const testSymbols = [classSymbol, methodSymbol, calledFunction];
+      
+      // Persist and analyze
+      const result = await this.persister.persistSemanticData(1, testSymbols);
+      
+      // Verify relationship handling
+      this.assert(
+        result.relationshipsStored !== undefined && result.relationshipsStored > 0,
+        'Should store at least the explicit relationship'
+      );
+      
+      // Check for reasonable similarity relationships
+      const maxExpectedRelationships = (testSymbols.length * (testSymbols.length - 1)) / 2;
+      this.assert(
+        result.relationshipsStored <= maxExpectedRelationships,
+        `Should not exceed theoretical maximum of ${maxExpectedRelationships} relationships`
+      );
+      
+      this.logger.info(
+        `Relationship analysis: ${testSymbols.length} symbols generated ${result.relationshipsStored} relationships`
+      );
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: performance.now() - startTime
+      };
+    } catch (error) {
+      this.logger.error('Relationship generation analysis failed', error);
+      return {
+        name: testName,
+        status: 'failed',
+        time: performance.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    }
+  }
+
+  private async analyzeMemoryUsage(): Promise<TestResult> {
+    const testName = 'memory_usage_analysis';
+    const startTime = performance.now();
+    
+    try {
+      // Force garbage collection if available
+      if (global.gc) {
+        global.gc();
+      }
+      
+      // Use MemoryMonitor for better tracking
+      const memoryMonitor = new MemoryMonitor({
+        warningPercent: 70,
+        criticalPercent: 85,
+        maxHeapMB: 2048
+      });
+      
+      const initialMemory = checkMemory();
+      const symbolCounts = [10, 50, 100, 200];
+      const memoryGrowth: number[] = [];
+      const memorySnapshots: Array<{
+        count: number;
+        beforeMB: number;
+        afterMB: number;
+        growthMB: number;
+        percentUsed: number;
+      }> = [];
+      
+      this.logger.info('Initial memory state', {
+        heapUsed: `${initialMemory.heapUsedMB.toFixed(2)} MB`,
+        percentUsed: `${initialMemory.percentUsed.toFixed(1)}%`
+      });
+      
+      for (const count of symbolCounts) {
+        const symbols = this.createTestSymbols(count);
+        
+        // Create checkpoint for this operation
+        const checkpoint = memoryMonitor.createCheckpoint(`persist_${count}_symbols`);
+        
+        const memBefore = checkMemory();
+        await this.persister.persist(1, symbols);
+        const memAfter = checkMemory();
+        
+        const { duration, memoryDelta } = checkpoint.complete();
+        const growth = memAfter.heapUsedMB - memBefore.heapUsedMB;
+        memoryGrowth.push(growth);
+        
+        memorySnapshots.push({
+          count,
+          beforeMB: memBefore.heapUsedMB,
+          afterMB: memAfter.heapUsedMB,
+          growthMB: growth,
+          percentUsed: memAfter.percentUsed
+        });
+        
+        this.logger.debug(`${count} symbols memory impact`, {
+          growth: `${growth.toFixed(2)} MB`,
+          delta: `${(memoryDelta / 1024 / 1024).toFixed(2)} MB`,
+          duration: Math.round(duration),
+          percentUsed: `${memAfter.percentUsed.toFixed(1)}%`
         });
       }
-    }
-
-    // Fill remaining with misc symbols
-    while (symbols.length < count) {
-      symbols.push({
-        id: id++,
-        name: `Misc_${id}`,
-        embedding: this.generateRandomEmbedding()
+      
+      // Calculate memory efficiency metrics
+      const totalGrowth = memorySnapshots[memorySnapshots.length - 1].afterMB - initialMemory.heapUsedMB;
+      const avgGrowthPerSymbol = totalGrowth / symbolCounts[symbolCounts.length - 1];
+      const avgGrowthRate = memoryGrowth[memoryGrowth.length - 1] / memoryGrowth[0];
+      
+      this.logger.info('Memory usage summary', {
+        totalGrowth: `${totalGrowth.toFixed(2)} MB`,
+        avgPerSymbol: `${(avgGrowthPerSymbol * 1024).toFixed(2)} KB/symbol`,
+        growthRate: `${avgGrowthRate.toFixed(2)}x`
       });
+      
+      // Check for linear memory growth
+      this.assert(
+        avgGrowthRate < 50,
+        `Memory growth should be reasonable, but grew ${avgGrowthRate.toFixed(2)}x`
+      );
+      
+      // Check final memory usage
+      const finalMemory = memorySnapshots[memorySnapshots.length - 1];
+      this.assert(
+        finalMemory.percentUsed < 80,
+        `Memory usage should stay below 80%, but reached ${finalMemory.percentUsed.toFixed(1)}%`
+      );
+      
+      return {
+        name: testName,
+        status: 'passed',
+        time: performance.now() - startTime
+      };
+    } catch (error) {
+      this.logger.error('Memory usage analysis failed', error);
+      return {
+        name: testName,
+        status: 'failed',
+        time: performance.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
     }
+  }
 
+  private createTestSymbols(count: number): any[] {
+    const symbols: any[] = [];
+    for (let i = 0; i < count; i++) {
+      symbols.push(this.createSymbol(i, `symbol_${i}`, i % 2 === 0 ? 'class' : 'function'));
+    }
     return symbols;
   }
 
-  private generateCategoryEmbedding(): number[] {
-    // Generate a base embedding for a category
-    const dimensions = 256;
-    const embedding = new Array(dimensions);
-    
-    // Create a specific pattern for this category
-    for (let i = 0; i < dimensions; i++) {
-      embedding[i] = Math.sin(i * 0.1) * Math.random();
-    }
-    
-    return this.normalizeEmbedding(embedding);
-  }
-
-  private generateRandomEmbedding(): number[] {
-    const dimensions = 256;
-    const embedding = new Array(dimensions);
-    
-    for (let i = 0; i < dimensions; i++) {
-      embedding[i] = Math.random() * 2 - 1;
-    }
-    
-    return this.normalizeEmbedding(embedding);
-  }
-
-  private perturbEmbedding(base: number[], variance: number): number[] {
-    return this.normalizeEmbedding(
-      base.map(val => val + (Math.random() - 0.5) * variance)
-    );
-  }
-
-  private normalizeEmbedding(embedding: number[]): number[] {
-    const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    return embedding.map(val => val / magnitude);
-  }
-
-  private async performAnalysis(symbols: MockSymbolData[]): Promise<AnalysisResult> {
-    const totalPossiblePairs = (symbols.length * (symbols.length - 1)) / 2;
-    const similarities: number[] = [];
-    const connectionCounts = new Map<number, number>();
-    
-    // Calculate all pairwise similarities (this is the bottleneck)
-    console.log('   Calculating pairwise similarities...');
-    let relationshipCount = 0;
-    
-    for (let i = 0; i < symbols.length; i++) {
-      if (i % 100 === 0) {
-        console.log(`   Processing symbol ${i}/${symbols.length}...`);
-      }
-      
-      for (let j = i + 1; j < symbols.length; j++) {
-        const similarity = this.cosineSimilarity(symbols[i].embedding, symbols[j].embedding);
-        
-        // The persister stores ALL relationships, not just high similarity ones
-        similarities.push(similarity);
-        relationshipCount++;
-        
-        // Track connections per symbol
-        connectionCounts.set(symbols[i].id, (connectionCounts.get(symbols[i].id) || 0) + 1);
-        connectionCounts.set(symbols[j].id, (connectionCounts.get(symbols[j].id) || 0) + 1);
-      }
-    }
-
-    // Analyze similarity distribution
-    const distribution = {
-      veryHigh: similarities.filter(s => s > 0.9).length,
-      high: similarities.filter(s => s > 0.8 && s <= 0.9).length,
-      medium: similarities.filter(s => s > 0.7 && s <= 0.8).length,
-      low: similarities.filter(s => s > 0.6 && s <= 0.7).length,
-      veryLow: similarities.filter(s => s <= 0.6).length
-    };
-
-    // Find top connected symbols
-    const topConnected = Array.from(connectionCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([symbolId, count]) => ({ symbolId, connectionCount: count }));
-
-    // Calculate memory footprint
-    const embeddingMemory = symbols.length * 256 * 4; // 256 float32 values per embedding
-    const relationshipMemory = relationshipCount * 32; // Rough estimate per relationship
-    
+  private createSymbol(id: number, name: string, kind: string): any {
     return {
-      totalSymbols: symbols.length,
-      totalPossiblePairs,
-      actualRelationships: relationshipCount,
-      averageSimilarity: similarities.reduce((a, b) => a + b, 0) / similarities.length,
-      similarityDistribution: distribution,
-      topConnectedSymbols: topConnected,
-      memoryFootprint: {
-        embeddings: embeddingMemory,
-        relationships: relationshipMemory,
-        total: embeddingMemory + relationshipMemory
-      }
+      id,
+      projectId: 1,
+      name,
+      qualifiedName: `test::${name}`,
+      kind,
+      filePath: '/test/file.cpp',
+      line: id * 10,
+      column: 1,
+      signature: kind === 'function' ? '()' : undefined,
+      visibility: 'public',
+      complexity: 1,
+      semanticTags: [],
+      confidence: 1.0,
+      relationships: []
     };
   }
 
-  private cosineSimilarity(a: number[], b: number[]): number {
-    let dotProduct = 0;
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-    }
-    return dotProduct;
-  }
-
-  private printAnalysis(analysis: AnalysisResult) {
-    console.log('\n📊 Analysis Results:');
-    console.log('====================');
+  private generatePerformanceReport(): void {
+    if (this.metrics.length === 0) return;
     
-    console.log(`\nRelationship Statistics:`);
-    console.log(`  Total Symbols: ${analysis.totalSymbols}`);
-    console.log(`  Total Relationships: ${analysis.actualRelationships}`);
-    console.log(`  Relationships per Symbol: ${(analysis.actualRelationships / analysis.totalSymbols).toFixed(1)}`);
-    console.log(`  Average Similarity: ${analysis.averageSimilarity.toFixed(3)}`);
+    this.logger.info('\n=== Performance Analysis Report ===');
     
-    console.log(`\nSimilarity Distribution:`);
-    const total = analysis.actualRelationships;
-    console.log(`  Very High (>0.9): ${analysis.similarityDistribution.veryHigh} (${(analysis.similarityDistribution.veryHigh / total * 100).toFixed(1)}%)`);
-    console.log(`  High (0.8-0.9): ${analysis.similarityDistribution.high} (${(analysis.similarityDistribution.high / total * 100).toFixed(1)}%)`);
-    console.log(`  Medium (0.7-0.8): ${analysis.similarityDistribution.medium} (${(analysis.similarityDistribution.medium / total * 100).toFixed(1)}%)`);
-    console.log(`  Low (0.6-0.7): ${analysis.similarityDistribution.low} (${(analysis.similarityDistribution.low / total * 100).toFixed(1)}%)`);
-    console.log(`  Very Low (<0.6): ${analysis.similarityDistribution.veryLow} (${(analysis.similarityDistribution.veryLow / total * 100).toFixed(1)}%)`);
+    // Summary statistics
+    const totalDuration = this.metrics.reduce((sum, m) => sum + m.duration, 0);
+    const totalSymbols = this.metrics.reduce((sum, m) => sum + m.symbolCount, 0);
+    const totalRelationships = this.metrics.reduce((sum, m) => sum + m.relationshipCount, 0);
     
-    console.log(`\nMemory Footprint:`);
-    console.log(`  Embeddings: ${(analysis.memoryFootprint.embeddings / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`  Relationships: ${(analysis.memoryFootprint.relationships / 1024 / 1024).toFixed(2)} MB`);
-    console.log(`  Total: ${(analysis.memoryFootprint.total / 1024 / 1024).toFixed(2)} MB`);
+    this.logger.info(`Total operations: ${this.metrics.length}`);
+    this.logger.info(`Total time: ${totalDuration.toFixed(2)}ms`);
+    this.logger.info(`Total symbols processed: ${totalSymbols}`);
+    this.logger.info(`Total relationships created: ${totalRelationships}`);
+    this.logger.info(`Average relationship ratio: ${(totalRelationships / totalSymbols).toFixed(2)}`);
     
-    console.log(`\nTop Connected Symbols:`);
-    analysis.topConnectedSymbols.forEach((s, i) => {
-      console.log(`  ${i + 1}. Symbol #${s.symbolId}: ${s.connectionCount} connections`);
+    // Detailed metrics
+    this.logger.info('\nDetailed Metrics:');
+    this.metrics.forEach(metric => {
+      this.logger.info(
+        `  ${metric.operationName}: ${metric.duration.toFixed(2)}ms, ` +
+        `${metric.throughput.toFixed(2)} symbols/sec, ` +
+        `${metric.memoryUsed.toFixed(2)} MB`
+      );
     });
   }
-
-  private suggestOptimizations(analysis: AnalysisResult) {
-    console.log('\n\n🚀 Optimization Strategies:');
-    console.log('==========================');
-    
-    const lowValueRelationships = analysis.similarityDistribution.veryLow + analysis.similarityDistribution.low;
-    const lowValuePercentage = (lowValueRelationships / analysis.actualRelationships * 100).toFixed(1);
-    
-    console.log(`\n1. **Similarity Threshold**:`);
-    console.log(`   - ${lowValuePercentage}% of relationships have similarity < 0.7`);
-    console.log(`   - Implementing a 0.7 threshold would reduce storage by ${lowValuePercentage}%`);
-    console.log(`   - Consider dynamic thresholds based on symbol categories`);
-    
-    console.log(`\n2. **Top-K Strategy**:`);
-    console.log(`   - Store only top K most similar symbols per symbol`);
-    console.log(`   - With K=20: ${analysis.totalSymbols * 20} relationships (${((analysis.totalSymbols * 20) / analysis.actualRelationships * 100).toFixed(1)}% of current)`);
-    console.log(`   - With K=50: ${analysis.totalSymbols * 50} relationships (${((analysis.totalSymbols * 50) / analysis.actualRelationships * 100).toFixed(1)}% of current)`);
-    
-    console.log(`\n3. **Clustering-Based Reduction**:`);
-    console.log(`   - Group similar symbols into clusters`);
-    console.log(`   - Store only inter-cluster relationships`);
-    console.log(`   - Estimated reduction: 70-80% fewer relationships`);
-    
-    console.log(`\n4. **Incremental Processing**:`);
-    console.log(`   - Process relationships in batches`);
-    console.log(`   - Use bloom filters to avoid duplicate calculations`);
-    console.log(`   - Implement progressive refinement`);
-    
-    console.log(`\n5. **Storage Optimization**:`);
-    console.log(`   - Use sparse matrix representation`);
-    console.log(`   - Implement compression for low-value relationships`);
-    console.log(`   - Consider external vector databases for scale`);
-
-    // Calculate potential savings
-    const threshold07Savings = analysis.similarityDistribution.veryLow + analysis.similarityDistribution.low;
-    const topKSavings = analysis.actualRelationships - (analysis.totalSymbols * 50);
-    
-    console.log(`\n💰 Potential Savings:`);
-    console.log(`   - With 0.7 threshold: Save ${(threshold07Savings / 1000).toFixed(0)}K relationships`);
-    console.log(`   - With Top-50 strategy: Save ${(topKSavings / 1000).toFixed(0)}K relationships`);
-    console.log(`   - Combined approach: Save ~90% of storage and computation`);
-  }
 }
-
-// Example: Analyze the actual problem size from the logs
-async function main() {
-  const analyzer = new SemanticPersisterAnalyzer();
-  
-  console.log('🎯 Analyzing the reported case: 1,870 symbols → 626,778 relationships\n');
-  
-  // First, let's verify the math
-  const expectedRelationships = (1870 * 1869) / 2;
-  console.log(`Expected relationships (all pairs): ${expectedRelationships.toLocaleString()}`);
-  console.log(`Reported relationships: 626,778`);
-  console.log(`Percentage stored: ${(626778 / expectedRelationships * 100).toFixed(1)}%\n`);
-  
-  // Run analysis on similar size
-  await analyzer.analyzeRelationshipGeneration(1870);
-}
-
-main().catch(console.error);

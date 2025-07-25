@@ -538,7 +538,7 @@ export class NamespaceParsingSimpleTest extends BaseTest {
       );
 
       if (symbolsWithNamespaces.length > 0) {
-        symbolsWithNamespaces.forEach((s: any) => {});
+        symbolsWithNamespaces.forEach((_s: any) => {});
       }
 
       // We expect to find at least some symbols in the PlanetGen::Rendering namespace

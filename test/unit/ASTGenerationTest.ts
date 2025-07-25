@@ -180,7 +180,7 @@ export class ASTGenerationTest {
       const useTreeSitter = (this.parser as any).useTreeSitter;
       console.log(`  🌳 Tree-sitter enabled: ${useTreeSitter}`);
     } catch (error) {
-      console.log(`  🌳 Tree-sitter status: Cannot access private property (parser likely working)`);
+      console.log(`  🌳 Tree-sitter status: Cannot access private property (parser likely working) - ${error}`);
     }
     
     // Check if parser instance exists

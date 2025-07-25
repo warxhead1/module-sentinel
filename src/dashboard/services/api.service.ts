@@ -91,7 +91,7 @@ export class ApiService {
    */
   clearCache(pattern?: string) {
     if (pattern) {
-      for (const key of this.cache.keys()) {
+      for (const key of Array.from(this.cache.keys())) {
         if (key.includes(pattern)) {
           this.cache.delete(key);
         }
@@ -238,5 +238,73 @@ export class ApiService {
     const successful = results.filter((r) => r.status === "fulfilled").length;
 
     return results;
+  }
+
+  // ============================================================================
+  // ANTI-PATTERN ANALYSIS METHODS
+  // ============================================================================
+
+  /**
+   * Get advanced anti-patterns from analytics API
+   */
+  async getAntiPatterns(options: {
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    type?: string;
+    limit?: number;
+  } = {}): Promise<ApiResponse<any[]>> {
+    const params = new URLSearchParams();
+    if (options.severity) params.set('severity', options.severity);
+    if (options.type) params.set('type', options.type);
+    if (options.limit) params.set('limit', options.limit.toString());
+    
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+    return this.fetch(`/analytics/anti-patterns${queryString}`);
+  }
+
+  /**
+   * Get anti-patterns summary for dashboard
+   */
+  async getAntiPatternSummary(): Promise<ApiResponse<{
+    total: number;
+    bySeverity: Record<string, number>;
+    byType: Record<string, number>;
+    mostProblematic: Array<{
+      symbolName: string;
+      type: string;
+      severity: string;
+      description: string;
+    }>;
+    recommendations: string[];
+  }>> {
+    return this.cachedFetch('/analytics/anti-patterns/summary', 2 * 60 * 1000); // Cache for 2 minutes
+  }
+
+  /**
+   * Get anti-patterns for a specific symbol
+   */
+  async getSymbolAntiPatterns(symbolId: number): Promise<ApiResponse<any[]>> {
+    return this.fetch(`/analytics/symbol/${symbolId}/anti-patterns`);
+  }
+
+  /**
+   * Get enhanced code quality metrics with anti-patterns
+   */
+  async getCodeQualityMetrics(): Promise<ApiResponse<{
+    healthScore: number;
+    confidence: number;
+    coverage: number;
+    maintainabilityIndex: number;
+    technicalDebt: number;
+    patterns: number;
+    issues: any;
+    antiPatterns: {
+      total: number;
+      bySeverity: Record<string, number>;
+      byType: Record<string, number>;
+      details: any[];
+    };
+    recommendations: string[];
+  }>> {
+    return this.cachedFetch('/analytics/quality', 1 * 60 * 1000); // Cache for 1 minute
   }
 }

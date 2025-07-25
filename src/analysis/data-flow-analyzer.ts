@@ -249,7 +249,7 @@ export class DataFlowAnalyzer {
   /**
    * Analyze how data transforms between services
    */
-  private async analyzeDataTransformations(projectId: number): Promise<void> {
+  private async analyzeDataTransformations(_projectId: number): Promise<void> {
     for (const edge of this.dataFlowGraph.edges) {
       const transformation = await this.analyzeTransformation(edge);
       if (transformation) {
@@ -261,7 +261,7 @@ export class DataFlowAnalyzer {
   /**
    * Generate data contracts between services
    */
-  private async generateDataContracts(projectId: number): Promise<void> {
+  private async generateDataContracts(_projectId: number): Promise<void> {
     const contractMap = new Map<string, DataContract>();
 
     for (const edge of this.dataFlowGraph.edges) {
@@ -357,7 +357,7 @@ export class DataFlowAnalyzer {
 
   private extractServiceName(filePath: string): string {
     // Extract service name from microservices path pattern
-    const match = filePath.match(/src\/([^\/]+)\//);
+    const match = filePath.match(/src\/([^/]+)\//);
     return match ? match[1] : "unknown";
   }
 

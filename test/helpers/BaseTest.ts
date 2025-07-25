@@ -7,6 +7,8 @@
 
 import Database from "better-sqlite3";
 import { TestResult } from "./JUnitReporter.js";
+import { Assert, AssertionError } from "../../src/utils/test-assertions.js";
+import { createLogger, Logger } from "../../src/utils/logger.js";
 
 export abstract class BaseTest {
   protected db: Database.Database;
@@ -14,10 +16,12 @@ export abstract class BaseTest {
   protected passedAssertions = 0;
   protected currentTestName = "";
   protected testName: string;
+  protected logger: Logger;
 
   constructor(testName: string, db: Database.Database) {
     this.testName = testName;
     this.db = db;
+    this.logger = createLogger(`Test:${testName}`);
   }
 
   /**
@@ -30,20 +34,33 @@ export abstract class BaseTest {
    */
   protected assert(condition: boolean, message: string): void {
     this.assertionCount++;
-    if (!condition) {
-      throw new Error(`❌ Assertion failed: ${message}`);
+    try {
+      Assert.isTrue(condition, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
     }
-    this.passedAssertions++;
   }
 
   /**
    * Assert two values are equal
    */
   protected assertEqual<T>(actual: T, expected: T, message: string): void {
-    this.assert(
-      actual === expected,
-      `${message} (expected: ${expected}, actual: ${actual})`
-    );
+    this.assertionCount++;
+    try {
+      Assert.equal(actual, expected, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -54,10 +71,17 @@ export abstract class BaseTest {
     minimum: number,
     message: string
   ): void {
-    this.assert(
-      actual >= minimum,
-      `${message} (expected at least: ${minimum}, actual: ${actual})`
-    );
+    this.assertionCount++;
+    try {
+      Assert.isAtLeast(actual, minimum, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -68,20 +92,34 @@ export abstract class BaseTest {
     maximum: number,
     message: string
   ): void {
-    this.assert(
-      actual <= maximum,
-      `${message} (expected at most: ${maximum}, actual: ${actual})`
-    );
+    this.assertionCount++;
+    try {
+      Assert.isLessThan(actual, maximum + 1, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
    * Assert array contains a value
    */
   protected assertContains<T>(array: T[], value: T, message: string): void {
-    this.assert(
-      array.includes(value),
-      `${message} (array does not contain: ${value})`
-    );
+    this.assertionCount++;
+    try {
+      Assert.includes(array, value, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -92,10 +130,17 @@ export abstract class BaseTest {
     substring: string,
     message: string
   ): void {
-    this.assert(
-      str.includes(substring),
-      `${message} (string does not contain: ${substring})`
-    );
+    this.assertionCount++;
+    try {
+      Assert.contains(str, substring, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
   }
 
   /**
@@ -177,20 +222,22 @@ export abstract class BaseTest {
   /**
    * Log a message during tests
    */
-  protected log(message: string): void {}
+  protected log(message: string): void {
+    this.logger.info(message);
+  }
 
   /**
    * Log a warning during tests
    */
   protected warn(message: string): void {
-    console.warn(`  ⚠️ [${this.currentTestName}] ${message}`);
+    this.logger.warn(message, { test: this.currentTestName });
   }
 
   /**
    * Log an error during tests
    */
   protected error(message: string): void {
-    console.error(`  ❌ [${this.currentTestName}] ${message}`);
+    this.logger.error(message, undefined, { test: this.currentTestName });
   }
 
   /**

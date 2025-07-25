@@ -7,6 +7,7 @@ import * as url from "url";
 import * as path from "path";
 import * as fs from "fs";
 import type Database from "better-sqlite3";
+import { createLogger } from "../utils/logger.js";
 
 // Services
 import { DatabaseService } from "./services/database.service.js";
@@ -33,6 +34,7 @@ export class ModernApiServer {
   private server: http.Server;
   private db: Database.Database;
   private port: number;
+  private logger = createLogger("ModernApiServer");
 
   // Request throttling
   private requestCounts = new Map<
@@ -135,6 +137,10 @@ export class ModernApiServer {
             resolve({});
           }
         } catch (error) {
+          this.logger.error("Failed to parse JSON request body", error, { 
+            contentType: req.headers["content-type"],
+            url: req.url 
+          });
           reject(new Error("Invalid JSON in request body"));
         }
       });
@@ -255,7 +261,7 @@ export class ModernApiServer {
       } else if (apiPath === "/namespaces" && req.method === "GET") {
         await this.statsRoutes.getNamespaces(req, res);
       } else if (
-        apiPath.match(/^\/namespaces\/[^\/]+\/symbols$/) &&
+        apiPath.match(/^\/namespaces\/[^/]+\/symbols$/) &&
         req.method === "GET"
       ) {
         const namespaceName = apiPath.split("/")[2];
@@ -703,6 +709,10 @@ export class ModernApiServer {
               modified: itemStat.mtime,
             };
           } catch (error) {
+            this.logger.warn("Failed to read directory item", error, { 
+              item: itemPath,
+              parent: resolvedPath 
+            });
             // Skip items we can't read
             return null;
           }
@@ -816,6 +826,7 @@ export class ModernApiServer {
       // Get additional paths from project metadata
       const additionalPaths = project.metadata?.additionalPaths || [];
       if (additionalPaths.length > 0) {
+        // Additional paths processing disabled
       }
 
       // Start indexing with selected languages

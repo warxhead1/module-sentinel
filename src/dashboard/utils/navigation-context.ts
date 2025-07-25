@@ -145,7 +145,7 @@ export class NavigationContextManager {
       // Symbol-based navigation options
       targets.push({
         route: '/code-flow',
-        component: 'enhanced-code-flow',
+        component: 'code-flow-explorer',
         title: 'View Code Flow',
         icon: '🌊',
         description: 'Analyze control flow and execution paths'

@@ -3,17 +3,17 @@
  * based on existing symbol data
  */
 
-import Parser from "tree-sitter";
-import { Database } from "better-sqlite3";
+import type _Parser from "tree-sitter";
+import { Database as _Database } from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq, and, or, inArray, sql, isNull } from "drizzle-orm";
+import { eq, and, or, inArray as _inArray, sql, isNull as _isNull } from "drizzle-orm";
 
 // Import schema
 import {
   universalSymbols,
   universalRelationships,
-  detectedPatterns,
-  projectLanguages,
+  detectedPatterns as _detectedPatterns,
+  projectLanguages as _projectLanguages,
 } from "../database/drizzle/schema.js";
 
 export interface EnrichmentStrategy {

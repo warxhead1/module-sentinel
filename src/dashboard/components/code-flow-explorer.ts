@@ -889,7 +889,7 @@ export class CodeFlowExplorer extends DashboardComponent {
     const g = svg.append('g');
 
     // Create force simulation
-    const simulation = d3.forceSimulation(this.analysisResult.nodes)
+    const simulation = d3.forceSimulation(this.analysisResult.nodes as any)
       .force('link', d3.forceLink(this.analysisResult.edges)
         .id((d: any) => d.id)
         .distance(120))

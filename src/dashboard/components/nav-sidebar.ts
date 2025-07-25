@@ -38,7 +38,6 @@ export class NavSidebar extends DashboardComponent {
     { path: '/impact', icon: '💥', title: 'Impact Analysis' },
     { path: '/code-flow', icon: '🌊', title: 'Code Flow' },
     { path: '/multi-language-flow', icon: '🌍', title: 'Multi-Language Explorer' },
-    { path: '/enhanced-flow', icon: '🎯', title: 'Enhanced Flow' }
   ];
 
   async loadData(): Promise<void> {

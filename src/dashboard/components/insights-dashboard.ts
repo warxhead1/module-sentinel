@@ -19,8 +19,14 @@ export class InsightsDashboard extends DashboardComponent {
   private metrics: any = {};
   private recommendations: any[] = [];
   private clusters: any[] = [];
+  private antiPatterns: any[] = [];
+  private antiPatternSummary: any = {};
   private selectedSymbol: any = null;
   private activeTab: string = 'insights';
+
+  private get api() {
+    return (window as any).dashboardServices?.api;
+  }
 
   async loadData(): Promise<void> {
     try {
@@ -39,6 +45,9 @@ export class InsightsDashboard extends DashboardComponent {
           break;
         case 'metrics':
           await this.loadQualityMetrics();
+          break;
+        case 'antipatterns':
+          await this.loadAntiPatterns();
           break;
         case 'clusters':
           await this.loadClusters();
@@ -126,31 +135,41 @@ export class InsightsDashboard extends DashboardComponent {
 
   private async loadQualityMetrics(): Promise<void> {
     try {
-      console.log('📊 Loading quality metrics...');
-      const response = await fetch('/api/semantic/metrics');
-      const data = await response.json();
+      console.log('📊 Loading enhanced quality metrics...');
       
-      console.log('📊 Metrics API response:', data);
+      // Load enhanced quality metrics with anti-patterns
+      const qualityResponse = await this.api.getCodeQualityMetrics();
       
-      if (data.success && data.data && data.data.metrics) {
-        // Transform raw metrics into dashboard format
+      if (qualityResponse.success && qualityResponse.data) {
+        const data = qualityResponse.data;
+        
+        // Transform enhanced metrics into dashboard format
         this.metrics = {
           overview: {
-            totalInsights: data.data.metrics.totalInsights || 0,
-            criticalIssues: data.data.metrics.criticalIssues || 0,
-            totalClusters: data.data.metrics.totalClusters || 0,
-            avgClusterQuality: Math.round((data.data.metrics.avgClusterQuality || 0) * 100)
+            healthScore: data.healthScore || 0,
+            confidence: data.confidence || 0,
+            coverage: data.coverage || 0,
+            maintainabilityIndex: Math.round(data.maintainabilityIndex || 0),
+            technicalDebt: data.technicalDebt || 0,
+            totalAntiPatterns: data.antiPatterns?.total || 0,
+            criticalAntiPatterns: data.antiPatterns?.bySeverity?.critical || 0
           },
-          byCategory: data.data.metrics.insightsByCategory || {},
-          bySeverity: data.data.metrics.insightsBySeverity || {},
-          clusterTypes: data.data.metrics.clustersByType || {}
+          antiPatterns: data.antiPatterns || {
+            total: 0,
+            bySeverity: {},
+            byType: {},
+            details: []
+          },
+          patterns: data.patterns || 0,
+          issues: data.issues || {},
+          recommendations: data.recommendations || []
         };
         console.log('✅ Loaded metrics:', this.metrics);
         
         // Re-render to display the loaded data
         this.render();
       } else {
-        console.warn('⚠️ No metrics in response:', data);
+        console.warn('⚠️ No metrics in response:', qualityResponse);
         this.metrics = {
           overview: { totalInsights: 0, criticalIssues: 0, totalClusters: 0, avgClusterQuality: 0 },
           byCategory: {},
@@ -168,6 +187,42 @@ export class InsightsDashboard extends DashboardComponent {
         clusterTypes: {}
       };
       this.render();
+    }
+  }
+
+  private async loadAntiPatterns(): Promise<void> {
+    try {
+      console.log('🔍 Loading advanced anti-patterns...');
+      
+      // Load anti-pattern summary for overview
+      const summaryResponse = await this.api.getAntiPatternSummary();
+      if (summaryResponse.success && summaryResponse.data) {
+        this.antiPatternSummary = summaryResponse.data;
+      }
+      
+      // Load detailed anti-patterns
+      const antiPatternsResponse = await this.api.getAntiPatterns({ 
+        limit: 50, 
+        severity: undefined // Load all severities
+      });
+      
+      if (antiPatternsResponse.success && antiPatternsResponse.data) {
+        this.antiPatterns = antiPatternsResponse.data;
+        console.log('✅ Loaded anti-patterns:', this.antiPatterns.length);
+        
+        // If a symbol is selected, also load its specific anti-patterns
+        if (this.selectedSymbol && this.selectedSymbol.id) {
+          const symbolAntiPatternsResponse = await this.api.getSymbolAntiPatterns(this.selectedSymbol.id);
+          if (symbolAntiPatternsResponse.success && symbolAntiPatternsResponse.data) {
+            this.selectedSymbol.antiPatterns = symbolAntiPatternsResponse.data;
+          }
+        }
+        
+        // Re-render to display the loaded data
+        this.render();
+      }
+    } catch (error) {
+      console.error('Failed to load anti-patterns:', error);
     }
   }
 

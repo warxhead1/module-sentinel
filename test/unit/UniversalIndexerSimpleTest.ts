@@ -39,6 +39,10 @@ export class UniversalIndexerTest {
         languages: ['cpp']
       });
       
+      // Verify indexer was created successfully
+      this.assert(indexer !== null, 'Indexer should be created successfully');
+      this.assert(typeof indexer.index === 'function', 'Indexer should have index method');
+      
       return {
         name: 'testCreateIndexer',
         status: 'passed',

@@ -8,12 +8,27 @@
 
 import { Database } from "better-sqlite3";
 import { drizzle, BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { sql, eq, and } from "drizzle-orm";
-import {
-  SemanticIntelligenceResult,
-  SemanticIntelligenceStats,
-} from "./semantic-intelligence-orchestrator.js";
-import { SemanticContext } from "./semantic-context-engine.js";
+import { DatabaseConnectionPool } from "../database/connection-pool.js";
+import { sql, eq, and as _and } from "drizzle-orm";
+// Define interfaces locally since semantic-intelligence-orchestrator was removed
+export interface SemanticIntelligenceResult {
+  contexts: Map<string, SemanticContext>;
+  embeddings: CodeEmbedding[];
+  clusters: SemanticCluster[];
+  insights: SemanticInsight[];
+  stats: SemanticIntelligenceStats;
+}
+
+export interface SemanticIntelligenceStats {
+  symbolsAnalyzed: number;
+  contextsExtracted: number;
+  embeddingsGenerated: number;
+  clustersCreated: number;
+  insightsGenerated: number;
+  processingTimeMs: number;
+  errors: string[];
+}
+import { SemanticContext } from "./semantic-orchestrator.js";
 import { CodeEmbedding } from "./local-code-embedding.js";
 import { SemanticCluster } from "./semantic-clustering-engine.js";
 import { SemanticInsight } from "./semantic-insights-generator.js";
@@ -24,7 +39,7 @@ import {
   semanticInsights,
   insightRecommendations,
   semanticRelationships,
-  codeEmbeddings,
+  codeEmbeddings as _codeEmbeddings,
 } from "../database/drizzle/schema.js";
 
 export interface SemanticPersistenceStats {
@@ -45,19 +60,22 @@ export interface SemanticPersistenceOptions {
   batchSize?: number;
   enableTransactions?: boolean;
   skipExistingData?: boolean;
+  connectionPool?: DatabaseConnectionPool;
 }
 
 export class SemanticDataPersister {
   private db: BetterSQLite3Database;
   private options: SemanticPersistenceOptions;
   private errors: string[] = [];
+  private connectionPool?: DatabaseConnectionPool;
 
   constructor(database: Database, options: SemanticPersistenceOptions) {
     this.db = drizzle(database);
+    this.connectionPool = options.connectionPool;
     this.options = {
       debugMode: false,
       batchSize: 100,
-      enableTransactions: false,
+      enableTransactions: true,
       skipExistingData: false,
       ...options,
     };
@@ -88,7 +106,19 @@ export class SemanticDataPersister {
     try {
       this.debug("Starting semantic data persistence...");
 
-      await this.persistAllData(result, symbolIdMapping, stats, this.db);
+      if (this.connectionPool && this.options.enableTransactions) {
+        // Use connection pool with transaction
+        await this.connectionPool.withTransaction(async (db, drizzleDb) => {
+          await this.persistAllData(result, symbolIdMapping, stats, drizzleDb);
+        });
+      } else if (this.options.enableTransactions) {
+        // Wrap all semantic data persistence in a transaction
+        await this.db.transaction(async (tx) => {
+          await this.persistAllData(result, symbolIdMapping, stats, tx);
+        });
+      } else {
+        await this.persistAllData(result, symbolIdMapping, stats, this.db);
+      }
 
       stats.processingTimeMs = Date.now() - startTime;
       stats.errors = [...this.errors];
@@ -191,8 +221,9 @@ export class SemanticDataPersister {
           // Debug: Show available keys for troubleshooting
 
           let count = 0;
-          for (const [key] of symbolIdMapping) {
+          for (const [_key] of symbolIdMapping) {
             if (count++ < 5) {
+              // Debug output disabled
             } else break;
           }
           continue;
@@ -295,8 +326,9 @@ export class SemanticDataPersister {
           // Debug: Show available keys for troubleshooting
 
           let count = 0;
-          for (const [key] of symbolIdMapping) {
+          for (const [_key] of symbolIdMapping) {
             if (count++ < 5) {
+              // Debug output disabled
             } else break;
           }
           continue;
@@ -415,6 +447,7 @@ export class SemanticDataPersister {
 
               // Debug: Show available keys for troubleshooting
               if (this.options.debugMode) {
+                // Debug output disabled
               }
               continue;
             }
@@ -833,8 +866,9 @@ export class SemanticDataPersister {
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
-  private debug(message: string): void {
+  private debug(_message: string): void {
     if (this.options.debugMode) {
+      // Debug output disabled
     }
   }
 

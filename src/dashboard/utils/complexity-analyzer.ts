@@ -1,10 +1,13 @@
 /**
- * Complexity Analyzer Module
+ * Dashboard Complexity Analyzer Module
  * 
- * Calculates various complexity metrics including cyclomatic complexity,
- * cognitive complexity, nesting depth, and other code quality indicators.
+ * Dashboard-specific wrapper for the consolidated CodeMetricsAnalyzer.
+ * Provides backward compatibility while eliminating code duplication.
  */
 
+import { CodeMetricsAnalyzer, MetricsInput, ComplexityMetrics as CoreComplexityMetrics } from '../../analysis/code-metrics-analyzer.js';
+
+// Dashboard-specific interface for backward compatibility
 export interface ComplexityMetrics {
   cyclomaticComplexity: number;
   cognitiveComplexity: number;
@@ -35,171 +38,67 @@ export interface ComplexityInput {
 }
 
 export class ComplexityAnalyzer {
+  private coreAnalyzer: CodeMetricsAnalyzer;
+
+  constructor() {
+    this.coreAnalyzer = new CodeMetricsAnalyzer();
+  }
+
   /**
    * Analyze complexity metrics for given control flow
+   * Now uses the consolidated CodeMetricsAnalyzer
    */
   analyze(input: ComplexityInput): ComplexityMetrics {
+    // Prepare input for the consolidated analyzer
+    const metricsInput: MetricsInput = {
+      nodes: input.nodes,
+      edges: input.edges,
+      blocks: input.blocks,
+      symbol: input.symbol,
+      source: input.code,
+      language: 'typescript' // Dashboard typically analyzes TypeScript/JavaScript
+    };
+
+    // Use consolidated analyzer
+    const coreMetrics = this.coreAnalyzer.analyzeComplexity(metricsInput);
+
+    // Transform to dashboard-compatible format
+    return this.transformToDashboardFormat(coreMetrics, input);
+  }
+
+  /**
+   * Transform core metrics to dashboard-compatible format
+   */
+  private transformToDashboardFormat(coreMetrics: CoreComplexityMetrics, input: ComplexityInput): ComplexityMetrics {
     return {
-      cyclomaticComplexity: this.calculateCyclomaticComplexity(input),
-      cognitiveComplexity: this.calculateCognitiveComplexity(input),
-      nestingDepth: this.calculateNestingDepth(input),
-      paramCount: this.calculateParameterCount(input.symbol),
-      localVariables: this.estimateLocalVariables(input),
-      returnPoints: this.countReturnPoints(input),
-      halsteadMetrics: input.code ? this.calculateHalsteadMetrics(input.code) : undefined,
-      maintainabilityIndex: this.calculateMaintainabilityIndex(input)
+      cyclomaticComplexity: coreMetrics.cyclomaticComplexity,
+      cognitiveComplexity: coreMetrics.cognitiveComplexity,
+      nestingDepth: coreMetrics.nestingDepth,
+      paramCount: coreMetrics.parameterCount,
+      localVariables: coreMetrics.localVariables || this.estimateLocalVariables(input),
+      returnPoints: coreMetrics.returnPoints || this.countReturnPoints(input),
+      halsteadMetrics: {
+        vocabulary: coreMetrics.halstead.vocabulary,
+        length: coreMetrics.halstead.length,
+        volume: Math.round(coreMetrics.halstead.volume),
+        difficulty: Math.round(coreMetrics.halstead.difficulty * 10) / 10,
+        effort: Math.round(coreMetrics.halstead.effort),
+        time: Math.round(coreMetrics.halstead.timeToImplement),
+        bugs: Math.round(coreMetrics.halstead.bugs * 100) / 100
+      },
+      maintainabilityIndex: Math.round(coreMetrics.maintainabilityIndex)
     };
   }
 
-  /**
-   * Calculate McCabe's cyclomatic complexity
-   * Formula: M = E - N + 2P
-   * Where E = edges, N = nodes, P = connected components (usually 1)
-   */
-  private calculateCyclomaticComplexity(input: ComplexityInput): number {
-    const nodeCount = input.nodes.length;
-    const edgeCount = input.edges.length;
-    const connectedComponents = 1; // Assuming single function
-
-    // Basic formula
-    let complexity = edgeCount - nodeCount + (2 * connectedComponents);
-
-    // Minimum complexity is 1
-    return Math.max(1, complexity);
-  }
+  // Legacy methods for backward compatibility - simplified since core logic is in consolidated analyzer
 
   /**
-   * Calculate cognitive complexity
-   * Increments for:
-   * - Conditional statements (if, switch, ternary)
-   * - Loops (for, while, do-while)
-   * - Nested structures (with nesting penalty)
-   * - Boolean operators in conditions
-   */
-  private calculateCognitiveComplexity(input: ComplexityInput): number {
-    let complexity = 0;
-    const blockMap = new Map(input.blocks.map(b => [b.id, b]));
-    const nestingLevels = new Map<number, number>();
-
-    // Calculate nesting level for each block
-    input.blocks.forEach(block => {
-      let level = 0;
-      let current = block;
-
-      while (current.parent_block_id) {
-        level++;
-        current = blockMap.get(current.parent_block_id);
-        if (!current) break;
-      }
-
-      nestingLevels.set(block.id, level);
-    });
-
-    // Add complexity based on block types
-    input.blocks.forEach(block => {
-      const nestingLevel = nestingLevels.get(block.id) || 0;
-
-      switch (block.block_type) {
-        case 'condition':
-        case 'conditional':
-          // Base increment + nesting penalty
-          complexity += 1 + nestingLevel;
-          
-          // Additional complexity for compound conditions
-          if (block.condition) {
-            const booleanOps = (block.condition.match(/&&|\|\|/g) || []).length;
-            complexity += booleanOps;
-          }
-          break;
-
-        case 'loop':
-          // Loops have higher base complexity
-          complexity += 1 + nestingLevel;
-          break;
-
-        case 'switch':
-          // Switch statements
-          complexity += 1 + nestingLevel;
-          break;
-
-        case 'try':
-        case 'catch':
-          // Exception handling
-          complexity += 1 + nestingLevel;
-          break;
-      }
-    });
-
-    // Add complexity for early returns (except the last one)
-    const returnCount = input.nodes.filter(n => n.type === 'return' || n.type === 'exit').length;
-    if (returnCount > 1) {
-      complexity += returnCount - 1;
-    }
-
-    return complexity;
-  }
-
-  /**
-   * Calculate maximum nesting depth
-   */
-  private calculateNestingDepth(input: ComplexityInput): number {
-    let maxDepth = 0;
-    const blockMap = new Map(input.blocks.map(b => [b.id, b]));
-
-    input.blocks.forEach(block => {
-      let depth = 0;
-      let current = block;
-
-      while (current.parent_block_id) {
-        depth++;
-        current = blockMap.get(current.parent_block_id);
-        if (!current || depth > 20) break; // Prevent infinite loops
-      }
-
-      maxDepth = Math.max(maxDepth, depth);
-    });
-
-    return maxDepth;
-  }
-
-  /**
-   * Count function parameters
-   */
-  private calculateParameterCount(symbol: any): number {
-    if (!symbol.signature) return 0;
-
-    // Extract parameters from signature
-    const paramMatch = symbol.signature.match(/\((.*?)\)/);
-    if (!paramMatch) return 0;
-
-    const params = paramMatch[1].trim();
-    if (!params) return 0;
-
-    // Count parameters by splitting on commas (simplified)
-    // This doesn't handle nested templates/functions perfectly
-    let depth = 0;
-    let paramCount = 1;
-
-    for (const char of params) {
-      if (char === '<' || char === '(') depth++;
-      else if (char === '>' || char === ')') depth--;
-      else if (char === ',' && depth === 0) paramCount++;
-    }
-
-    return paramCount;
-  }
-
-  /**
-   * Estimate local variables (heuristic based on complexity)
+   * Estimate local variables (fallback method)
    */
   private estimateLocalVariables(input: ComplexityInput): number {
-    // Heuristic: more complex functions tend to have more variables
+    // Simplified heuristic for backward compatibility
     const baseEstimate = Math.floor(input.blocks.length * 1.5);
-    
-    // Add variables for loops (loop counters)
     const loopCount = input.blocks.filter(b => b.block_type === 'loop').length;
-    
-    // Add variables for conditions (temporary values)
     const conditionCount = input.blocks.filter(b => 
       b.block_type === 'condition' || b.block_type === 'conditional'
     ).length;
@@ -208,7 +107,7 @@ export class ComplexityAnalyzer {
   }
 
   /**
-   * Count return points
+   * Count return points (fallback method)
    */
   private countReturnPoints(input: ComplexityInput): number {
     const exitNodes = input.nodes.filter(n => 
@@ -218,103 +117,7 @@ export class ComplexityAnalyzer {
   }
 
   /**
-   * Calculate Halstead metrics
-   */
-  private calculateHalsteadMetrics(code: string): HalsteadMetrics {
-    // Tokenize code (simplified)
-    const operators = new Set<string>();
-    const operands = new Set<string>();
-    let operatorCount = 0;
-    let operandCount = 0;
-
-    // Common operators
-    const operatorPatterns = [
-      /\+\+/g, /--/g, /\+=/g, /-=/g, /\*=/g, /\/=/g,
-      /==/g, /!=/g, /<=/g, />=/g, /&&/g, /\|\|/g,
-      /\+/g, /-/g, /\*/g, /\//g, /%/g, /=/g,
-      /</g, />/g, /!/g, /&/g, /\|/g, /\^/g,
-      /\(/g, /\)/g, /\{/g, /\}/g, /\[/g, /\]/g,
-      /\./g, /->/g, /::/g, /;/g, /,/g, /:/g, /\?/g
-    ];
-
-    // Extract operators
-    operatorPatterns.forEach(pattern => {
-      const matches = code.match(pattern) || [];
-      matches.forEach(op => {
-        operators.add(op);
-        operatorCount++;
-      });
-    });
-
-    // Extract operands (simplified - identifiers and literals)
-    const operandPattern = /\b[a-zA-Z_]\w*\b|\b\d+\.?\d*\b|"[^"]*"|'[^']*'/g;
-    const operandMatches = code.match(operandPattern) || [];
-    operandMatches.forEach(operand => {
-      operands.add(operand);
-      operandCount++;
-    });
-
-    // Calculate metrics
-    const n1 = operators.size; // Unique operators
-    const n2 = operands.size;  // Unique operands
-    const N1 = operatorCount;  // Total operators
-    const N2 = operandCount;   // Total operands
-
-    const vocabulary = n1 + n2;
-    const length = N1 + N2;
-    const volume = length * Math.log2(vocabulary);
-    const difficulty = (n1 / 2) * (N2 / n2);
-    const effort = difficulty * volume;
-    const time = effort / 18; // Seconds to implement
-    const bugs = volume / 3000; // Estimated bugs
-
-    return {
-      vocabulary,
-      length,
-      volume: Math.round(volume),
-      difficulty: Math.round(difficulty * 10) / 10,
-      effort: Math.round(effort),
-      time: Math.round(time),
-      bugs: Math.round(bugs * 100) / 100
-    };
-  }
-
-  /**
-   * Calculate Maintainability Index
-   * MI = 171 - 5.2 * ln(HV) - 0.23 * CC - 16.2 * ln(LOC)
-   * Where HV = Halstead Volume, CC = Cyclomatic Complexity, LOC = Lines of Code
-   */
-  private calculateMaintainabilityIndex(input: ComplexityInput): number {
-    const cc = this.calculateCyclomaticComplexity(input);
-    
-    // Estimate lines of code
-    let loc = 0;
-    if (input.blocks.length > 0) {
-      const minLine = Math.min(...input.blocks.map(b => b.start_line));
-      const maxLine = Math.max(...input.blocks.map(b => b.end_line));
-      loc = maxLine - minLine + 1;
-    } else {
-      loc = 10; // Default estimate
-    }
-
-    // Use Halstead volume if available, otherwise estimate
-    let halsteadVolume = 100; // Default
-    if (input.code) {
-      const halstead = this.calculateHalsteadMetrics(input.code);
-      halsteadVolume = halstead.volume;
-    }
-
-    // Calculate MI
-    let mi = 171 - 5.2 * Math.log(halsteadVolume) - 0.23 * cc - 16.2 * Math.log(loc);
-
-    // Normalize to 0-100 scale
-    mi = Math.max(0, Math.min(100, mi));
-
-    return Math.round(mi);
-  }
-
-  /**
-   * Get complexity level description
+   * Get complexity level description (preserved for dashboard compatibility)
    */
   getComplexityLevel(metrics: ComplexityMetrics): {
     level: 'low' | 'medium' | 'high' | 'very-high';
@@ -351,7 +154,7 @@ export class ComplexityAnalyzer {
   }
 
   /**
-   * Get recommendations based on metrics
+   * Get recommendations based on metrics (preserved for dashboard compatibility)
    */
   getRecommendations(metrics: ComplexityMetrics): string[] {
     const recommendations: string[] = [];

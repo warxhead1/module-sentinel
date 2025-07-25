@@ -77,7 +77,7 @@ export class SymbolResolutionCache {
   private maxSize: number;
   private evictionBatchSize: number;
   
-  constructor(maxSize: number = 100000, falsePositiveRate: number = 0.01) {
+  constructor(maxSize: number = 100000, _falsePositiveRate: number = 0.01) {
     this.maxSize = maxSize;
     this.evictionBatchSize = Math.floor(maxSize * 0.1); // Evict 10% when full
     

@@ -15,24 +15,35 @@ import {
   universalSymbols
 } from '../../database/drizzle/schema.js';
 import { SemanticInsightsGenerator } from '../../analysis/semantic-insights-generator.js';
-import { SemanticIntelligenceOrchestrator } from '../../analysis/semantic-intelligence-orchestrator.js';
+import { SemanticOrchestrator } from '../../analysis/semantic-orchestrator.js';
+import { SemanticClusteringEngine } from '../../analysis/semantic-clustering-engine.js';
+import { LocalCodeEmbeddingEngine } from '../../analysis/local-code-embedding.js';
 
 export class SemanticInsightsService {
   private db: Database;
   private drizzleDb: ReturnType<typeof drizzle>;
   private insightsGenerator: SemanticInsightsGenerator;
-  private orchestrator: SemanticIntelligenceOrchestrator;
+  private orchestrator: SemanticOrchestrator;
 
   constructor(db: Database) {
     this.db = db;
     this.drizzleDb = drizzle(db);
-    this.orchestrator = new SemanticIntelligenceOrchestrator(db);
+    this.orchestrator = new SemanticOrchestrator(db);
     
-    // We'll use the orchestrator's insights generator
+    // Create required dependencies for insights generator
+    const embeddingEngine = new LocalCodeEmbeddingEngine(db);
+    const clusteringEngine = new SemanticClusteringEngine(
+      db,
+      embeddingEngine,
+      { debugMode: false }
+    );
+    
+    // Create insights generator with all required dependencies
     this.insightsGenerator = new SemanticInsightsGenerator(
       db,
-      this.orchestrator['clusteringEngine'],
-      this.orchestrator['embeddingEngine']
+      clusteringEngine,
+      embeddingEngine,
+      { debugMode: false }
     );
   }
 

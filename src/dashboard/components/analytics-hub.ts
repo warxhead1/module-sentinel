@@ -39,15 +39,6 @@ export class AnalyticsHub extends DashboardComponent {
       status: "available",
     },
     {
-      id: "enhanced-flow",
-      title: "Enhanced Code Flow",
-      icon: "⚡",
-      description: "Advanced control flow with runtime context",
-      route: "/enhanced-flow",
-      category: "analysis",
-      status: "available",
-    },
-    {
       id: "impact",
       title: "Impact Analysis",
       icon: "💥",

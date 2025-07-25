@@ -1,11 +1,13 @@
 import * as fs from "fs";
 import * as path from "path";
 import { EventEmitter } from "events";
+import { createLogger } from "../utils/logger.js";
 
 /**
  * File watcher for detecting changes and triggering re-indexing
  */
 export class FileWatcher extends EventEmitter {
+  private logger = createLogger("FileWatcher");
   private watchers: Map<string, fs.FSWatcher> = new Map();
   private watchedExtensions = new Set([
     ".cpp",
@@ -63,7 +65,7 @@ export class FileWatcher extends EventEmitter {
    * Stop all watchers
    */
   stopAll(): void {
-    for (const [path, watcher] of this.watchers) {
+    for (const [_path, watcher] of this.watchers) {
       watcher.close();
     }
     this.watchers.clear();
@@ -153,7 +155,7 @@ export function setupFileWatchingWithReindexing(
 
   // Set up event handler for file changes
   globalFileWatcher.on("fileChanged", async (changeEvent) => {
-    const { filePath, eventType } = changeEvent;
+    const { filePath, eventType: _eventType } = changeEvent;
 
     try {
       await reindexCallback(filePath);
@@ -164,6 +166,10 @@ export function setupFileWatchingWithReindexing(
 
   // Handle file deletions
   globalFileWatcher.on("fileDeleted", (filePath) => {
-    // Could emit event to remove from database
+    const logger = createLogger("FileWatcher");
+    logger.info("File deleted, triggering cleanup", { file: filePath });
+    // TODO: Implement database cleanup for deleted files
+    // Should remove symbols, relationships, and file index entries
+    globalFileWatcher.emit("fileCleanupNeeded", filePath);
   });
 }

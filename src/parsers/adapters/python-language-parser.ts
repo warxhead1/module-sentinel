@@ -375,11 +375,12 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
         
         // Build signature
         const paramStrings = paramList.map(p => {
+          if (!p) return '';
           if (p.type) {
             return `${p.name}: ${p.type}${p.default ? ` = ${p.default}` : ''}`;
           }
           return p.default ? `${p.name} = ${p.default}` : p.name;
-        });
+        }).filter(Boolean);
         const signature = `def ${funcName}(${paramStrings.join(', ')})${returnType ? ` -> ${returnType}` : ''}`;
         
         symbols.push({

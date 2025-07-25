@@ -7,25 +7,23 @@
 
 import { Database } from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import {
-  semanticClusters,
-  clusterMembership,
-  universalSymbols,
   semanticInsights,
   insightRecommendations,
 } from "../database/drizzle/schema.js";
 import {
   SemanticCluster,
-  ClusterInsight,
+  ClusterInsight as _ClusterInsight,
   SemanticClusteringEngine,
 } from "./semantic-clustering-engine.js";
 import {
   CodeEmbedding,
   LocalCodeEmbeddingEngine,
 } from "./local-code-embedding.js";
-import { SemanticContext } from "./semantic-context-engine.js";
+import { SemanticContext } from "./semantic-orchestrator.js";
 import { SymbolInfo } from "../parsers/tree-sitter/parser-types.js";
+import { createLogger } from "../utils/logger.js";
 
 export interface SemanticInsight {
   id?: number;
@@ -104,6 +102,7 @@ export class SemanticInsightsGenerator {
   private clusteringEngine: SemanticClusteringEngine;
   private embeddingEngine: LocalCodeEmbeddingEngine;
   private debugMode: boolean = false;
+  private logger = createLogger("SemanticsInsightsGenerator");
 
   // Insight analyzers
   private architecturalAnalyzer: ArchitecturalInsightAnalyzer;
@@ -205,7 +204,8 @@ export class SemanticInsightsGenerator {
     // NOTE: Insights are stored by SemanticDataPersister to ensure proper cluster ID mapping
     // Do not store insights here to avoid foreign key constraint errors
 
-    const duration = Date.now() - startTime;
+    const _duration = Date.now() - startTime;
+    // TODO: Use duration for performance metrics/logging
 
     return filteredInsights;
   }
@@ -248,6 +248,7 @@ export class SemanticInsightsGenerator {
         reasoning: row.reasoning || "",
       }));
     } catch (error) {
+      this.logger.error("Failed to retrieve semantic insights", error);
       return [];
     }
   }
@@ -276,20 +277,9 @@ export class SemanticInsightsGenerator {
         relatedSymbols: JSON.parse(row.relatedSymbols || "[]"),
       }));
     } catch (error) {
+      this.logger.error("Failed to retrieve insights from database", error, { insightId });
       return [];
     }
-  }
-
-  /**
-   * Store insights in database
-   * @deprecated Use SemanticDataPersister.persistSemanticInsights instead to ensure proper cluster ID mapping
-   */
-  private async storeInsights(insights: SemanticInsight[]): Promise<void> {
-    // This method is deprecated and should not be used
-    // Insights should be stored through SemanticDataPersister to ensure proper foreign key relationships
-    console.warn(
-      "[Insights] storeInsights is deprecated. Use SemanticDataPersister instead."
-    );
   }
 
   /**
@@ -326,7 +316,7 @@ export class SemanticInsightsGenerator {
     // Sort and limit each category
     const final: SemanticInsight[] = [];
 
-    for (const [category, categoryInsights] of categorized) {
+    for (const [_category, categoryInsights] of categorized) {
       const sorted = categoryInsights
         .sort((a, b) => {
           // Priority ranking
@@ -440,8 +430,8 @@ class ArchitecturalInsightAnalyzer {
   }
 
   private detectCircularDependencies(
-    symbols: SymbolInfo[],
-    semanticContexts: Map<string, SemanticContext>
+    _symbols: SymbolInfo[],
+    _semanticContexts: Map<string, SemanticContext>
   ): SemanticInsight[] {
     // Simplified circular dependency detection
     // In a real implementation, this would build a dependency graph
@@ -490,7 +480,7 @@ class ArchitecturalInsightAnalyzer {
 
   private detectGodObjects(
     symbols: SymbolInfo[],
-    semanticContexts: Map<string, SemanticContext>
+    _semanticContexts: Map<string, SemanticContext>
   ): SemanticInsight[] {
     const insights: SemanticInsight[] = [];
 
@@ -612,8 +602,8 @@ class PerformanceInsightAnalyzer {
   }
 
   private detectInefficiencies(
-    clusters: SemanticCluster[],
-    semanticContexts: Map<string, SemanticContext>
+    _clusters: SemanticCluster[],
+    _semanticContexts: Map<string, SemanticContext>
   ): SemanticInsight[] {
     // Placeholder for inefficiency detection
     return [];
@@ -623,9 +613,9 @@ class PerformanceInsightAnalyzer {
 class QualityInsightAnalyzer {
   async analyze(
     clusters: SemanticCluster[],
-    embeddings: CodeEmbedding[],
-    semanticContexts: Map<string, SemanticContext>,
-    symbols: SymbolInfo[]
+    _embeddings: CodeEmbedding[],
+    _semanticContexts: Map<string, SemanticContext>,
+    _symbols: SymbolInfo[]
   ): Promise<SemanticInsight[]> {
     const insights: SemanticInsight[] = [];
 
@@ -753,16 +743,16 @@ class PatternInsightAnalyzer {
   }
 
   private detectAntiPatterns(
-    symbols: SymbolInfo[],
-    semanticContexts: Map<string, SemanticContext>
+    _symbols: SymbolInfo[],
+    _semanticContexts: Map<string, SemanticContext>
   ): SemanticInsight[] {
     // Placeholder for anti-pattern detection
     return [];
   }
 
   private detectMissingPatterns(
-    clusters: SemanticCluster[],
-    semanticContexts: Map<string, SemanticContext>
+    _clusters: SemanticCluster[],
+    _semanticContexts: Map<string, SemanticContext>
   ): SemanticInsight[] {
     // Placeholder for missing pattern detection
     return [];

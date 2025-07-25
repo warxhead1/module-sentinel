@@ -1480,23 +1480,37 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
   }
 
   /**
-   * Calculate complexity of a function based on its content
+   * Calculate complexity using consolidated CodeMetricsAnalyzer
    */
   private calculateComplexity(functionText: string): number {
-    let complexity = 1; // Base complexity
-    
-    // Add complexity for control structures
-    const controlPatterns = [
-      /\bif\b/g, /\belse\b/g, /\bwhile\b/g, /\bfor\b/g, /\bswitch\b/g,
-      /\bcatch\b/g, /\btry\b/g, /\?\s*:/g // ternary operator
-    ];
-    
-    for (const pattern of controlPatterns) {
-      const matches = functionText.match(pattern);
-      if (matches) complexity += matches.length;
+    try {
+      // Use consolidated analyzer instead of duplicate logic
+      const { CodeMetricsAnalyzer } = require('../../analysis/code-metrics-analyzer.js');
+      const analyzer = new CodeMetricsAnalyzer();
+      
+      const input = {
+        source: functionText,
+        language: 'typescript',
+        maxLines: 200
+      };
+      
+      const metrics = analyzer.analyzeComplexity(input);
+      return Math.min(metrics.cyclomaticComplexity, 10); // Keep original cap
+    } catch (error) {
+      // Fallback to simple calculation if consolidated analyzer fails
+      let complexity = 1;
+      const controlPatterns = [
+        /\bif\b/g, /\belse\b/g, /\bwhile\b/g, /\bfor\b/g, /\bswitch\b/g,
+        /\bcatch\b/g, /\btry\b/g, /\?\s*:/g
+      ];
+      
+      for (const pattern of controlPatterns) {
+        const matches = functionText.match(pattern);
+        if (matches) complexity += matches.length;
+      }
+      
+      return Math.min(complexity, 10);
     }
-    
-    return Math.min(complexity, 10); // Cap at 10
   }
 
   /**

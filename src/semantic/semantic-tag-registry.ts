@@ -7,6 +7,7 @@
 
 import { EventEmitter } from 'events';
 import Database from 'better-sqlite3';
+import { createLogger } from '../utils/logger.js';
 
 /**
  * Semantic tag definition
@@ -112,6 +113,7 @@ export class SemanticTagRegistry extends EventEmitter {
   private db: Database.Database;
   private tagCache: Map<string, SemanticTagDefinition> = new Map();
   private categoryCache: Map<TagCategory, SemanticTagDefinition[]> = new Map();
+  private logger = createLogger('SemanticTagRegistry');
   
   constructor(dbOrPath: string | Database.Database) {
     super();
@@ -687,7 +689,11 @@ export class SemanticTagRegistry extends EventEmitter {
     for (const tag of builtinTags) {
       try {
         this.registerTag(tag);
-      } catch (error) {
+      } catch {
+        this.logger.debug('Tag already exists, skipping registration', { 
+          tagName: tag.name,
+          category: tag.category 
+        });
         // Tag may already exist, which is fine
       }
     }

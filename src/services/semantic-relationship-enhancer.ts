@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { createLogger } from "../utils/logger.js";
 
 /**
  * Enhances existing symbol data with higher-level semantic relationships
@@ -6,6 +7,7 @@ import Database from "better-sqlite3";
  */
 export class SemanticRelationshipEnhancer {
   private db: Database.Database;
+  private logger = createLogger("SemanticRelationshipEnhancer");
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -18,14 +20,13 @@ export class SemanticRelationshipEnhancer {
     console.log("🧠 Enhancing semantic relationships...");
 
     // Temporarily skip methods that use non-existent columns
-    // await this.addInterfaceImplementations();
-    // await this.addTemplateSpecializations();
-    // await this.addFactoryPatterns();
-    // await this.addAsyncCallbackChains();
-    // await this.addResourceOwnership();
-    // await this.addDataFlowRelationships();
-    // await this.addPipelineDependencies();
-    
+    await this.addInterfaceImplementations();
+    await this.addTemplateSpecializations();
+    await this.addFactoryPatterns();
+    await this.addAsyncCallbackChains();
+    await this.addResourceOwnership();
+    await this.addDataFlowRelationships();
+
     // Focus on gRPC cross-language relationships
     await this.addGrpcCrossLanguageRelationships();
 
@@ -455,10 +456,10 @@ export class SemanticRelationshipEnhancer {
 
     for (const call of grpcClientCalls as any[]) {
       try {
-        const metadata = JSON.parse(call.metadata || '{}');
+        const metadata = JSON.parse(call.metadata || "{}");
         const serviceName = metadata.service || metadata.targetService;
-        
-        if (!serviceName || serviceName === 'unknown-grpc-service') continue;
+
+        if (!serviceName || serviceName === "unknown-grpc-service") continue;
 
         // Find the actual service implementation across all languages
         // Look for classes that implement the gRPC service base
@@ -489,9 +490,9 @@ export class SemanticRelationshipEnhancer {
           `
           )
           .all(
-            serviceName + 'Service',
+            serviceName + "Service",
             serviceName,
-            serviceName.toLowerCase() + 'Service',
+            serviceName.toLowerCase() + "Service",
             serviceName,
             serviceName
           );
@@ -504,12 +505,14 @@ export class SemanticRelationshipEnhancer {
           this.addSemanticRelationship(
             call.from_symbol_id,
             impl.id,
-            'grpc_calls_service',
+            "grpc_calls_service",
             0.9,
             `gRPC call from ${call.caller_name} to ${impl.name} (${impl.language})`
           );
 
-          console.log(`    ✅ Linked ${call.caller_name} → ${impl.name} (${impl.language})`);
+          console.log(
+            `    ✅ Linked ${call.caller_name} → ${impl.name} (${impl.language})`
+          );
         }
       } catch (error) {
         console.error(`    ❌ Error processing gRPC relationship: ${error}`);
@@ -576,7 +579,10 @@ export class SemanticRelationshipEnhancer {
           fromSymbolId
         );
     } catch (error) {
-      // Ignore duplicates
+      // Only ignore duplicate constraint errors
+      if ((error as any)?.code !== "SQLITE_CONSTRAINT_UNIQUE") {
+        this.logger.warn("Failed to insert semantic concept", { error });
+      }
     }
   }
 
@@ -600,7 +606,7 @@ export class SemanticRelationshipEnhancer {
         }
       }
     } catch (error) {
-      // Ignore errors
+      this.logger.warn("Failed to add semantic tag", { error, symbolId, tag });
     }
   }
 

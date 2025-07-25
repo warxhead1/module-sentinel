@@ -48,7 +48,7 @@ export class VisualizationAPITest {
   private async testCreateAPI(): Promise<TestResult> {
     const startTime = Date.now();
     try {
-      const api = new ModernApiServer(this.db, 0); // Use port 0 for random port
+      const _api = new ModernApiServer(this.db, 0); // Use port 0 for random port
       
       return {
         name: 'testCreateAPI',
@@ -289,7 +289,7 @@ export class VisualizationAPITest {
       }
       
       // Test 2: Recent symbols query
-      const recentSymbolsQuery = this.db.prepare(`
+      const _recentSymbolsQuery = this.db.prepare(`
         SELECT s.name, s.kind, s.file_path, l.display_name as language
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
@@ -298,9 +298,9 @@ export class VisualizationAPITest {
       `).all();
       
       // Test 3: Projects stats query (check if projects table exists first)
-      let projectsQuery = [];
+      let _projectsQuery = [];
       try {
-        projectsQuery = this.db.prepare(`
+        _projectsQuery = this.db.prepare(`
           SELECT 
             p.*,
             COUNT(DISTINCT s.id) as symbol_count,
@@ -310,13 +310,13 @@ export class VisualizationAPITest {
           WHERE p.is_active = 1
           GROUP BY p.id
         `).all();
-      } catch (error) {
+      } catch {
         // Projects table might not exist yet, skip this test
         console.log('Projects table not found, skipping projects query test');
       }
       
       // Test 4: By kind query
-      const byKindQuery = this.db.prepare(`
+      const _byKindQuery = this.db.prepare(`
         SELECT kind, COUNT(*) as count
         FROM universal_symbols
         GROUP BY kind
@@ -324,7 +324,7 @@ export class VisualizationAPITest {
       `).all();
       
       // Test 5: By language query
-      const byLanguageQuery = this.db.prepare(`
+      const _byLanguageQuery = this.db.prepare(`
         SELECT l.display_name as language, COUNT(*) as symbol_count
         FROM universal_symbols s
         JOIN languages l ON s.language_id = l.id
@@ -333,7 +333,7 @@ export class VisualizationAPITest {
       `).all();
       
       // Test 6: Search query with parameters
-      const searchQuery = this.db.prepare(`
+      const _searchQuery = this.db.prepare(`
         SELECT 
           s.id,
           s.name,
@@ -371,7 +371,7 @@ export class VisualizationAPITest {
       if (this.db.prepare(`SELECT id FROM universal_symbols LIMIT 1`).get()) {
         const symbolId = (this.db.prepare(`SELECT id FROM universal_symbols LIMIT 1`).get() as any).id;
         
-        const outgoingRels = this.db.prepare(`
+        const _outgoingRels = this.db.prepare(`
           SELECT 
             r.type as relationship_type,
             r.confidence,
@@ -386,7 +386,7 @@ export class VisualizationAPITest {
           LIMIT ?
         `).all(symbolId, 10);
         
-        const incomingRels = this.db.prepare(`
+        const _incomingRels = this.db.prepare(`
           SELECT 
             r.type as relationship_type,
             r.confidence,

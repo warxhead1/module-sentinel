@@ -33,10 +33,23 @@ export const cppFeatures = sqliteTable('cpp_features', {
   isInline: integer('is_inline', { mode: 'boolean' }).default(false),
   isExplicit: integer('is_explicit', { mode: 'boolean' }).default(false),
   
+  // Constructor/Destructor specific
+  isConstructor: integer('is_constructor', { mode: 'boolean' }).default(false),
+  isDestructor: integer('is_destructor', { mode: 'boolean' }).default(false),
+  isCopyConstructor: integer('is_copy_constructor', { mode: 'boolean' }).default(false),
+  isMoveConstructor: integer('is_move_constructor', { mode: 'boolean' }).default(false),
+  isCopyAssignment: integer('is_copy_assignment', { mode: 'boolean' }).default(false),
+  isMoveAssignment: integer('is_move_assignment', { mode: 'boolean' }).default(false),
+  
   // Template features
   isTemplate: integer('is_template', { mode: 'boolean' }).default(false),
   templateParameters: text('template_parameters'), // JSON array
   templateSpecialization: text('template_specialization'), // JSON object
+  isTemplateSpecialization: integer('is_template_specialization', { mode: 'boolean' }).default(false),
+  
+  // Inheritance features
+  baseClasses: text('base_classes'), // JSON array of base class info
+  derivedClasses: text('derived_classes'), // JSON array
   
   // Module features (C++20)
   moduleName: text('module_name'),
@@ -48,12 +61,94 @@ export const cppFeatures = sqliteTable('cpp_features', {
   requiresConcepts: text('requires_concepts'), // JSON array
   conceptDefinition: text('concept_definition'),
   
+  // Coroutines (C++20)
+  isCoroutine: integer('is_coroutine', { mode: 'boolean' }).default(false),
+  coroutineType: text('coroutine_type'), // 'generator', 'task', 'awaitable'
+  
+  // Lambda expressions
+  isLambda: integer('is_lambda', { mode: 'boolean' }).default(false),
+  captureList: text('capture_list'), // JSON array
+  
+  // RAII and resource management
+  isRAII: integer('is_raii', { mode: 'boolean' }).default(false),
+  managedResources: text('managed_resources'), // JSON array
+  
+  // Performance hints
+  isHotPath: integer('is_hot_path', { mode: 'boolean' }).default(false),
+  isConstexprEvaluated: integer('is_constexpr_evaluated', { mode: 'boolean' }).default(false),
+  
   // Additional features
   storageClass: text('storage_class'), // 'static', 'extern', 'thread_local'
   linkageType: text('linkage_type'), // 'internal', 'external', 'none'
   callingConvention: text('calling_convention'), // '__cdecl', '__stdcall', etc.
   attributes: text('attributes'), // JSON array of [[attributes]]
+  
+  // Documentation
+  doxygenBrief: text('doxygen_brief'),
+  doxygenDetailed: text('doxygen_detailed'),
+  doxygenParams: text('doxygen_params'), // JSON array
+  doxygenReturns: text('doxygen_returns'),
+  doxygenThrows: text('doxygen_throws'), // JSON array
 });
+
+// C++ complexity metrics table
+export const cppComplexityMetrics = sqliteTable('cpp_complexity_metrics', {
+  symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id),
+  
+  // Basic metrics
+  linesOfCode: integer('lines_of_code').default(0),
+  logicalLinesOfCode: integer('logical_lines_of_code').default(0),
+  commentLines: integer('comment_lines').default(0),
+  blankLines: integer('blank_lines').default(0),
+  
+  // Complexity metrics
+  cyclomaticComplexity: integer('cyclomatic_complexity').default(1),
+  cognitiveComplexity: integer('cognitive_complexity').default(0),
+  maxNestingDepth: integer('max_nesting_depth').default(0),
+  averageNestingDepth: real('average_nesting_depth').default(0),
+  
+  // Halstead metrics
+  halsteadOperators: integer('halstead_operators').default(0),
+  halsteadOperands: integer('halstead_operands').default(0),
+  halsteadDistinctOperators: integer('halstead_distinct_operators').default(0),
+  halsteadDistinctOperands: integer('halstead_distinct_operands').default(0),
+  halsteadVocabulary: integer('halstead_vocabulary').default(0),
+  halsteadLength: integer('halstead_length').default(0),
+  halsteadVolume: real('halstead_volume').default(0),
+  halsteadDifficulty: real('halstead_difficulty').default(0),
+  halsteadEffort: real('halstead_effort').default(0),
+  halsteadTimeToImplement: real('halstead_time_to_implement').default(0),
+  halsteadBugs: real('halstead_bugs').default(0),
+  
+  // C++ specific complexity
+  templateComplexity: integer('template_complexity').default(0),
+  inheritanceComplexity: integer('inheritance_complexity').default(0),
+  polymorphismComplexity: integer('polymorphism_complexity').default(0),
+  exceptionComplexity: integer('exception_complexity').default(0),
+  stlComplexity: integer('stl_complexity').default(0),
+  modernCppComplexity: integer('modern_cpp_complexity').default(0),
+  memoryManagementComplexity: integer('memory_management_complexity').default(0),
+  
+  // Maintainability and risk
+  maintainabilityIndex: real('maintainability_index').default(50),
+  riskLevel: text('risk_level').default('low'), // 'low', 'medium', 'high', 'very_high'
+  riskFactors: text('risk_factors'), // JSON array
+  
+  // Performance hints
+  hasExpensiveOperations: integer('has_expensive_operations', { mode: 'boolean' }).default(false),
+  hasRecursion: integer('has_recursion', { mode: 'boolean' }).default(false),
+  hasDeepNesting: integer('has_deep_nesting', { mode: 'boolean' }).default(false),
+  hasComplexTemplates: integer('has_complex_templates', { mode: 'boolean' }).default(false),
+  hasVirtualCalls: integer('has_virtual_calls', { mode: 'boolean' }).default(false),
+  
+  // Timestamps
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  complexityIdx: index('idx_cpp_complexity_cyclomatic').on(table.cyclomaticComplexity),
+  riskIdx: index('idx_cpp_complexity_risk').on(table.riskLevel),
+  maintainabilityIdx: index('idx_cpp_complexity_maintainability').on(table.maintainabilityIndex),
+}));
 
 // Python specific features
 export const pythonFeatures = sqliteTable('python_features', {

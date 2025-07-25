@@ -278,6 +278,7 @@ export class UnifiedASTVisitor {
     if (process.stdout.write) {
       process.stdout.write("[DEBUG] About to return results...\n");
     } else {
+      // Console output disabled
     }
 
     return {
@@ -313,7 +314,7 @@ export class UnifiedASTVisitor {
     const symbols = Array.from(context.symbols.values());
 
     // Sort by complexity for control flow analysis priority
-    const complexFunctions = symbols
+    const _complexFunctions = symbols
       .filter((s) => ["function", "method", "constructor"].includes(s.kind))
       .map((s) => ({
         symbol: s,
@@ -874,7 +875,7 @@ export class UnifiedASTVisitor {
     const memberWriteMatches = Array.from(line.matchAll(/\b(\w+)\.(\w+)\s*=/g));
 
     for (const match of memberWriteMatches) {
-      const [fullMatch, objectName, memberName] = match;
+      const [_fullMatch, objectName, memberName] = match;
 
       if (funcSymbol.name === "ToGeneric") {
         // Found member write in ToGeneric
@@ -909,7 +910,7 @@ export class UnifiedASTVisitor {
     );
 
     for (const match of memberReadMatches) {
-      const [fullMatch, objectName, memberName] = match;
+      const [_fullMatch, objectName, memberName] = match;
       const beforeMatch = line.substring(0, match.index || 0);
 
       // Determine if this is actually a read operation
@@ -919,8 +920,8 @@ export class UnifiedASTVisitor {
         beforeMatch.match(/\(\s*$/) || // function call: func(obj.member)
         beforeMatch.match(/,\s*$/) || // parameter: func(x, obj.member)
         line
-          .substring((match.index || 0) + fullMatch.length)
-          .match(/^\s*[;,\)\+\-\*\/\|\&<>]/); // expression: obj.member + x
+          .substring((match.index || 0) + _fullMatch.length)
+          .match(/^\s*[;,)+\-*/|&<>]/); // expression: obj.member + x
 
       if (isBeingRead && objectName !== "this") {
         context.relationships.push({
@@ -947,9 +948,9 @@ export class UnifiedASTVisitor {
     const pointerAccessMatches = Array.from(line.matchAll(/\b(\w+)->(\w+)/g));
 
     for (const match of pointerAccessMatches) {
-      const [fullMatch, objectName, memberName] = match;
+      const [_fullMatch, objectName, memberName] = match;
       const isWrite = line
-        .substring((match.index || 0) + fullMatch.length)
+        .substring((match.index || 0) + _fullMatch.length)
         .match(/^\s*=/);
 
       context.relationships.push({

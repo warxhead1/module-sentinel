@@ -11,7 +11,6 @@ import * as path from "path";
 
 export class RelationshipExtractionTest extends BaseTest {
   private patternParser!: PatternBasedParser;
-  private db: Database;
 
   constructor(db: Database) {
     super("RelationshipExtractionTest", db);
@@ -57,7 +56,8 @@ export class RelationshipExtractionTest extends BaseTest {
         )
         .all();
 
-      symbols.forEach((s: any) => {});
+      // Log some symbols for debugging
+      console.log(`Found ${symbols.length} buffer-related symbols`);
 
       // Check for improvements
       const cppMethods = symbols.filter(
@@ -75,6 +75,27 @@ export class RelationshipExtractionTest extends BaseTest {
         symbols.length > 0,
         `Expected to find some buffer-related symbols, found ${symbols.length}`
       );
+
+      // Assert that C++ methods and functions are found
+      this.assert(
+        cppMethods.length > 0 || cppFunctions.length > 0,
+        `Expected to find C++ methods or functions in buffer files, found ${cppMethods.length} methods and ${cppFunctions.length} functions`
+      );
+
+      // Log some C++ methods and functions for debugging
+      if (cppMethods.length > 0) {
+        console.log(`  Found ${cppMethods.length} C++ methods, first few:`);
+        cppMethods.slice(0, 3).forEach((m: any) => {
+          console.log(`    ${m.file_path}:${m.line} - ${m.name}`);
+        });
+      }
+
+      if (cppFunctions.length > 0) {
+        console.log(`  Found ${cppFunctions.length} C++ functions, first few:`);
+        cppFunctions.slice(0, 3).forEach((f: any) => {
+          console.log(`    ${f.file_path}:${f.line} - ${f.name}`);
+        });
+      }
 
       if (logErrors.length > 0) {
         logErrors.forEach((s: any) => {

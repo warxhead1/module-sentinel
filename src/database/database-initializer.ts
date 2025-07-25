@@ -10,9 +10,11 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as path from "path";
 import * as fs from "fs/promises";
 import { sql } from "drizzle-orm";
+import { createLogger } from "../utils/logger.js";
 
 export class DatabaseInitializer {
   private static instance: DatabaseInitializer;
+  private logger = createLogger("DatabaseInitializer");
 
   private constructor() {}
 
@@ -174,7 +176,8 @@ export class DatabaseInitializer {
     // Remove existing database
     try {
       await fs.unlink(dbPath);
-    } catch (error) {
+    } catch {
+      this.logger.debug("Database file does not exist, will create new one", { dbPath });
       // Ignore if file doesn't exist
     }
 

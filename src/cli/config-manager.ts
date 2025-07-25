@@ -30,7 +30,7 @@ function showHelp() {
 }
 
 function showConfig() {
-  const config = SecureConfigManager.getConfig();
+  const _config = SecureConfigManager.getConfig();
 
   console.log("📋 Current Configuration:");
   console.log("========================");
@@ -50,7 +50,9 @@ function checkSecurity() {
     console.log("✅ Configuration is secure");
   } else {
     console.log("⚠️  Security issues found:");
-    security.issues.forEach((issue) => {});
+    security.issues.forEach((issue) => {
+      console.log(`  - ${issue}`);
+    });
     console.log();
     console.log("🔧 To fix permissions:");
   }

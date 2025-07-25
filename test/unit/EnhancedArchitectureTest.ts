@@ -264,6 +264,7 @@ namespace PlanetGen::Rendering {
         }
       } catch (error) {
         // Python parser not yet fully integrated - this is expected
+        console.debug('Python parser not available:', error);
       }
       
       try {
@@ -274,6 +275,7 @@ namespace PlanetGen::Rendering {
         }
       } catch (error) {
         // TypeScript parser not yet fully integrated - this is expected
+        console.debug('TypeScript parser not available:', error);
       }
       
       if (languageParsers.length === 0) {

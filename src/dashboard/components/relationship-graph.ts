@@ -643,6 +643,12 @@ export class RelationshipGraph extends DashboardComponent {
             <button class="control-btn" onclick="this.getRootNode().host.resetZoom()">Reset Zoom</button>
             <button class="control-btn" onclick="this.getRootNode().host.toggleForce()">Toggle Force</button>
             <button class="control-btn" onclick="this.getRootNode().host.centerGraph()">Center</button>
+            <select class="control-btn" onchange="this.getRootNode().host.changeLayout(this.value)" style="padding: 8px;">
+              <option value="force-directed">🌐 Force</option>
+              <option value="hierarchical">📊 Hierarchical</option>
+              <option value="circular">⭕ Circular</option>
+              <option value="tree">🌳 Tree</option>
+            </select>
           </div>
           <div id="relationshipGraph"></div>
           
@@ -1107,6 +1113,16 @@ export class RelationshipGraph extends DashboardComponent {
 
   centerGraph() {
     this.visualizationEngine?.centerGraph();
+  }
+
+  changeLayout(layoutType: 'force-directed' | 'hierarchical' | 'circular' | 'tree') {
+    if (!this.visualizationEngine || !this.hierarchicalGraphData) return;
+    
+    // Update the engine's config with new layout type
+    this.visualizationEngine.updateConfig({ type: layoutType });
+    
+    // Restart the visualization with the new layout
+    this.visualizationEngine.startSimulation();
   }
 
   // Language-aware highlighting methods

@@ -1117,7 +1117,10 @@ export class DashboardOverview extends DashboardComponent {
         trend: 'stable',
         actions: [
           { id: 'add', icon: 'add', tooltip: 'Add project', action: () => { window.location.href = '/projects'; } },
-          { id: 'recent', icon: 'recent', tooltip: 'Recent projects', action: () => {} }
+          { id: 'recent', icon: 'recent', tooltip: 'Recent projects', action: () => { 
+            // TODO: Implement recent projects filter/view
+            console.log('Recent projects action not yet implemented'); 
+          } }
         ]
       },
       {

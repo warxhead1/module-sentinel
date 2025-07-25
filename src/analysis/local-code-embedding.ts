@@ -12,7 +12,7 @@ import {
   SymbolInfo,
   RelationshipInfo,
 } from "../parsers/tree-sitter/parser-types.js";
-import { SemanticContext } from "./semantic-context-engine.js";
+import { SemanticContext } from "./semantic-orchestrator.js";
 import {
   generateEmbeddingSymbolId,
   generateEmbeddingCacheKey,
@@ -123,7 +123,8 @@ export class LocalCodeEmbeddingEngine {
       }
     }
 
-    const startTime = Date.now();
+    const _startTime = Date.now();
+    // TODO: Use startTime for embedding performance tracking
 
     // Extract comprehensive features
     const features = await this.extractFeatures(
@@ -172,8 +173,8 @@ export class LocalCodeEmbeddingEngine {
       relationships?: RelationshipInfo[];
     }>
   ): Promise<CodeEmbedding[]> {
-    const startTime = Date.now();
-
+    const _startTime = Date.now();
+    // TODO: Use startTime for batch processing metrics
 
     // Process in parallel with controlled concurrency
     const concurrency = 8; // Process 8 symbols at once
@@ -195,7 +196,8 @@ export class LocalCodeEmbeddingEngine {
       results.push(...batchResults);
     }
 
-    const duration = Date.now() - startTime;
+    const _duration = Date.now() - _startTime;
+    // TODO: Log embedding generation duration for performance analysis
 
     return results;
   }
@@ -446,7 +448,7 @@ class ASTFeatureExtractor {
   async extract(
     symbol: SymbolInfo,
     ast: Parser.Tree,
-    sourceCode: string
+    _sourceCode: string
   ): Promise<{
     structure: number[];
     depth: number[];
@@ -776,7 +778,7 @@ class SemanticFeatureExtractor {
 
     const features = new Array(8).fill(0);
 
-    context.usagePatterns.forEach((pattern) => {
+    context.usagePatterns.forEach((pattern: { pattern: string; frequency: number }) => {
       const index = patternMap[pattern.pattern as keyof typeof patternMap];
       if (index !== undefined) {
         features[index] = Math.min(1, pattern.frequency / 10);

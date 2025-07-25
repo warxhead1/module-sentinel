@@ -18,7 +18,6 @@ export class DashboardRouter {
     this.routes.set('/performance', 'performance-hotspots');
     this.routes.set('/search', 'search-interface');
     this.routes.set('/code-flow', 'code-flow-explorer');
-    this.routes.set('/enhanced-flow', 'enhanced-code-flow');
 
     // Listen for browser navigation
     window.addEventListener('popstate', () => this.handleRoute());

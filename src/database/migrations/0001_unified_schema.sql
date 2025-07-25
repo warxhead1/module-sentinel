@@ -179,7 +179,8 @@ CREATE TABLE IF NOT EXISTS control_flow_blocks (
   parent_block_id INTEGER,
   condition TEXT,
   loop_type TEXT,
-  complexity INTEGER DEFAULT 1
+  complexity INTEGER DEFAULT 1,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_control_flow_blocks_symbol ON control_flow_blocks(symbol_id);
