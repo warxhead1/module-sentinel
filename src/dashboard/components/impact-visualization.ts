@@ -78,28 +78,68 @@ export class ImpactVisualization extends DashboardComponent {
       this._loading = true;
       this.render();
 
-      const response = await dataService.fetch(`/api/analytics/impact/${selectedSymbolId}`);
+      // DataService.fetch returns just the data part when response has success:true
+      // So if API returns {success: true, data: {...}}, we get just {...}
+      const impactData = await dataService.fetch(`/api/analytics/impact/${selectedSymbolId}`);
       
-      if (!response.success) {
-        throw new Error(response.error || 'Failed to load impact analysis');
+      console.log('Impact data from API:', impactData);
+      
+      // Validate the impact data structure
+      if (!impactData || typeof impactData !== 'object') {
+        throw new Error('Invalid impact data structure');
       }
 
-      this.impactData = response.data;
+      // Ensure we have the required properties
+      if (!Array.isArray(impactData.directImpact) || 
+          !Array.isArray(impactData.indirectImpact) || 
+          !Array.isArray(impactData.rippleEffect)) {
+        console.error('Invalid impact data structure:', impactData);
+        throw new Error('Impact data missing required arrays');
+      }
+
+      // Store the impact data
+      this.impactData = {
+        directImpact: impactData.directImpact || [],
+        indirectImpact: impactData.indirectImpact || [],
+        rippleEffect: impactData.rippleEffect || [],
+        severityScore: impactData.severityScore || 0,
+        crossLanguageImpact: impactData.crossLanguageImpact
+      };
+      
       this.currentSymbolId = selectedSymbolId as string;
       
+      console.log('Impact data loaded:', this.impactData);
+      
       // Enhance impact data with language information
-      this.enhanceImpactDataWithLanguages();
+      try {
+        this.enhanceImpactDataWithLanguages();
+      } catch (error) {
+        console.error('Error enhancing language data:', error);
+        // Continue without language enhancement
+      }
       
       // Load additional metrics and recommendations
-      await this.loadEnhancedMetrics();
+      try {
+        await this.loadEnhancedMetrics();
+      } catch (error) {
+        console.error('Error loading enhanced metrics:', error);
+        // Continue without enhanced metrics
+      }
       
       this._loading = false;
       this.render();
       
       // Initialize visualization after render
       setTimeout(() => {
-        this.initializeVisualization();
-        this.setupEnhancedInteractions();
+        try {
+          this.initializeVisualization();
+          this.setupEnhancedInteractions();
+        } catch (error) {
+          console.error('Error initializing visualization:', error);
+          // Show error but don't fail completely
+          this._error = 'Failed to initialize visualization';
+          this.render();
+        }
       }, 100);
     } catch (error) {
       // Don't show error for aborted requests (user switched tabs quickly)
@@ -617,12 +657,17 @@ export class ImpactVisualization extends DashboardComponent {
     const coverageClass = metrics.testCoverage.percentage < 50 ? 'metric-bad' : 
                          metrics.testCoverage.percentage < 80 ? 'metric-warning' : 'metric-good';
     
+    // Check if data is from real API or generated
+    const isRealData = !this.impactMetrics.testCoverage.uncoveredSymbols || 
+                      this.impactMetrics.testCoverage.uncoveredSymbols.length > 0;
+    
     return `
       <div class="impact-metrics-grid">
         <div class="metric-card enhanced" data-metric="coverage">
           <div class="metric-header">
             <span class="metric-icon">${iconRegistry.render('hotspots', { size: 24 }).outerHTML}</span>
             <h4>Test Coverage Impact</h4>
+            ${this.renderDataSourceBadge(isRealData)}
           </div>
           <div class="metric-content">
             <div class="metric-main-value ${coverageClass}">
@@ -834,6 +879,38 @@ export class ImpactVisualization extends DashboardComponent {
           font-size: 0.875rem;
           color: var(--text-secondary);
         }
+        
+        .data-source-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.75rem;
+          font-weight: 500;
+          margin-left: auto;
+        }
+        
+        .data-source-badge.real {
+          background: rgba(76, 175, 80, 0.2);
+          color: #4caf50;
+          border: 1px solid rgba(76, 175, 80, 0.5);
+        }
+        
+        .data-source-badge.estimated {
+          background: rgba(255, 152, 0, 0.2);
+          color: #ff9800;
+          border: 1px solid rgba(255, 152, 0, 0.5);
+        }
+        
+        .badge-icon {
+          font-weight: 700;
+        }
+        
+        .badge-text {
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
       </style>
     `;
   }
@@ -997,6 +1074,20 @@ export class ImpactVisualization extends DashboardComponent {
     return icons[type] || '💡';
   }
 
+  private renderDataSourceBadge(isRealData: boolean): string {
+    if (isRealData) {
+      return `<span class="data-source-badge real" title="Data from code analysis">
+        <span class="badge-icon">✓</span>
+        <span class="badge-text">Real Data</span>
+      </span>`;
+    } else {
+      return `<span class="data-source-badge estimated" title="Estimated data - analysis pending">
+        <span class="badge-icon">≈</span>
+        <span class="badge-text">Estimated</span>
+      </span>`;
+    }
+  }
+
   private renderScenarioSection(): string {
     if (!this.currentSymbolId) return ''; // Don't show scenario section if no symbol selected
 
@@ -1072,12 +1163,29 @@ export class ImpactVisualization extends DashboardComponent {
   private async loadEnhancedMetrics(): Promise<void> {
     if (!this.impactData || !this.currentSymbolId) return;
 
-    // Generate mock metrics for demonstration
-    // In production, these would come from API endpoints
-    this.impactMetrics = this.generateImpactMetrics();
-    this.timeline = this.generateTimeline();
-    this.recommendations = this.generateRecommendations();
-    this.loadCodeHealth();
+    try {
+      // Fetch real impact metrics from API
+      const [metricsResponse, recommendationsResponse] = await Promise.all([
+        dataService.fetch(`/api/analytics/impact-metrics/${this.currentSymbolId}`),
+        dataService.fetch(`/api/analytics/impact-recommendations/${this.currentSymbolId}`)
+      ]);
+
+      this.impactMetrics = metricsResponse;
+      this.recommendations = recommendationsResponse || [];
+      
+      // Generate timeline from impact data (still computed client-side)
+      this.timeline = this.generateTimeline();
+      
+      // Load code health indicators
+      await this.loadCodeHealthFromAPI();
+    } catch (error) {
+      console.error('Error loading enhanced metrics, falling back to generated data:', error);
+      // Fallback to generated data if API fails
+      this.impactMetrics = this.generateImpactMetrics();
+      this.timeline = this.generateTimeline();
+      this.recommendations = this.generateRecommendations();
+      this.loadCodeHealth();
+    }
   }
 
   private generateImpactMetrics(): ImpactMetrics {
@@ -1183,6 +1291,28 @@ export class ImpactVisualization extends DashboardComponent {
         prerequisites: []
       }
     ];
+  }
+
+  private async loadCodeHealthFromAPI(): Promise<void> {
+    if (!this.currentSymbolId) return;
+    
+    try {
+      const healthData = await dataService.fetch(`/api/analytics/code-health/${this.currentSymbolId}`);
+      
+      // Clear existing map
+      this.codeHealthMap.clear();
+      
+      // Populate with real data
+      if (Array.isArray(healthData)) {
+        healthData.forEach((health: CodeHealthIndicator) => {
+          this.codeHealthMap.set(health.symbolId, health);
+        });
+      }
+    } catch (error) {
+      console.error('Error loading code health data, using fallback:', error);
+      // Fallback to generated data
+      this.loadCodeHealth();
+    }
   }
 
   private loadCodeHealth(): void {
@@ -1353,13 +1483,18 @@ export class ImpactVisualization extends DashboardComponent {
       .attr('stroke', (d: any) => {
         if (d.distance === 0) return '#fff';
         if (d.isCrossLanguage) return '#feca57';
+        // Show low confidence with dashed stroke
+        if (d.confidence < 0.5) return 'rgba(255, 255, 255, 0.5)';
         return 'none';
       })
       .attr('stroke-width', (d: any) => {
         if (d.distance === 0) return 2;
         if (d.isCrossLanguage) return 3;
+        if (d.confidence < 0.5) return 1;
         return 0;
       })
+      .attr('stroke-dasharray', (d: any) => d.confidence < 0.5 ? '2,2' : 'none')
+      .attr('opacity', (d: any) => Math.max(0.4, d.confidence || 0.8))
       .attr('class', (d: any) => d.isCrossLanguage ? 'cross-language-node' : '');
 
     // Add labels

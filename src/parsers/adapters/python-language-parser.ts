@@ -358,6 +358,23 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
         
         const qualifiedFuncName = isMethod && currentClass ? `${currentClass}.${funcName}` : funcName;
         
+        // Determine visibility based on Python naming conventions
+        let visibility = 'public';
+        if (funcName.startsWith('__') && !funcName.endsWith('__')) {
+          visibility = 'private'; // Name mangling
+        } else if (funcName.startsWith('_')) {
+          visibility = 'protected'; // Convention for internal use
+        }
+        
+        // Build signature
+        const paramStrings = paramList.map(p => {
+          if (p.type) {
+            return `${p.name}: ${p.type}${p.default ? ` = ${p.default}` : ''}`;
+          }
+          return p.default ? `${p.name} = ${p.default}` : p.name;
+        });
+        const signature = `def ${funcName}(${paramStrings.join(', ')})${returnType ? ` -> ${returnType}` : ''}`;
+        
         symbols.push({
           name: funcName,
           qualifiedName: qualifiedFuncName,
@@ -367,6 +384,9 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
           column: indent,
           endLine: lineNum,
           endColumn: line.length,
+          signature,
+          returnType: returnType || undefined,
+          visibility,
           isDefinition: true,
           confidence: 0.8,
           semanticTags: decorators.filter(d => ['staticmethod', 'classmethod', 'property'].includes(d)),

@@ -10,6 +10,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "../src/database/drizzle/schema.js";
 import { DatabaseConfig } from "../src/config/database-config.js";
+import { DatabaseInitializer } from "../src/database/database-initializer.js";
 
 async function forceClearDatabase() {
   console.log("🧹 Force Clearing Database");
@@ -45,21 +46,14 @@ async function forceClearDatabase() {
   }
   console.log(`📊 Creating fresh database: ${dbPath}`);
 
-  const sqliteDb = new Database(dbPath);
-  sqliteDb.exec("PRAGMA foreign_keys = ON");
+  // Use DatabaseInitializer to ensure all migrations run properly
+  const dbInitializer = DatabaseInitializer.getInstance();
+  const sqliteDb = await dbInitializer.initializeDatabase(dbPath);
 
   const db = drizzle(sqliteDb, { schema });
 
   try {
-    // Run Drizzle migrations
-    const migrationsPath = path.join(
-      process.cwd(),
-      "src/database/drizzle/migrations"
-    );
-
-    console.log("\n🔄 Running Drizzle migrations...");
-    migrate(db, { migrationsFolder: migrationsPath });
-    console.log("✅ Migrations completed");
+    console.log("✅ Database initialized with all migrations");
 
     // Add initial languages
     console.log("\n📚 Adding supported languages...");

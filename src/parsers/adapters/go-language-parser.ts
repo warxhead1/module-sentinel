@@ -184,7 +184,17 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
         const functionNode = node.childForFieldName('function');
         if (functionNode) {
           const functionName = this.getNodeText(functionNode, context.content);
-          const callerName = this.getQualifiedName(node, context.content);
+          
+          // Get the caller name from the context (current function/method)
+          let callerName = 'unknown';
+          // Look for the enclosing function in the scope stack
+          for (let i = context.scopeStack.length - 1; i >= 0; i--) {
+            const scope = context.scopeStack[i];
+            if (scope.type === 'function') {
+              callerName = scope.qualifiedName;
+              break;
+            }
+          }
           
           // Check for goroutine launch
           if (functionName.startsWith('go ')) {
@@ -283,6 +293,33 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
             if (nameNode) {
               const varName = this.getNodeText(nameNode, context.content);
               
+              // Check for cross-language patterns in variable assignments
+              const line = this.getNodeText(node, context.content);
+              const crossLangCalls = CrossLanguageDetector.detectCrossLanguageCalls(
+                line,
+                node.startPosition.row + 1,
+                'go',
+                context.filePath
+              );
+              
+              // Add cross-language relationships to context
+              if (crossLangCalls.length > 0) {
+                for (const call of crossLangCalls) {
+                  if (call.relationship) {
+                    context.relationships.push({
+                      fromName: varName, // Use the variable name as the source
+                      toName: call.relationship.toName || call.targetEndpoint || 'unknown',
+                      relationshipType: call.relationship.relationshipType || 'uses',
+                      confidence: call.relationship.confidence || 0.8,
+                      crossLanguage: true,
+                      lineNumber: call.relationship.lineNumber,
+                      metadata: call.relationship.metadata,
+                      sourceText: line.trim()
+                    });
+                  }
+                }
+              }
+              
               return {
                 name: varName,
                 qualifiedName: this.getQualifiedName(node, context.content),
@@ -350,6 +387,7 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
     let currentPackage: string | undefined;
     let insideStruct = false;
     let currentStruct: string | undefined;
+    let currentFunc: { name: string; braceDepth: number } | undefined;
     let braceDepth = 0;
     let structBraceDepth = -1;
     
@@ -447,6 +485,11 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
         const isMain = funcName === 'main';
         const isInit = funcName === 'init';
         
+        // Track current function context
+        if (line.includes('{')) {
+          currentFunc = { name: funcName, braceDepth: braceDepth + 1 };
+        }
+        
         symbols.push({
           name: funcName,
           qualifiedName: funcName,
@@ -471,6 +514,11 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
       if (methodMatch) {
         const receiverType = methodMatch[1];
         const methodName = methodMatch[2];
+        
+        // Track current function context for methods too
+        if (line.includes('{')) {
+          currentFunc = { name: `${receiverType}.${methodName}`, braceDepth: braceDepth + 1 };
+        }
         
         symbols.push({
           name: methodName,
@@ -589,28 +637,42 @@ export class GoLanguageParser extends OptimizedTreeSitterBaseParser {
       
       if (crossLangCalls.length > 0) {
         for (const crossLang of crossLangCalls) {
+          // Use the current function context or file name as fromName
+          const fromName = currentFunc ? currentFunc.name : filePath.split('/').pop()?.replace('.go', '') || 'unknown';
           relationships.push({
-            fromName: 'unknown', // Would need better context tracking
+            fromName,
             toName: crossLang.targetEndpoint || 'unknown',
             relationshipType: crossLang.relationship.relationshipType || UniversalRelationshipType.Invokes,
             confidence: crossLang.confidence,
             crossLanguage: true,
             lineNumber: lineNum,
             columnNumber: 0,
-            metadata: crossLang.metadata
+            metadata: {
+              ...crossLang.metadata,
+              crossLanguageType: crossLang.type,
+              targetService: crossLang.targetEndpoint
+            }
           });
         }
       }
       
-      // Check for closing braces
-      if (closeBraces > 0 && insideStruct && braceDepth <= structBraceDepth) {
-        insideStruct = false;
-        currentStruct = undefined;
-        structBraceDepth = -1;
-      }
-      
-      // Update brace depth
+      // Update brace depth first
       braceDepth += openBraces - closeBraces;
+      
+      // Check for closing braces
+      if (closeBraces > 0) {
+        // Check if we're exiting a struct
+        if (insideStruct && braceDepth < structBraceDepth) {
+          insideStruct = false;
+          currentStruct = undefined;
+          structBraceDepth = -1;
+        }
+        
+        // Check if we're exiting a function
+        if (currentFunc && braceDepth < currentFunc.braceDepth) {
+          currentFunc = undefined;
+        }
+      }
     }
     
     this.debug(`Go pattern-based extraction found ${symbols.length} symbols, ${relationships.length} relationships`);

@@ -1193,6 +1193,7 @@ export class UniversalIndexer extends EventEmitter {
           endColumn: symbol.endColumn,
           signature: symbol.signature,
           returnType: symbol.returnType,
+          visibility: symbol.visibility,
           complexity: symbol.complexity || 1,
           semanticTags: symbol.semanticTags || [],
           isDefinition: symbol.isDefinition || false,
@@ -1589,6 +1590,11 @@ export class UniversalIndexer extends EventEmitter {
         toId = this.resolveCallTarget(relationship, symbolMap, allSymbols);
       }
 
+      // Cross-language service resolution for gRPC and other patterns
+      if (!toId && relationship.crossLanguage === true) {
+        toId = this.resolveCrossLanguageTarget(relationship, symbolMap, allSymbols);
+      }
+
       if (fromId && toId) {
         const key = `${fromId}-${toId}-${relationship.relationshipType}`;
         if (!processedSymbolRels.has(key)) {
@@ -1784,6 +1790,105 @@ export class UniversalIndexer extends EventEmitter {
         }
       }
     }
+  }
+
+  /**
+   * Resolve cross-language service targets (gRPC, REST, etc.)
+   */
+  private resolveCrossLanguageTarget(
+    relationship: RelationshipInfo,
+    symbolMap: Map<string, number>,
+    allSymbols: Array<{
+      id: number;
+      name: string;
+      qualifiedName: string;
+      filePath: string;
+      kind: string;
+      isExported: boolean | null;
+    }>
+  ): number | undefined {
+    const targetName = relationship.toName;
+    this.debug(`Resolving cross-language target: ${relationship.fromName} -> ${targetName}`);
+
+    // Extract service name from various patterns
+    let serviceName = targetName;
+    
+    // Handle gRPC patterns like "Cart" -> "CartService"
+    if (!serviceName.endsWith("Service") && !serviceName.endsWith("Stub") && !serviceName.endsWith("Client")) {
+      // Try with Service suffix
+      const serviceVariants = [
+        `${serviceName}Service`,
+        `${serviceName}ServiceImpl`,
+        `${serviceName}ServiceServicer`, // Python gRPC pattern
+        `${serviceName}ServiceBase`,      // C# gRPC pattern
+      ];
+      
+      for (const variant of serviceVariants) {
+        // Look for class/interface with this name
+        for (const [key, id] of symbolMap.entries()) {
+          const symbol = allSymbols.find(s => s.id === id);
+          if (!symbol) continue;
+          
+          // Check if it's a service implementation
+          if ((symbol.kind === "class" || symbol.kind === "interface") && 
+              (symbol.name === variant || symbol.qualifiedName.endsWith(variant))) {
+            this.debug(`  ✓ Found service implementation: ${symbol.qualifiedName}`);
+            return id;
+          }
+        }
+      }
+    }
+    
+    // Handle environment variable patterns like "cartservice" -> actual service
+    if (targetName.toLowerCase().includes("service")) {
+      const normalizedTarget = targetName.toLowerCase().replace(/[-_]/g, "");
+      
+      for (const [key, id] of symbolMap.entries()) {
+        const symbol = allSymbols.find(s => s.id === id);
+        if (!symbol) continue;
+        
+        const normalizedSymbol = symbol.name.toLowerCase().replace(/[-_]/g, "");
+        
+        // Fuzzy match for service names
+        if ((symbol.kind === "class" || symbol.kind === "interface") &&
+            normalizedSymbol.includes(normalizedTarget.replace("service", ""))) {
+          this.debug(`  ✓ Found service by fuzzy match: ${symbol.qualifiedName}`);
+          return id;
+        }
+      }
+    }
+    
+    // Look for exact matches on service stubs or clients
+    const stubPatterns = [
+      `${targetName}Stub`,
+      `${targetName}Client`,
+      `${targetName}ServiceStub`,
+      `${targetName}ServiceClient`
+    ];
+    
+    for (const pattern of stubPatterns) {
+      const id = symbolMap.get(pattern);
+      if (id) {
+        const symbol = allSymbols.find(s => s.id === id);
+        if (symbol) {
+          this.debug(`  ✓ Found stub/client: ${symbol.qualifiedName}`);
+          return id;
+        }
+      }
+    }
+    
+    // If we have metadata with target service info, try to use it
+    const metadata = relationship.metadata || {};
+    if (metadata.targetService) {
+      const id = symbolMap.get(metadata.targetService);
+      if (id) {
+        this.debug(`  ✓ Found via metadata: ${metadata.targetService}`);
+        return id;
+      }
+    }
+    
+    this.debug(`  ✗ Could not resolve cross-language target: ${targetName}`);
+    return undefined;
   }
 
   /**

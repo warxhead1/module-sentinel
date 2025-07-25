@@ -404,16 +404,17 @@ class UnifiedServer {
 
 // Start the server
 async function main() {
-  // Open database (assume it's already initialized by db:clear script)
-  const db = new Database(DB_PATH);
-  db.exec("PRAGMA foreign_keys = ON");
+  // Initialize database with migrations
+  console.log("🔄 Initializing database...");
+  const dbInitializer = DatabaseInitializer.getInstance();
+  const db = await dbInitializer.initializeDatabase(DB_PATH);
   
   // Quick check that database is properly initialized
   try {
     const languageCount = db.prepare("SELECT COUNT(*) as count FROM languages").get() as { count: number };
     console.log(`✅ Database ready with ${languageCount.count} languages`);
   } catch (error) {
-    console.error("❌ Database not properly initialized. Run 'npm run db:clear' first");
+    console.error("❌ Database initialization failed:", error);
     process.exit(1);
   }
 

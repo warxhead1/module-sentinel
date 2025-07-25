@@ -1,0 +1,173 @@
+name: Claude Code CI/CD
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+# Set defaults for all jobs
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # Prevent runaway workflows
+    
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+    
+    steps:
+    # Pin to specific release version instead of @beta or @v4
+    - name: Checkout code
+      uses: actions/checkout@v4.1.1
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4.0.2
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+      timeout-minutes: 10
+    
+    - name: Build project
+      run: npm run build
+      timeout-minutes: 10
+    
+    - name: Run tests
+      run: npm test
+      env:
+        CI: true
+        NODE_ENV: test
+      timeout-minutes: 15
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v4.3.1
+      if: always()
+      with:
+        name: test-results-${{ matrix.node-version }}
+        path: test-results.xml
+        retention-days: 7
+
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4.1.1
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4.0.2
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+      timeout-minutes: 10
+    
+    - name: Run linter
+      run: npm run lint
+    
+    - name: Run type check
+      run: npm run typecheck
+
+  build:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, lint]
+    
+    # Simplified conditional - only run on main branch
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4.1.1
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4.0.2
+      with:
+        node-version: 20.x
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm ci
+      timeout-minutes: 10
+    
+    - name: Build production
+      run: |
+        npm run build
+        npm run build:dashboard
+      timeout-minutes: 10
+    
+    - name: Package artifacts
+      run: |
+        tar -czf module-sentinel-dist.tar.gz dist/ dashboard/dist/
+    
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4.3.1
+      with:
+        name: module-sentinel-dist
+        path: module-sentinel-dist.tar.gz
+        retention-days: 30
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4.1.1
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@0.18.0
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v3.24.6
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build]
+    
+    # Simplified conditional - only deploy from main
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4.1.4
+      with:
+        name: module-sentinel-dist
+    
+    - name: Deploy to production
+      run: |
+        echo "Deployment logic would go here"
+        # Add your deployment commands
+      timeout-minutes: 20
+
+# Global concurrency to prevent parallel deployments
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}

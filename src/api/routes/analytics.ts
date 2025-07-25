@@ -246,4 +246,58 @@ export class AnalyticsRoutes {
       });
     }
   }
+
+  async getImpactMetrics(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const metrics = await this.analyticsService.getImpactMetrics(symbolId);
+      
+      res.json({
+        success: true,
+        data: metrics
+      });
+    } catch (error) {
+      console.error('Impact metrics error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get impact metrics'
+      });
+    }
+  }
+
+  async getCodeHealth(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const health = await this.analyticsService.getCodeHealth(symbolId);
+      
+      res.json({
+        success: true,
+        data: health
+      });
+    } catch (error) {
+      console.error('Code health error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get code health'
+      });
+    }
+  }
+
+  async getImpactRecommendations(req: Request, res: Response) {
+    try {
+      const { symbolId } = req.params;
+      const recommendations = await this.analyticsService.getImpactRecommendations(symbolId);
+      
+      res.json({
+        success: true,
+        data: recommendations
+      });
+    } catch (error) {
+      console.error('Impact recommendations error:', error);
+      res.status(500).json({
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get recommendations'
+      });
+    }
+  }
 }

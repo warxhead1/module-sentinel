@@ -7,9 +7,10 @@
 
 import { RelationshipInfo } from '../tree-sitter/parser-types.js';
 import { UniversalRelationshipType } from '../language-parser-interface.js';
+import { ServiceDiscoveryDetector } from './service-discovery-detector.js';
 
 export interface CrossLanguageCallInfo {
-  type: 'subprocess' | 'rest-api' | 'grpc' | 'ffi' | 'embedded' | 'ipc' | 'websocket';
+  type: 'subprocess' | 'rest-api' | 'grpc' | 'ffi' | 'embedded' | 'ipc' | 'websocket' | 'env-var' | 'config' | 'direct' | 'service-mesh';
   targetLanguage?: string;
   targetEndpoint?: string;
   confidence: number;
@@ -75,11 +76,18 @@ export class CrossLanguageDetector {
     /httplib::Client\s+\w+\s*\(\s*"([^"]+)"/
   ];
 
-  // gRPC patterns
+  // gRPC patterns with better capture groups
   private static readonly GRPC_PATTERNS = [
-    // gRPC client creation
+    // Go gRPC client creation: pb.NewCartServiceClient(conn)
+    /\w+\.New(\w+)Client\s*\(/,
+    // Python gRPC stub creation: demo_pb2_grpc.ProductCatalogServiceStub(channel)
+    /\w+\.(\w+)Stub\s*\(/,
+    // Java gRPC: AdServiceGrpc.newBlockingStub(channel)
+    /(\w+)Grpc\.(newBlockingStub|newStub|newFutureStub)\s*\(/,
+    // C# gRPC service implementation: CartService.CartServiceBase
+    /(\w+)Service\.(\w+)ServiceBase/,
+    // Generic gRPC client creation
     /new\s+(\w+)Client\s*\(/,
-    /\bgrpc\.(loadPackageDefinition|makeClientConstructor)\s*\(/,
     // Proto imports
     /import\s+.*\s+from\s+['"`]([^'"`]+\.proto)['"`]/,
     /require\s*\(\s*['"`]([^'"`]+\.proto)['"`]\s*\)/,
@@ -87,9 +95,7 @@ export class CrossLanguageDetector {
     /(\w+Client)\.(\w+)\s*\(/,
     /(\w+Stub)\.(\w+)\s*\(/,
     // C++ gRPC
-    /(\w+)::NewStub\s*\(/,
-    // Go gRPC
-    /\w+\.New\w+Client\s*\(/
+    /(\w+)::NewStub\s*\(/
   ];
 
   // FFI (Foreign Function Interface) patterns
@@ -248,6 +254,15 @@ export class CrossLanguageDetector {
       });
     }
 
+    // 6. Check service discovery patterns (environment variables, config)
+    const serviceDiscoveryResults = ServiceDiscoveryDetector.detectServiceDiscovery(
+      line,
+      lineNumber,
+      sourceLanguage,
+      filePath
+    );
+    results.push(...serviceDiscoveryResults);
+
     return results;
   }
 
@@ -316,12 +331,26 @@ export class CrossLanguageDetector {
     for (const pattern of this.GRPC_PATTERNS) {
       const match = line.match(pattern);
       if (match) {
+        // Extract service name from different patterns
+        let serviceName = match[1];
+        
+        // For patterns that might have different capture groups
+        if (!serviceName && match[2]) {
+          serviceName = match[2];
+        }
+        
+        // Clean up service name (remove 'Service' suffix if present for consistency)
+        if (serviceName && serviceName.endsWith('Service')) {
+          serviceName = serviceName.slice(0, -7);
+        }
+        
         return {
           type: 'grpc',
-          targetEndpoint: match[1],
+          targetEndpoint: serviceName || 'unknown-grpc-service',
           confidence: 0.85,
           metadata: {
-            service: match[1]
+            service: serviceName,
+            fullMatch: match[0]
           }
         };
       }

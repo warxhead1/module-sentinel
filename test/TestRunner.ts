@@ -33,6 +33,7 @@ import { TypeScriptEdgeCasesTest } from "./unit/TypeScriptEdgeCasesTest";
 import { CrossLanguageMicroservicesTest } from "./unit/CrossLanguageMicroservicesTest";
 import { DataFlowAnalysisTest } from "./unit/DataFlowAnalysisTest";
 import { CppAdvancedFeaturesTest } from "./unit/CppAdvancedFeaturesTest";
+import { GrpcCrossLanguageRelationshipTest } from "./unit/GrpcCrossLanguageRelationshipTest";
 
 export class TestRunner extends EventEmitter {
   private projectPath = process.cwd();
@@ -210,6 +211,10 @@ export class TestRunner extends EventEmitter {
       {
         name: "CppAdvancedFeaturesTest",
         class: CppAdvancedFeaturesTest,
+      },
+      {
+        name: "GrpcCrossLanguageRelationshipTest",
+        class: GrpcCrossLanguageRelationshipTest,
       },
     ];
 

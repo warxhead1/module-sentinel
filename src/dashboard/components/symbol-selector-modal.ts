@@ -33,6 +33,7 @@ export class SymbolSelectorModal extends DashboardComponent {
   private selectedIndex: number = 0;
   private selectedType: string = 'all';
   private availableTypes: { kind: string; count: number }[] = [];
+  private unfilteredResultCount: number = 0;
   
   constructor() {
     super();
@@ -549,8 +550,22 @@ export class SymbolSelectorModal extends DashboardComponent {
   private renderSymbols(): string {
     const hasSearchResults = this.searchResults.length > 0;
     const hasRecentSymbols = this.recentSymbols.length > 0 && !this._loading;
+    const hasFilteredResults = this.options?.filter && this.unfilteredResultCount > this.searchResults.length;
 
     if (!hasSearchResults && !hasRecentSymbols) {
+      // Check if results were filtered out
+      if (hasFilteredResults) {
+        const filteredCount = this.unfilteredResultCount;
+        return `
+          <div class="empty-state">
+            <div class="empty-state-icon">⚠️</div>
+            <p><strong>${filteredCount} result${filteredCount === 1 ? '' : 's'} found, but filtered out</strong></p>
+            <p class="filtered-message">The current filter is restricting results to specific symbol types.</p>
+            ${this.options?.filter ? '<p class="hint">Try searching for functions, classes, methods, or variables.</p>' : ''}
+          </div>
+        `;
+      }
+      
       return `
         <div class="empty-state">
           <div class="empty-state-icon">🔍</div>
@@ -640,6 +655,7 @@ export class SymbolSelectorModal extends DashboardComponent {
   private debouncedSearch = debounce(async (query: string) => {
     if (!query.trim()) {
       this.searchResults = [];
+      this.unfilteredResultCount = 0;
       this.selectedIndex = 0;
       this._loading = false;
       this.updateContent();
@@ -681,10 +697,14 @@ export class SymbolSelectorModal extends DashboardComponent {
       
       console.log('Search results:', this.searchResults);
       
+      // Store unfiltered count for display
+      this.unfilteredResultCount = this.searchResults.length;
+      
       // Apply custom filter if provided
       if (this.options?.filter && this.searchResults.length > 0) {
         this.searchResults = this.searchResults.filter(this.options.filter);
         console.log('Filtered results:', this.searchResults);
+        console.log(`Filtered out ${this.unfilteredResultCount - this.searchResults.length} results`);
       }
       
       this.selectedIndex = 0;

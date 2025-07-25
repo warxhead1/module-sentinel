@@ -380,6 +380,33 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
         if (variableName && nameNode) {
           const qualifiedName = this.getQualifiedName(nameNode, context.content);
           
+          // Check for cross-language patterns in variable assignments
+          const line = this.getNodeText(node, context.content);
+          const crossLangCalls = CrossLanguageDetector.detectCrossLanguageCalls(
+            line,
+            node.startPosition.row + 1,
+            'typescript',
+            context.filePath
+          );
+          
+          // Add cross-language relationships to context
+          if (crossLangCalls.length > 0) {
+            for (const call of crossLangCalls) {
+              if (call.relationship) {
+                context.relationships.push({
+                  fromName: variableName, // Use the variable name as the source
+                  toName: call.relationship.toName || call.targetEndpoint || 'unknown',
+                  relationshipType: call.relationship.relationshipType || 'uses',
+                  confidence: call.relationship.confidence || 0.8,
+                  crossLanguage: true,
+                  lineNumber: call.relationship.lineNumber,
+                  metadata: call.relationship.metadata,
+                  sourceText: line.trim()
+                });
+              }
+            }
+          }
+          
           // Determine symbol kind based on content
           let symbolKind = UniversalSymbolKind.Variable;
           if (isArrowFunction) {

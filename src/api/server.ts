@@ -358,6 +358,27 @@ export class ModernApiServer {
           req.body = await this.parseRequestBody(rawReq);
         }
         await this.analyticsRoutes.getBulkImpactAnalysis(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/impact-metrics\/\d+$/) &&
+        req.method === "GET"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getImpactMetrics(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/code-health\/\d+$/) &&
+        req.method === "GET"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getCodeHealth(req, res);
+      } else if (
+        apiPath.match(/^\/analytics\/impact-recommendations\/\d+$/) &&
+        req.method === "GET"
+      ) {
+        const symbolId = apiPath.split("/")[3];
+        req.params.symbolId = symbolId;
+        await this.analyticsRoutes.getImpactRecommendations(req, res);
       }
       // Semantic insights routes
       else if (apiPath === "/semantic/insights" && req.method === "GET") {

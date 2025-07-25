@@ -13,6 +13,7 @@ export interface SymbolInfo {
   endColumn?: number;
   signature?: string;
   returnType?: string;
+  visibility?: string; // 'public', 'private', 'protected', 'internal'
   semanticTags: string[];
   complexity: number;
   confidence: number;

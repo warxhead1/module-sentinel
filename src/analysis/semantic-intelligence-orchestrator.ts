@@ -237,14 +237,6 @@ export class SemanticIntelligenceOrchestrator {
         );
         // Continue with partial results
       }
-
-      if (this.debugMode) {
-        console.log(
-          `[SemanticOrchestrator] Extracted ${
-            stats.contextsExtracted
-          } contexts in ${Date.now() - contextStartTime}ms`
-        );
-      }
     }
 
     // Step 2: Generate embeddings with timeout
@@ -292,12 +284,6 @@ export class SemanticIntelligenceOrchestrator {
 
         embeddings.push(...batchEmbeddings);
         stats.embeddingsGenerated = batchEmbeddings.length;
-
-        console.log(
-          `[SemanticOrchestrator] Generated ${
-            stats.embeddingsGenerated
-          } embeddings in ${Date.now() - embeddingStartTime}ms`
-        );
       } catch (error) {
         console.warn(
           "[SemanticOrchestrator] Embedding generation failed or timed out:",
@@ -342,14 +328,6 @@ export class SemanticIntelligenceOrchestrator {
 
         clusters.push(...clusterResults);
         stats.clustersCreated = clusterResults.length;
-
-        if (this.debugMode) {
-          console.log(
-            `[SemanticOrchestrator] Created ${
-              stats.clustersCreated
-            } clusters in ${Date.now() - clusteringStartTime}ms`
-          );
-        }
       } catch (error) {
         console.warn(
           "[SemanticOrchestrator] Clustering failed or timed out:",
@@ -393,14 +371,6 @@ export class SemanticIntelligenceOrchestrator {
 
         insights.push(...insightResults);
         stats.insightsGenerated = insightResults.length;
-
-        if (this.debugMode) {
-          console.log(
-            `[SemanticOrchestrator] Generated ${
-              stats.insightsGenerated
-            } insights in ${Date.now() - insightStartTime}ms`
-          );
-        }
       } catch (error) {
         console.warn(
           "[SemanticOrchestrator] Insight generation failed or timed out:",

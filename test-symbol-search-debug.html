@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Symbol Search Debug</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+        button {
+            background: #9370db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .output {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 20px;
+            white-space: pre-wrap;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Symbol Search Debugging</h1>
+    
+    <button onclick="testWithFilter()">Test Search With Filter (functions only)</button>
+    <button onclick="testWithoutFilter()">Test Search Without Filter</button>
+    <button onclick="testQuickJump()">Test Quick Jump Modal</button>
+    
+    <div id="output" class="output"></div>
+
+    <script type="module">
+        import { showSymbolSelector } from './dashboard/dist/assets/main-C8oKXTk1.js';
+        
+        window.testWithFilter = () => {
+            showSymbolSelector({
+                title: 'Test With Filter - Functions Only',
+                filter: (symbol) => {
+                    console.log('Filtering symbol:', symbol);
+                    return ['function', 'class', 'method', 'variable'].includes(symbol.kind);
+                },
+                onSelect: (symbol) => {
+                    document.getElementById('output').textContent = 
+                        'Selected (filtered): ' + JSON.stringify(symbol, null, 2);
+                }
+            });
+        };
+        
+        window.testWithoutFilter = () => {
+            showSymbolSelector({
+                title: 'Test Without Filter - All Symbols',
+                onSelect: (symbol) => {
+                    document.getElementById('output').textContent = 
+                        'Selected (unfiltered): ' + JSON.stringify(symbol, null, 2);
+                }
+            });
+        };
+        
+        window.testQuickJump = () => {
+            window.location.hash = '#/quick-jump';
+        };
+    </script>
+</body>
+</html>
