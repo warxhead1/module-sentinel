@@ -250,6 +250,12 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
           }
         }
         
+        // Determine visibility for classes
+        let visibility = 'public';
+        if (className.startsWith('_')) {
+          visibility = 'protected'; // Convention for internal use
+        }
+        
         symbols.push({
           name: className,
           qualifiedName: className,
@@ -259,11 +265,12 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
           column: indent,
           endLine: lineNum,
           endColumn: line.length,
+          visibility,
           isDefinition: true,
           confidence: 0.9,
           semanticTags: decorators.includes('dataclass') ? ['dataclass'] : [],
           complexity: 1,
-          isExported: true, // Python classes are generally accessible
+          isExported: !className.startsWith('_'),
           isAsync: false,
           languageFeatures: {
             decorators: [...decorators],
