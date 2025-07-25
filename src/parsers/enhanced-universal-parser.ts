@@ -1,22 +1,22 @@
 /**
  * Enhanced Universal Parser Framework
- * 
+ *
  * Provides a truly language-agnostic parsing system that eliminates
  * hard-coded language assumptions and enables seamless multi-language support.
  */
 
-import { Database } from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { 
-  UniversalSymbol, 
-  UniversalRelationship, 
+import { Database } from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import {
+  UniversalSymbol,
+  UniversalRelationship,
   UniversalSymbolKind,
   UniversalRelationshipType,
   DetectedPattern,
   ParseResult,
   ILanguageParser,
-  BaseLanguageParser 
-} from './language-parser-interface.js';
+  BaseLanguageParser,
+} from "./language-parser-interface.js";
 
 /**
  * Language-agnostic symbol context for scope tracking
@@ -25,13 +25,13 @@ export interface UniversalScopeContext {
   // Scope hierarchy - works for namespaces, packages, modules
   scopeStack: ScopeFrame[];
   currentScope?: ScopeFrame;
-  
+
   // Symbol resolution cache
   symbolCache: Map<string, UniversalSymbol>;
-  
+
   // Language-specific context
   languageContext: Record<string, any>;
-  
+
   // Parsing state
   currentLine: number;
   braceDepth: number;
@@ -39,12 +39,12 @@ export interface UniversalScopeContext {
 }
 
 export interface ScopeFrame {
-  type: 'namespace' | 'module' | 'package' | 'class' | 'function' | 'block';
+  type: "namespace" | "module" | "package" | "class" | "function" | "block";
   name: string;
   qualifiedName: string;
   line: number;
   language: string;
-  
+
   // Language-specific scope data
   languageData?: Record<string, any>;
 }
@@ -63,12 +63,19 @@ export interface UniversalControlFlow {
 
 export interface ControlFlowBlock {
   id: string;
-  type: 'entry' | 'exit' | 'basic' | 'conditional' | 'loop' | 'exception' | 'async';
+  type:
+    | "entry"
+    | "exit"
+    | "basic"
+    | "conditional"
+    | "loop"
+    | "exception"
+    | "async";
   startLine: number;
   endLine: number;
   condition?: string;
   language: string;
-  
+
   // Language-specific block data
   languageData?: Record<string, any>;
 }
@@ -76,7 +83,7 @@ export interface ControlFlowBlock {
 export interface ControlFlowEdge {
   from: string;
   to: string;
-  type: 'sequential' | 'branch' | 'loop' | 'exception' | 'async' | 'return';
+  type: "sequential" | "branch" | "loop" | "exception" | "async" | "return";
   label?: string;
   condition?: string;
 }
@@ -87,19 +94,18 @@ export interface ControlFlowEdge {
 export class UniversalSymbolEnhancer {
   private db: ReturnType<typeof drizzle>;
   private languageParsers: Map<string, ILanguageParser> = new Map();
-  
+
   constructor(db: Database) {
     this.db = drizzle(db);
   }
-  
+
   /**
    * Register a language parser
    */
   registerParser(parser: ILanguageParser): void {
     this.languageParsers.set(parser.language, parser);
-    console.log(`Registered parser for ${parser.language} (extensions: ${parser.supportedExtensions.join(', ')})`);
   }
-  
+
   /**
    * Get appropriate parser for file
    */
@@ -111,12 +117,12 @@ export class UniversalSymbolEnhancer {
     }
     return null;
   }
-  
+
   /**
    * Enhanced symbol extraction with universal scope tracking
    */
   async extractSymbolsUniversal(
-    filePath: string, 
+    filePath: string,
     content: string,
     language: string
   ): Promise<UniversalSymbol[]> {
@@ -124,21 +130,25 @@ export class UniversalSymbolEnhancer {
     if (!parser) {
       throw new Error(`No parser registered for language: ${language}`);
     }
-    
+
     // Create universal scope context
     const context = this.createUniversalContext(filePath, content, language);
-    
+
     // Parse with language-specific parser
     const symbols = await parser.parseSymbols(filePath, content);
-    
+
     // Enhance symbols with universal features
     return await this.enhanceSymbolsUniversal(symbols, context);
   }
-  
+
   /**
    * Universal scope management - works across all languages
    */
-  private createUniversalContext(filePath: string, content: string, language: string): UniversalScopeContext {
+  private createUniversalContext(
+    filePath: string,
+    content: string,
+    language: string
+  ): UniversalScopeContext {
     return {
       scopeStack: [],
       symbolCache: new Map(),
@@ -146,89 +156,105 @@ export class UniversalSymbolEnhancer {
         language,
         filePath,
         content,
-        lines: content.split('\n')
+        lines: content.split("\n"),
       },
       currentLine: 0,
       braceDepth: 0,
-      indentLevel: 0
+      indentLevel: 0,
     };
   }
-  
+
   /**
    * Universal qualified name builder - language aware
    */
-  buildUniversalQualifiedName(name: string, context: UniversalScopeContext): string {
+  buildUniversalQualifiedName(
+    name: string,
+    context: UniversalScopeContext
+  ): string {
     if (context.scopeStack.length === 0) {
       return name;
     }
-    
+
     const language = context.languageContext.language;
     const separator = this.getNamespaceSeparator(language);
-    const scopePath = context.scopeStack.map(s => s.name).join(separator);
-    
+    const scopePath = context.scopeStack.map((s) => s.name).join(separator);
+
     return scopePath ? `${scopePath}${separator}${name}` : name;
   }
-  
+
   /**
    * Language-specific namespace separators
    */
   private getNamespaceSeparator(language: string): string {
     const separators: Record<string, string> = {
-      'cpp': '::',
-      'python': '.',
-      'typescript': '.',
-      'javascript': '.',
-      'rust': '::',
-      'go': '.',
-      'java': '.',
-      'csharp': '.',
-      'kotlin': '.',
-      'swift': '.'
+      cpp: "::",
+      python: ".",
+      typescript: ".",
+      javascript: ".",
+      rust: "::",
+      go: ".",
+      java: ".",
+      csharp: ".",
+      kotlin: ".",
+      swift: ".",
     };
-    
-    return separators[language] || '.';
+
+    return separators[language] || ".";
   }
-  
+
   /**
    * Universal symbol enhancement pipeline
    */
   private async enhanceSymbolsUniversal(
-    symbols: UniversalSymbol[], 
+    symbols: UniversalSymbol[],
     context: UniversalScopeContext
   ): Promise<UniversalSymbol[]> {
     const enhanced: UniversalSymbol[] = [];
-    
+
     for (const symbol of symbols) {
       // Update scope context based on symbol
       this.updateScopeForSymbol(symbol, context);
-      
+
       // Enhance qualified name
       if (!symbol.qualifiedName || symbol.qualifiedName === symbol.name) {
-        symbol.qualifiedName = this.buildUniversalQualifiedName(symbol.name, context);
+        symbol.qualifiedName = this.buildUniversalQualifiedName(
+          symbol.name,
+          context
+        );
       }
-      
+
       // Add universal semantic tags
       symbol.semanticTags = [
         ...(symbol.semanticTags || []),
-        ...this.generateUniversalSemanticTags(symbol, context)
+        ...this.generateUniversalSemanticTags(symbol, context),
       ];
-      
+
       // Cache for relationship resolution
       context.symbolCache.set(symbol.qualifiedName, symbol);
-      
+
       enhanced.push(symbol);
     }
-    
+
     return enhanced;
   }
-  
+
   /**
    * Update scope context based on symbol type
    */
-  private updateScopeForSymbol(symbol: UniversalSymbol, context: UniversalScopeContext): void {
+  private updateScopeForSymbol(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): void {
     // Universal scope types that work across languages
-    const scopeTypes = ['namespace', 'module', 'package', 'class', 'interface', 'struct'];
-    
+    const scopeTypes = [
+      "namespace",
+      "module",
+      "package",
+      "class",
+      "interface",
+      "struct",
+    ];
+
     if (scopeTypes.includes(symbol.kind)) {
       const frame: ScopeFrame = {
         type: symbol.kind as any,
@@ -236,128 +262,147 @@ export class UniversalSymbolEnhancer {
         qualifiedName: symbol.qualifiedName,
         line: symbol.line,
         language: context.languageContext.language,
-        languageData: symbol.languageFeatures
+        languageData: symbol.languageFeatures,
       };
-      
+
       context.scopeStack.push(frame);
       context.currentScope = frame;
     }
   }
-  
+
   /**
    * Generate universal semantic tags that work across languages
    */
-  private generateUniversalSemanticTags(symbol: UniversalSymbol, context: UniversalScopeContext): string[] {
+  private generateUniversalSemanticTags(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): string[] {
     const tags: string[] = [];
     const language = context.languageContext.language;
-    
+
     // Universal visibility mapping
     if (symbol.visibility) {
       tags.push(`visibility:${symbol.visibility}`);
     }
-    
+
     // Universal async/await pattern
     if (symbol.isAsync) {
-      tags.push('async', 'concurrent');
+      tags.push("async", "concurrent");
     }
-    
+
     // Universal export pattern
     if (symbol.isExported) {
-      tags.push('exported', 'public_api');
+      tags.push("exported", "public_api");
     }
-    
+
     // Universal abstraction pattern
     if (symbol.isAbstract) {
-      tags.push('abstract', 'contract');
+      tags.push("abstract", "contract");
     }
-    
+
     // Language-specific tag mapping
     if (symbol.languageFeatures) {
-      tags.push(...this.mapLanguageFeaturesToTags(symbol.languageFeatures, language));
+      tags.push(
+        ...this.mapLanguageFeaturesToTags(symbol.languageFeatures, language)
+      );
     }
-    
+
     // Pattern-based tags
     tags.push(...this.detectUniversalPatterns(symbol, context));
-    
+
     return tags;
   }
-  
+
   /**
    * Map language-specific features to universal tags
    */
-  private mapLanguageFeaturesToTags(features: Record<string, any>, language: string): string[] {
+  private mapLanguageFeaturesToTags(
+    features: Record<string, any>,
+    language: string
+  ): string[] {
     const tags: string[] = [];
-    
+
     // C++ specific mappings
-    if (language === 'cpp') {
-      if (features.isTemplate) tags.push('generic', 'template');
-      if (features.isVirtual) tags.push('virtual', 'polymorphic');
-      if (features.isStatic) tags.push('static', 'class_level');
-      if (features.isConst) tags.push('immutable', 'readonly');
-      if (features.isInline) tags.push('inline', 'optimization');
-      if (features.isNoexcept) tags.push('safe', 'no_exceptions');
+    if (language === "cpp") {
+      if (features.isTemplate) tags.push("generic", "template");
+      if (features.isVirtual) tags.push("virtual", "polymorphic");
+      if (features.isStatic) tags.push("static", "class_level");
+      if (features.isConst) tags.push("immutable", "readonly");
+      if (features.isInline) tags.push("inline", "optimization");
+      if (features.isNoexcept) tags.push("safe", "no_exceptions");
     }
-    
+
     // Python specific mappings
-    if (language === 'python') {
-      if (features.isProperty) tags.push('property', 'accessor');
-      if (features.isClassMethod) tags.push('class_method', 'static');
-      if (features.isStaticMethod) tags.push('static_method', 'utility');
-      if (features.isCoroutine) tags.push('async', 'coroutine');
-      if (features.isGenerator) tags.push('generator', 'lazy');
+    if (language === "python") {
+      if (features.isProperty) tags.push("property", "accessor");
+      if (features.isClassMethod) tags.push("class_method", "static");
+      if (features.isStaticMethod) tags.push("static_method", "utility");
+      if (features.isCoroutine) tags.push("async", "coroutine");
+      if (features.isGenerator) tags.push("generator", "lazy");
     }
-    
-    // TypeScript specific mappings  
-    if (language === 'typescript') {
-      if (features.isGeneric) tags.push('generic', 'template');
-      if (features.isReadonly) tags.push('readonly', 'immutable');
-      if (features.isOptional) tags.push('optional', 'nullable');
-      if (features.isDecorator) tags.push('decorator', 'meta');
+
+    // TypeScript specific mappings
+    if (language === "typescript") {
+      if (features.isGeneric) tags.push("generic", "template");
+      if (features.isReadonly) tags.push("readonly", "immutable");
+      if (features.isOptional) tags.push("optional", "nullable");
+      if (features.isDecorator) tags.push("decorator", "meta");
     }
-    
+
     return tags;
   }
-  
+
   /**
    * Detect universal patterns across languages
    */
-  private detectUniversalPatterns(symbol: UniversalSymbol, context: UniversalScopeContext): string[] {
+  private detectUniversalPatterns(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): string[] {
     const patterns: string[] = [];
     const name = symbol.name.toLowerCase();
-    
+
     // Factory pattern (universal)
-    if (name.includes('factory') || name.includes('create') || name.includes('make')) {
-      patterns.push('factory', 'creational');
+    if (
+      name.includes("factory") ||
+      name.includes("create") ||
+      name.includes("make")
+    ) {
+      patterns.push("factory", "creational");
     }
-    
+
     // Builder pattern (universal)
-    if (name.includes('builder') || name.includes('build')) {
-      patterns.push('builder', 'fluent');
+    if (name.includes("builder") || name.includes("build")) {
+      patterns.push("builder", "fluent");
     }
-    
+
     // Manager pattern (universal)
-    if (name.includes('manager') || name.includes('controller')) {
-      patterns.push('manager', 'coordinator');
+    if (name.includes("manager") || name.includes("controller")) {
+      patterns.push("manager", "coordinator");
     }
-    
+
     // Service pattern (universal)
-    if (name.includes('service') || name.includes('provider')) {
-      patterns.push('service', 'provider');
+    if (name.includes("service") || name.includes("provider")) {
+      patterns.push("service", "provider");
     }
-    
+
     // Repository pattern (universal)
-    if (name.includes('repository') || name.includes('dao')) {
-      patterns.push('repository', 'data_access');
+    if (name.includes("repository") || name.includes("dao")) {
+      patterns.push("repository", "data_access");
     }
-    
+
     // Event pattern (universal)
-    if (name.includes('event') || name.includes('listener') || name.includes('handler')) {
-      patterns.push('event', 'observer');
+    if (
+      name.includes("event") ||
+      name.includes("listener") ||
+      name.includes("handler")
+    ) {
+      patterns.push("event", "observer");
     }
-    
+
     return patterns;
   }
-  
+
   /**
    * Universal control flow analysis
    */
@@ -367,21 +412,23 @@ export class UniversalSymbolEnhancer {
   ): Promise<UniversalControlFlow> {
     const language = context.languageContext.language;
     const analyzer = this.getControlFlowAnalyzer(language);
-    
+
     return await analyzer.analyze(symbol, context);
   }
-  
+
   /**
    * Get language-specific control flow analyzer
    */
-  private getControlFlowAnalyzer(language: string): UniversalControlFlowAnalyzer {
+  private getControlFlowAnalyzer(
+    language: string
+  ): UniversalControlFlowAnalyzer {
     // Language-specific analyzers that implement universal interface
     switch (language) {
-      case 'cpp':
+      case "cpp":
         return new CppControlFlowAnalyzer();
-      case 'python':
+      case "python":
         return new PythonControlFlowAnalyzer();
-      case 'typescript':
+      case "typescript":
         return new TypeScriptControlFlowAnalyzer();
       default:
         return new GenericControlFlowAnalyzer();
@@ -393,109 +440,117 @@ export class UniversalSymbolEnhancer {
  * Universal control flow analyzer interface
  */
 export interface UniversalControlFlowAnalyzer {
-  analyze(symbol: UniversalSymbol, context: UniversalScopeContext): Promise<UniversalControlFlow>;
+  analyze(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): Promise<UniversalControlFlow>;
 }
 
 /**
  * Generic control flow analyzer for any language
  */
-export class GenericControlFlowAnalyzer implements UniversalControlFlowAnalyzer {
-  async analyze(symbol: UniversalSymbol, context: UniversalScopeContext): Promise<UniversalControlFlow> {
+export class GenericControlFlowAnalyzer
+  implements UniversalControlFlowAnalyzer
+{
+  async analyze(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): Promise<UniversalControlFlow> {
     // Generic pattern-based analysis that works for any language
     const blocks: ControlFlowBlock[] = [];
     const edges: ControlFlowEdge[] = [];
-    
+
     // Create entry block
     blocks.push({
-      id: 'entry',
-      type: 'entry',
+      id: "entry",
+      type: "entry",
       startLine: symbol.line,
       endLine: symbol.line,
-      language: context.languageContext.language
+      language: context.languageContext.language,
     });
-    
+
     // Analyze content between symbol start and end
     const content = context.languageContext.content;
-    const lines = content.split('\n');
+    const lines = content.split("\n");
     const startLine = symbol.line - 1;
     const endLine = symbol.endLine || startLine + 10; // Estimate
-    
+
     let complexity = 1;
-    
+
     for (let i = startLine; i < Math.min(endLine, lines.length); i++) {
       const line = lines[i];
-      
+
       // Universal control flow patterns
       if (this.isConditional(line)) {
         complexity++;
         blocks.push({
           id: `conditional_${i}`,
-          type: 'conditional',
+          type: "conditional",
           startLine: i + 1,
           endLine: i + 1,
           condition: this.extractCondition(line),
-          language: context.languageContext.language
+          language: context.languageContext.language,
         });
       }
-      
+
       if (this.isLoop(line)) {
         complexity++;
         blocks.push({
           id: `loop_${i}`,
-          type: 'loop',
+          type: "loop",
           startLine: i + 1,
           endLine: i + 1,
           condition: this.extractCondition(line),
-          language: context.languageContext.language
+          language: context.languageContext.language,
         });
       }
-      
+
       if (this.isException(line)) {
         complexity++;
         blocks.push({
           id: `exception_${i}`,
-          type: 'exception',
+          type: "exception",
           startLine: i + 1,
           endLine: i + 1,
-          language: context.languageContext.language
+          language: context.languageContext.language,
         });
       }
     }
-    
+
     // Create exit block
     blocks.push({
-      id: 'exit',
-      type: 'exit',
+      id: "exit",
+      type: "exit",
       startLine: endLine,
       endLine: endLine,
-      language: context.languageContext.language
+      language: context.languageContext.language,
     });
-    
+
     return {
       symbolId: symbol.qualifiedName,
       language: context.languageContext.language,
       blocks,
       edges,
       complexity,
-      patterns: this.detectControlFlowPatterns(blocks)
+      patterns: this.detectControlFlowPatterns(blocks),
     };
   }
-  
+
   private isConditional(line: string): boolean {
     // Universal conditional patterns
     return /\b(if|else|switch|case|when|unless|match)\b/.test(line);
   }
-  
+
   private isLoop(line: string): boolean {
     // Universal loop patterns
     return /\b(for|while|do|loop|each|map|filter|reduce)\b/.test(line);
   }
-  
+
   private isException(line: string): boolean {
     // Universal exception patterns
     return /\b(try|catch|except|finally|throw|raise|error)\b/.test(line);
   }
-  
+
   private extractCondition(line: string): string {
     // Universal condition extraction
     const patterns = [
@@ -503,31 +558,31 @@ export class GenericControlFlowAnalyzer implements UniversalControlFlowAnalyzer 
       /:\s*(.+)/, // Colon: if condition:
       /\s+(.*?)\s*{/, // Brace: if condition {
     ];
-    
+
     for (const pattern of patterns) {
       const match = line.match(pattern);
       if (match) {
         return match[1].trim();
       }
     }
-    
-    return '';
+
+    return "";
   }
-  
+
   private detectControlFlowPatterns(blocks: ControlFlowBlock[]): string[] {
     const patterns: string[] = [];
-    
-    const hasConditional = blocks.some(b => b.type === 'conditional');
-    const hasLoop = blocks.some(b => b.type === 'loop');
-    const hasException = blocks.some(b => b.type === 'exception');
-    
-    if (hasConditional) patterns.push('branching');
-    if (hasLoop) patterns.push('iteration');
-    if (hasException) patterns.push('error_handling');
-    
-    if (blocks.length <= 2) patterns.push('simple');
-    else if (blocks.length > 10) patterns.push('complex');
-    
+
+    const hasConditional = blocks.some((b) => b.type === "conditional");
+    const hasLoop = blocks.some((b) => b.type === "loop");
+    const hasException = blocks.some((b) => b.type === "exception");
+
+    if (hasConditional) patterns.push("branching");
+    if (hasLoop) patterns.push("iteration");
+    if (hasException) patterns.push("error_handling");
+
+    if (blocks.length <= 2) patterns.push("simple");
+    else if (blocks.length > 10) patterns.push("complex");
+
     return patterns;
   }
 }
@@ -536,28 +591,38 @@ export class GenericControlFlowAnalyzer implements UniversalControlFlowAnalyzer 
  * C++ specific control flow analyzer
  */
 export class CppControlFlowAnalyzer extends GenericControlFlowAnalyzer {
-  async analyze(symbol: UniversalSymbol, context: UniversalScopeContext): Promise<UniversalControlFlow> {
+  async analyze(
+    symbol: UniversalSymbol,
+    context: UniversalScopeContext
+  ): Promise<UniversalControlFlow> {
     const baseResult = await super.analyze(symbol, context);
-    
+
     // Add C++ specific patterns
     const content = context.languageContext.content;
-    const lines = content.split('\n');
-    
+    const lines = content.split("\n");
+
     // Detect C++ specific patterns
     const cppPatterns: string[] = [];
-    
+
     for (const line of lines) {
-      if (line.includes('RAII') || line.includes('unique_ptr') || line.includes('shared_ptr')) {
-        cppPatterns.push('raii', 'resource_management');
+      if (
+        line.includes("RAII") ||
+        line.includes("unique_ptr") ||
+        line.includes("shared_ptr")
+      ) {
+        cppPatterns.push("raii", "resource_management");
       }
-      if (line.includes('template') || line.includes('<') && line.includes('>')) {
-        cppPatterns.push('template_metaprogramming');
+      if (
+        line.includes("template") ||
+        (line.includes("<") && line.includes(">"))
+      ) {
+        cppPatterns.push("template_metaprogramming");
       }
-      if (line.includes('constexpr') || line.includes('consteval')) {
-        cppPatterns.push('compile_time');
+      if (line.includes("constexpr") || line.includes("consteval")) {
+        cppPatterns.push("compile_time");
       }
     }
-    
+
     baseResult.patterns.push(...cppPatterns);
     return baseResult;
   }
@@ -571,7 +636,7 @@ export class PythonControlFlowAnalyzer extends GenericControlFlowAnalyzer {
 }
 
 /**
- * TypeScript specific control flow analyzer  
+ * TypeScript specific control flow analyzer
  */
 export class TypeScriptControlFlowAnalyzer extends GenericControlFlowAnalyzer {
   // Similar implementation for TypeScript specific patterns

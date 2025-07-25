@@ -37,16 +37,10 @@ export class SymbolsRoutes {
         projectIds = projectIdsStr.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
       }
 
-      // Allow search by qualified_name OR query
-      if (!query.trim() && !qualifiedName) {
-        const response: ApiResponse = {
-          success: false,
-          error: 'Search query or qualified_name is required'
-        };
-        return res.status(400).json(response);
-      }
+      // Allow search by qualified_name OR query, or list all if no search specified
+      const searchQuery = qualifiedName || query;
 
-      const symbols = this.dbService.searchSymbols(qualifiedName || query, {
+      const symbols = this.dbService.searchSymbols(searchQuery, {
         kind,
         namespace,
         qualifiedName: !!qualifiedName, // Flag to indicate exact qualified_name search

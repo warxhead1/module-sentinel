@@ -42,7 +42,7 @@ export class Priority1Tools {
     const methods = this.db.prepare(`
       SELECT name, parent_class, return_type, signature, file_path, line, 
              qualified_name, kind, namespace, export_namespace
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE kind IN ('function', 'method')
         AND (name LIKE ? OR qualified_name LIKE ? OR signature LIKE ? 
              OR namespace LIKE ? OR namespace || '::' || name LIKE ?)
@@ -147,7 +147,7 @@ export class Priority1Tools {
     // Search for similar code patterns using database directly
     const patterns = this.db.prepare(`
       SELECT name, signature, file_path, line, parent_class, return_type, qualified_name
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE kind IN ('function', 'method')
         AND (signature LIKE ? OR name LIKE ?)
       ORDER BY 
@@ -231,13 +231,13 @@ export class Priority1Tools {
   private async buildDependencyGraph(): Promise<Map<string, Set<string>>> {
     const graph = new Map<string, Set<string>>();
 
-    // Query all module dependencies by joining with enhanced_symbols
+    // Query all module dependencies by joining with universal_symbols
     const dependencies = this.db.prepare(`
       SELECT from_symbols.file_path as from_module, to_symbols.file_path as to_module 
-      FROM symbol_relationships sr
-      LEFT JOIN enhanced_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
-      LEFT JOIN enhanced_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
-      WHERE sr.relationship_type IN ('uses', 'calls', 'inherits', 'implements')
+      FROM universal_relationships sr
+      LEFT JOIN universal_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
+      LEFT JOIN universal_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
+      WHERE sr.type IN ('uses', 'calls', 'inherits', 'implements')
         AND from_symbols.file_path IS NOT NULL
         AND to_symbols.file_path IS NOT NULL
       GROUP BY from_symbols.file_path, to_symbols.file_path
@@ -291,10 +291,10 @@ export class Priority1Tools {
 
       const relationships = this.db.prepare(`
         SELECT DISTINCT to_symbols.name as to_symbol 
-        FROM symbol_relationships sr
-        LEFT JOIN enhanced_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
-        LEFT JOIN enhanced_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
-        WHERE from_symbols.file_path = ? AND to_symbols.file_path = ? AND sr.relationship_type = 'implements'
+        FROM universal_relationships sr
+        LEFT JOIN universal_symbols from_symbols ON sr.from_symbol_id = from_symbols.id
+        LEFT JOIN universal_symbols to_symbols ON sr.to_symbol_id = to_symbols.id
+        WHERE from_symbols.file_path = ? AND to_symbols.file_path = ? AND sr.type = 'implements'
       `).all(from, to) as Array<{ to_symbol: string }>;
 
       relationships.forEach(rel => interfaces.add(rel.to_symbol));
@@ -424,14 +424,14 @@ export class Priority1Tools {
         s1.file_path as from_file,
         s2.name as to_symbol,
         s2.file_path as to_file,
-        sr.relationship_type,
+        sr.type,
         sr.usage_pattern,
         sr.confidence,
         sr.source_text,
         sr.line_number
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s2.name = ? 
         AND sr.detected_by = 'cross-file-analyzer'
         AND s1.file_path != s2.file_path
@@ -444,7 +444,7 @@ export class Priority1Tools {
       fromLine: usage.line_number || 0,
       toSymbol: usage.to_symbol,
       toFile: usage.to_file,
-      relationshipType: usage.relationship_type,
+      relationshipType: usage.type,
       usagePattern: usage.usage_pattern,
       confidence: usage.confidence,
       sourceText: usage.source_text || ''
@@ -492,10 +492,10 @@ export class Priority1Tools {
       SELECT DISTINCT
         s2.file_path as dependency_file,
         COUNT(*) as usage_count,
-        GROUP_CONCAT(DISTINCT sr.relationship_type) as relationship_types
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        GROUP_CONCAT(DISTINCT sr.type) as relationship_types
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s1.file_path = ?
         AND sr.detected_by = 'cross-file-analyzer'
         AND s1.file_path != s2.file_path
@@ -508,10 +508,10 @@ export class Priority1Tools {
       SELECT DISTINCT
         s1.file_path as dependent_file,
         COUNT(*) as usage_count,
-        GROUP_CONCAT(DISTINCT sr.relationship_type) as relationship_types
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+        GROUP_CONCAT(DISTINCT sr.type) as relationship_types
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE s2.file_path = ?
         AND sr.detected_by = 'cross-file-analyzer'
         AND s1.file_path != s2.file_path
@@ -546,14 +546,14 @@ export class Priority1Tools {
         s2.name as to_symbol,
         s2.file_path as to_file,
         s2.parent_class as to_class,
-        sr.relationship_type,
+        sr.type,
         sr.usage_pattern,
         sr.confidence,
         sr.source_text,
         sr.line_number
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE (s1.name = ? OR s2.name = ?)
         AND sr.detected_by = 'cross-file-analyzer'
       ORDER BY sr.confidence DESC
@@ -583,7 +583,7 @@ export class Priority1Tools {
         fromLine: u.line_number || 0,
         toSymbol: u.to_symbol,
         toFile: u.to_file,
-        relationshipType: u.relationship_type,
+        relationshipType: u.type,
         usagePattern: u.usage_pattern,
         confidence: u.confidence,
         sourceText: u.source_text || ''
@@ -617,11 +617,11 @@ export class Priority1Tools {
         s1.file_path as dependent_file,
         s2.file_path as dependency_file,
         COUNT(*) as usage_count,
-        GROUP_CONCAT(DISTINCT sr.relationship_type) as relationship_types,
+        GROUP_CONCAT(DISTINCT sr.type) as relationship_types,
         AVG(sr.confidence) as avg_confidence
-      FROM symbol_relationships sr
-      JOIN enhanced_symbols s1 ON sr.from_symbol_id = s1.id
-      JOIN enhanced_symbols s2 ON sr.to_symbol_id = s2.id
+      FROM universal_relationships sr
+      JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
+      JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
       WHERE sr.detected_by = 'cross-file-analyzer'
         AND s1.file_path != s2.file_path
       GROUP BY s1.file_path, s2.file_path
@@ -639,7 +639,7 @@ export class Priority1Tools {
     // Get usage pattern summary
     const patternSummary = this.db.prepare(`
       SELECT usage_pattern, COUNT(*) as count
-      FROM symbol_relationships 
+      FROM universal_relationships 
       WHERE detected_by = 'cross-file-analyzer'
       GROUP BY usage_pattern
       ORDER BY count DESC
@@ -675,7 +675,7 @@ export class Priority1Tools {
     const symbols = this.db.prepare(`
       SELECT name, qualified_name, kind, namespace, file_path, line,
              return_type, signature, semantic_tags
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE namespace LIKE ?
          OR namespace = ?
       ORDER BY namespace, kind, name
@@ -718,7 +718,7 @@ export class Priority1Tools {
                ) THEN 4
                ELSE 5
              END as priority
-      FROM enhanced_symbols
+      FROM universal_symbols
       WHERE name = ?
       ORDER BY priority, qualified_name
     `).all(

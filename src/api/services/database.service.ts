@@ -77,14 +77,20 @@ export class DatabaseService {
     
     const params: any[] = [];
     
-    if (qualifiedName) {
-      // Exact match on qualified_name for file-level symbol queries
-      sql += ' WHERE s.qualified_name = ?';
-      params.push(query);
-    } else {
-      // Fuzzy search on name and qualified_name
-      sql += ' WHERE (s.name LIKE ? OR s.qualified_name LIKE ?)';
-      params.push(`%${query}%`, `%${query}%`);
+    // Add WHERE clause only if we have search criteria
+    let whereAdded = false;
+    
+    if (query && query.trim()) {
+      if (qualifiedName) {
+        // Exact match on qualified_name for file-level symbol queries
+        sql += ' WHERE s.qualified_name = ?';
+        params.push(query);
+      } else {
+        // Fuzzy search on name and qualified_name
+        sql += ' WHERE (s.name LIKE ? OR s.qualified_name LIKE ?)';
+        params.push(`%${query}%`, `%${query}%`);
+      }
+      whereAdded = true;
     }
     
     if (kind) {
@@ -121,10 +127,16 @@ export class DatabaseService {
     let sql = `
       SELECT r.*, 
         s1.name as from_name, s1.qualified_name as from_qualified_name,
-        s2.name as to_name, s2.qualified_name as to_qualified_name
+        s1.kind as from_kind, s1.namespace as from_namespace,
+        l1.name as from_language,
+        s2.name as to_name, s2.qualified_name as to_qualified_name,
+        s2.kind as to_kind, s2.namespace as to_namespace,
+        l2.name as to_language
       FROM universal_relationships r
       JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
       JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
+      LEFT JOIN languages l1 ON s1.language_id = l1.id
+      LEFT JOIN languages l2 ON s2.language_id = l2.id
       WHERE 1=1
     `;
     
@@ -148,8 +160,14 @@ export class DatabaseService {
     return this.db.prepare(sql).all(...params) as Array<Relationship & {
       from_name: string;
       from_qualified_name: string;
+      from_kind: string;
+      from_namespace: string;
+      from_language: string;
       to_name: string;
       to_qualified_name: string;
+      to_kind: string;
+      to_namespace: string;
+      to_language: string;
     }>;
   }
 
@@ -282,13 +300,14 @@ export class DatabaseService {
           p.display_name,
           p.description,
           p.root_path,
+          p.metadata,
           p.is_active,
           p.created_at,
           COUNT(s.id) as symbol_count
         FROM projects p
         LEFT JOIN universal_symbols s ON p.id = s.project_id
         WHERE p.is_active = 1
-        GROUP BY p.id, p.name, p.display_name, p.description, p.root_path, p.is_active, p.created_at
+        GROUP BY p.id, p.name, p.display_name, p.description, p.root_path, p.metadata, p.is_active, p.created_at
         ORDER BY p.name
       `).all() as Array<{
         id: number;
@@ -296,6 +315,7 @@ export class DatabaseService {
         display_name: string | null;
         description: string | null;
         root_path: string;
+        metadata: any;
         is_active: number;
         created_at: string;
         symbol_count: number;
@@ -341,18 +361,57 @@ export class DatabaseService {
   getAllRelationships(limit: number = 100) {
     const sql = `
       SELECT r.*, 
-        s1.name as from_name, s1.qualified_name as from_qualified_name,
-        s1.kind as from_kind, s1.namespace as from_namespace,
-        s2.name as to_name, s2.qualified_name as to_qualified_name,
-        s2.kind as to_kind, s2.namespace as to_namespace
+        -- Source symbol rich data
+        s1.name as from_name, 
+        s1.qualified_name as from_qualified_name,
+        s1.kind as from_kind, 
+        s1.namespace as from_namespace,
+        s1.file_path as from_file_path,
+        s1.line as from_line,
+        s1.column as from_column,
+        s1.end_line as from_end_line,
+        s1.end_column as from_end_column,
+        s1.signature as from_signature,
+        s1.return_type as from_return_type,
+        s1.visibility as from_visibility,
+        s1.is_exported as from_is_exported,
+        s1.is_async as from_is_async,
+        s1.is_abstract as from_is_abstract,
+        s1.language_features as from_language_features,
+        s1.semantic_tags as from_semantic_tags,
+        s1.confidence as from_confidence,
+        l1.name as from_language,
+        -- Target symbol rich data
+        s2.name as to_name, 
+        s2.qualified_name as to_qualified_name,
+        s2.kind as to_kind, 
+        s2.namespace as to_namespace,
+        s2.file_path as to_file_path,
+        s2.line as to_line,
+        s2.column as to_column,
+        s2.end_line as to_end_line,
+        s2.end_column as to_end_column,
+        s2.signature as to_signature,
+        s2.return_type as to_return_type,
+        s2.visibility as to_visibility,
+        s2.is_exported as to_is_exported,
+        s2.is_async as to_is_async,
+        s2.is_abstract as to_is_abstract,
+        s2.language_features as to_language_features,
+        s2.semantic_tags as to_semantic_tags,
+        s2.confidence as to_confidence,
+        l2.name as to_language
       FROM universal_relationships r
       JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
       JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
+      LEFT JOIN languages l1 ON s1.language_id = l1.id
+      LEFT JOIN languages l2 ON s2.language_id = l2.id
       ORDER BY r.confidence DESC
       LIMIT ?
     `;
     
     return this.db.prepare(sql).all(limit) as Array<Relationship & {
+      // Basic relationship info
       from_name: string;
       from_qualified_name: string;
       from_kind: string;
@@ -361,7 +420,46 @@ export class DatabaseService {
       to_qualified_name: string;
       to_kind: string;
       to_namespace: string;
+      // Rich source symbol data
+      from_file_path: string;
+      from_line: number;
+      from_column: number;
+      from_end_line?: number;
+      from_end_column?: number;
+      from_signature?: string;
+      from_return_type?: string;
+      from_visibility?: string;
+      from_is_exported: boolean;
+      from_is_async: boolean;
+      from_is_abstract: boolean;
+      from_language_features?: string; // JSON
+      from_semantic_tags?: string; // JSON
+      from_confidence: number;
+      from_language: string;
+      // Rich target symbol data
+      to_file_path: string;
+      to_line: number;
+      to_column: number;
+      to_end_line?: number;
+      to_end_column?: number;
+      to_signature?: string;
+      to_return_type?: string;
+      to_visibility?: string;
+      to_is_exported: boolean;
+      to_is_async: boolean;
+      to_is_abstract: boolean;
+      to_language_features?: string; // JSON
+      to_semantic_tags?: string; // JSON
+      to_confidence: number;
+      to_language: string;
     }>;
+  }
+
+  /**
+   * Execute a custom SQL query (for specialized routes)
+   */
+  executeQuery(sql: string, params: any[] = []): any[] {
+    return this.db.prepare(sql).all(...params);
   }
 
   /**
@@ -374,5 +472,13 @@ export class DatabaseService {
     } catch (error) {
       return { healthy: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
+  }
+
+  /**
+   * Get the database file path
+   */
+  getDatabasePath(): string {
+    // Access the database path through the name property of better-sqlite3
+    return (this.db as any).name || '';
   }
 }

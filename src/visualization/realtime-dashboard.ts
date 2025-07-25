@@ -1,43 +1,47 @@
 /**
  * Real-time Architectural Dashboard
- * 
+ *
  * Lightweight, beautiful dashboard that provides live architectural insights,
  * pattern tracking, and development guidance for the human<->AI bridge context.
  */
 
-import Database from 'better-sqlite3';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { ArchitecturalPatternAnalyzer, PatternInstance, ArchitecturalInsight } from './architectural-pattern-analyzer.js';
+import Database from "better-sqlite3";
+import * as fs from "fs/promises";
+import * as path from "path";
+import {
+  ArchitecturalPatternAnalyzer,
+  PatternInstance,
+  ArchitecturalInsight,
+} from "./architectural-pattern-analyzer.js";
 
 export interface DashboardMetrics {
   architecture: {
     totalPatterns: number;
-    patternHealth: number;        // 0-100 score
-    complexityTrend: 'increasing' | 'stable' | 'decreasing';
+    patternHealth: number; // 0-100 score
+    complexityTrend: "increasing" | "stable" | "decreasing";
     antiPatternCount: number;
     maintainabilityScore: number;
   };
   development: {
-    recentChanges: number;        // Changes in last 24h
-    riskScore: number;           // 0-10 risk from recent changes
+    recentChanges: number; // Changes in last 24h
+    riskScore: number; // 0-10 risk from recent changes
     suggestedActions: string[];
-    hotspots: string[];          // Files with most changes
+    hotspots: string[]; // Files with most changes
   };
   patterns: {
     byType: Record<string, number>;
     byStage: Record<string, number>;
     trending: Array<{
       pattern: string;
-      trend: 'up' | 'down' | 'stable';
+      trend: "up" | "down" | "stable";
       changePercent: number;
     }>;
   };
   quality: {
-    confidence: number;          // Overall parser confidence
-    coverage: number;            // Symbol coverage percentage
-    testCoverage: number;        // Estimated test coverage
-    codeHealth: number;          // Overall code health score
+    confidence: number; // Overall parser confidence
+    coverage: number; // Symbol coverage percentage
+    testCoverage: number; // Estimated test coverage
+    codeHealth: number; // Overall code health score
   };
   insights: {
     critical: ArchitecturalInsight[];
@@ -49,11 +53,16 @@ export interface DashboardMetrics {
 export interface LiveFeedItem {
   id: string;
   timestamp: Date;
-  type: 'pattern_detected' | 'antipattern_found' | 'complexity_spike' | 'improvement' | 'warning';
+  type:
+    | "pattern_detected"
+    | "antipattern_found"
+    | "complexity_spike"
+    | "improvement"
+    | "warning";
   title: string;
   description: string;
   filePath?: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
+  severity: "low" | "medium" | "high" | "critical";
   actionable: boolean;
   relatedPatterns?: string[];
 }
@@ -76,29 +85,31 @@ export class RealtimeDashboard {
    */
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     // Check cache
-    if (this.metricsCache && 
-        Date.now() - this.lastUpdateTime.getTime() < this.cacheExpiry) {
+    if (
+      this.metricsCache &&
+      Date.now() - this.lastUpdateTime.getTime() < this.cacheExpiry
+    ) {
       return this.metricsCache;
     }
 
-    console.log('📊 Refreshing dashboard metrics...');
-    
+    console.log("📊 Refreshing dashboard metrics...");
+
     // Analyze patterns
     const patterns = await this.patternAnalyzer.analyzePatterns();
     const insights = await this.patternAnalyzer.generateInsights(patterns);
-    
+
     // Calculate architecture metrics
     const architecture = this.calculateArchitectureMetrics(patterns, insights);
-    
+
     // Calculate development metrics
     const development = await this.calculateDevelopmentMetrics();
-    
+
     // Calculate pattern metrics
     const patternMetrics = this.calculatePatternMetrics(patterns);
-    
+
     // Calculate quality metrics
     const quality = await this.calculateQualityMetrics();
-    
+
     // Generate insights
     const insightMetrics = this.calculateInsightMetrics(insights, patterns);
 
@@ -107,117 +118,159 @@ export class RealtimeDashboard {
       development,
       patterns: patternMetrics,
       quality,
-      insights: insightMetrics
+      insights: insightMetrics,
     };
 
     this.lastUpdateTime = new Date();
-    
+
     // Generate live feed updates
     await this.updateLiveFeed(patterns, insights);
-    
+
     return this.metricsCache;
   }
 
   private calculateArchitectureMetrics(
-    patterns: PatternInstance[], 
+    patterns: PatternInstance[],
     insights: ArchitecturalInsight[]
-  ): DashboardMetrics['architecture'] {
+  ): DashboardMetrics["architecture"] {
     const totalPatterns = patterns.length;
-    const antiPatternCount = patterns.reduce((sum, p) => sum + p.antiPatterns.length, 0);
-    const avgMaintainability = patterns.reduce((sum, p) => sum + p.maintainabilityScore, 0) / patterns.length;
-    
-    // Pattern health based on maintainability and anti-patterns
-    const patternHealth = Math.max(0, avgMaintainability - (antiPatternCount * 2));
-    
-    // Complexity trend based on recent patterns
-    const recentPatterns = patterns.filter(p => 
-      Date.now() - p.evolution.lastModified.getTime() < 7 * 24 * 60 * 60 * 1000 // 7 days
+    const antiPatternCount = patterns.reduce(
+      (sum, p) => sum + p.antiPatterns.length,
+      0
     );
-    const avgComplexity = patterns.reduce((sum, p) => sum + p.complexity, 0) / patterns.length;
-    const recentAvgComplexity = recentPatterns.length > 0 
-      ? recentPatterns.reduce((sum, p) => sum + p.complexity, 0) / recentPatterns.length
-      : avgComplexity;
-    
-    let complexityTrend: 'increasing' | 'stable' | 'decreasing' = 'stable';
-    if (recentAvgComplexity > avgComplexity * 1.1) complexityTrend = 'increasing';
-    else if (recentAvgComplexity < avgComplexity * 0.9) complexityTrend = 'decreasing';
+    const avgMaintainability =
+      patterns.reduce((sum, p) => sum + p.maintainabilityScore, 0) /
+      patterns.length;
+
+    // Pattern health based on maintainability and anti-patterns
+    const patternHealth = Math.max(
+      0,
+      avgMaintainability - antiPatternCount * 2
+    );
+
+    // Complexity trend based on recent patterns
+    const recentPatterns = patterns.filter(
+      (p) =>
+        Date.now() - p.evolution.lastModified.getTime() <
+        7 * 24 * 60 * 60 * 1000 // 7 days
+    );
+    const avgComplexity =
+      patterns.reduce((sum, p) => sum + p.complexity, 0) / patterns.length;
+    const recentAvgComplexity =
+      recentPatterns.length > 0
+        ? recentPatterns.reduce((sum, p) => sum + p.complexity, 0) /
+          recentPatterns.length
+        : avgComplexity;
+
+    let complexityTrend: "increasing" | "stable" | "decreasing" = "stable";
+    if (recentAvgComplexity > avgComplexity * 1.1)
+      complexityTrend = "increasing";
+    else if (recentAvgComplexity < avgComplexity * 0.9)
+      complexityTrend = "decreasing";
 
     return {
       totalPatterns,
       patternHealth: Math.round(patternHealth),
       complexityTrend,
       antiPatternCount,
-      maintainabilityScore: Math.round(avgMaintainability)
+      maintainabilityScore: Math.round(avgMaintainability),
     };
   }
 
-  private async calculateDevelopmentMetrics(): Promise<DashboardMetrics['development']> {
+  private async calculateDevelopmentMetrics(): Promise<
+    DashboardMetrics["development"]
+  > {
     // Get recent changes (simplified - in reality would integrate with git)
-    const recentSymbols = this.db.prepare(`
+    const recentSymbols = this.db
+      .prepare(
+        `
       SELECT file_path, COUNT(*) as symbol_count
-      FROM enhanced_symbols
-      WHERE parser_confidence > 0.8
+      FROM universal_symbols
+      WHERE confidence > 0.8
       GROUP BY file_path
       ORDER BY symbol_count DESC
       LIMIT 10
-    `).all() as any[];
+    `
+      )
+      .all() as any[];
 
     const recentChanges = Math.floor(Math.random() * 50); // Simulated
     const riskScore = Math.min(10, recentChanges * 0.2);
-    
+
     const suggestedActions = this.generateSuggestedActions(riskScore);
-    const hotspots = recentSymbols.slice(0, 5).map((s: any) => 
-      path.basename(s.file_path)
-    );
+    const hotspots = recentSymbols
+      .slice(0, 5)
+      .map((s: any) => path.basename(s.file_path));
 
     return {
       recentChanges,
       riskScore,
       suggestedActions,
-      hotspots
+      hotspots,
     };
   }
 
-  private calculatePatternMetrics(patterns: PatternInstance[]): DashboardMetrics['patterns'] {
+  private calculatePatternMetrics(
+    patterns: PatternInstance[]
+  ): DashboardMetrics["patterns"] {
     const byType: Record<string, number> = {};
     const byStage: Record<string, number> = {};
-    
+
     for (const pattern of patterns) {
       byType[pattern.patternType] = (byType[pattern.patternType] || 0) + 1;
       byStage[pattern.stage] = (byStage[pattern.stage] || 0) + 1;
     }
-    
+
     // Generate trending data (simplified)
-    const trending = Object.keys(byType).map(type => ({
+    const trending = Object.keys(byType).map((type) => ({
       pattern: type,
-      trend: (['up', 'down', 'stable'] as const)[Math.floor(Math.random() * 3)],
-      changePercent: Math.floor(Math.random() * 20) - 10
+      trend: (["up", "down", "stable"] as const)[Math.floor(Math.random() * 3)],
+      changePercent: Math.floor(Math.random() * 20) - 10,
     }));
 
     return { byType, byStage, trending };
   }
 
-  private async calculateQualityMetrics(): Promise<DashboardMetrics['quality']> {
+  private async calculateQualityMetrics(): Promise<
+    DashboardMetrics["quality"]
+  > {
     // Get average confidence
-    const confidenceResult = this.db.prepare(`
-      SELECT AVG(parser_confidence) as avg_confidence
-      FROM enhanced_symbols
-      WHERE parser_confidence > 0
-    `).get() as any;
+    const confidenceResult = this.db
+      .prepare(
+        `
+      SELECT AVG(confidence) as avg_confidence
+      FROM universal_symbols
+      WHERE confidence > 0
+    `
+      )
+      .get() as any;
 
     // Get symbol coverage
-    const totalFiles = this.db.prepare(`
+    const totalFiles = this.db
+      .prepare(
+        `
       SELECT COUNT(DISTINCT file_path) as count
-      FROM enhanced_symbols
-    `).get() as any;
+      FROM universal_symbols
+    `
+      )
+      .get() as any;
 
-    const symbolCount = this.db.prepare(`
+    const symbolCount = this.db
+      .prepare(
+        `
       SELECT COUNT(*) as count
-      FROM enhanced_symbols
-    `).get() as any;
+      FROM universal_symbols
+    `
+      )
+      .get() as any;
 
-    const confidence = Math.round((confidenceResult.avg_confidence || 0.8) * 100);
-    const coverage = Math.min(100, Math.round(symbolCount.count / (totalFiles.count * 20))); // Rough estimate
+    const confidence = Math.round(
+      (confidenceResult.avg_confidence || 0.8) * 100
+    );
+    const coverage = Math.min(
+      100,
+      Math.round(symbolCount.count / (totalFiles.count * 20))
+    ); // Rough estimate
     const testCoverage = Math.round(Math.random() * 40 + 50); // Simulated 50-90%
     const codeHealth = Math.round((confidence + coverage + testCoverage) / 3);
 
@@ -225,125 +278,144 @@ export class RealtimeDashboard {
       confidence,
       coverage,
       testCoverage,
-      codeHealth
+      codeHealth,
     };
   }
 
   private calculateInsightMetrics(
-    insights: ArchitecturalInsight[], 
+    insights: ArchitecturalInsight[],
     patterns: PatternInstance[]
-  ): DashboardMetrics['insights'] {
-    const critical = insights.filter(i => i.severity >= 7).slice(0, 5);
-    
+  ): DashboardMetrics["insights"] {
+    const critical = insights.filter((i) => i.severity >= 7).slice(0, 5);
+
     const opportunities = [
-      'Consider extracting common patterns in rendering pipeline',
-      'GPU compute patterns could benefit from template specialization',
-      'Memory pool patterns show optimization potential',
-      'Factory patterns could be consolidated for better maintainability'
+      "Consider extracting common patterns in rendering pipeline",
+      "GPU compute patterns could benefit from template specialization",
+      "Memory pool patterns show optimization potential",
+      "Factory patterns could be consolidated for better maintainability",
     ];
-    
+
     const recommendations = this.generateRecommendations(patterns, insights);
 
     return {
       critical,
       opportunities,
-      recommendations
+      recommendations,
     };
   }
 
   private generateSuggestedActions(riskScore: number): string[] {
     const actions: string[] = [];
-    
+
     if (riskScore > 7) {
-      actions.push('Review high-risk changes before merge');
-      actions.push('Run comprehensive test suite');
-      actions.push('Consider feature flag deployment');
+      actions.push("Review high-risk changes before merge");
+      actions.push("Run comprehensive test suite");
+      actions.push("Consider feature flag deployment");
     } else if (riskScore > 4) {
-      actions.push('Monitor pattern stability metrics');
-      actions.push('Update documentation for changed patterns');
+      actions.push("Monitor pattern stability metrics");
+      actions.push("Update documentation for changed patterns");
     } else {
-      actions.push('Continue with current development velocity');
-      actions.push('Consider refactoring opportunities');
+      actions.push("Continue with current development velocity");
+      actions.push("Consider refactoring opportunities");
     }
-    
+
     return actions;
   }
 
   private generateRecommendations(
-    patterns: PatternInstance[], 
+    patterns: PatternInstance[],
     insights: ArchitecturalInsight[]
   ): string[] {
     const recommendations: string[] = [];
-    
+
     // Pattern-based recommendations
-    const factoryCount = patterns.filter(p => p.patternType === 'factory').length;
+    const factoryCount = patterns.filter(
+      (p) => p.patternType === "factory"
+    ).length;
     if (factoryCount > 5) {
-      recommendations.push('Consider factory consolidation strategy');
+      recommendations.push("Consider factory consolidation strategy");
     }
-    
-    const highComplexityPatterns = patterns.filter(p => p.complexity > 7).length;
+
+    const highComplexityPatterns = patterns.filter(
+      (p) => p.complexity > 7
+    ).length;
     if (highComplexityPatterns > 3) {
-      recommendations.push('Focus on complexity reduction in high-complexity patterns');
+      recommendations.push(
+        "Focus on complexity reduction in high-complexity patterns"
+      );
     }
-    
+
     // Insight-based recommendations
-    const criticalInsights = insights.filter(i => i.severity >= 7);
+    const criticalInsights = insights.filter((i) => i.severity >= 7);
     if (criticalInsights.length > 0) {
-      recommendations.push('Address critical architectural issues immediately');
+      recommendations.push("Address critical architectural issues immediately");
     }
-    
+
     // Stage-based recommendations
     const stageDistribution = new Map<string, number>();
-    patterns.forEach(p => stageDistribution.set(p.stage, (stageDistribution.get(p.stage) || 0) + 1));
-    
+    patterns.forEach((p) =>
+      stageDistribution.set(p.stage, (stageDistribution.get(p.stage) || 0) + 1)
+    );
+
     const maxStagePatterns = Math.max(...stageDistribution.values());
     if (maxStagePatterns > patterns.length * 0.4) {
-      recommendations.push('Consider pattern distribution balance across stages');
+      recommendations.push(
+        "Consider pattern distribution balance across stages"
+      );
     }
-    
+
     return recommendations;
   }
 
   private async updateLiveFeed(
-    patterns: PatternInstance[], 
+    patterns: PatternInstance[],
     insights: ArchitecturalInsight[]
   ): Promise<void> {
     const now = new Date();
-    
+
     // Add new insights to feed
     for (const insight of insights.slice(0, 3)) {
       if (insight.severity >= 6) {
         this.feedItems.unshift({
           id: `insight_${insight.type}_${Date.now()}`,
           timestamp: now,
-          type: insight.type === 'anti_pattern_hotspot' ? 'antipattern_found' : 'warning',
+          type:
+            insight.type === "anti_pattern_hotspot"
+              ? "antipattern_found"
+              : "warning",
           title: insight.title,
           description: insight.description,
-          severity: insight.severity >= 8 ? 'critical' : insight.severity >= 6 ? 'high' : 'medium',
+          severity:
+            insight.severity >= 8
+              ? "critical"
+              : insight.severity >= 6
+              ? "high"
+              : "medium",
           actionable: true,
-          relatedPatterns: insight.affectedPatterns
+          relatedPatterns: insight.affectedPatterns,
         });
       }
     }
-    
+
     // Add pattern detections
-    const recentPatterns = patterns.filter(p => 
-      now.getTime() - p.evolution.lastModified.getTime() < 24 * 60 * 60 * 1000
+    const recentPatterns = patterns.filter(
+      (p) =>
+        now.getTime() - p.evolution.lastModified.getTime() < 24 * 60 * 60 * 1000
     );
-    
+
     for (const pattern of recentPatterns.slice(0, 2)) {
       this.feedItems.unshift({
         id: `pattern_${pattern.id}_${Date.now()}`,
         timestamp: pattern.evolution.lastModified,
-        type: 'pattern_detected',
+        type: "pattern_detected",
         title: `${pattern.patternType} Pattern Updated`,
         description: `${pattern.name} in ${pattern.stage} stage`,
         filePath: pattern.location.filePath,
-        severity: pattern.antiPatterns.length > 0 ? 'medium' : 'low',
-        actionable: pattern.antiPatterns.length > 0
+        severity: pattern.antiPatterns.length > 0 ? "medium" : "low",
+        actionable: pattern.antiPatterns.length > 0,
       });
     }
-    
+
     // Keep only last 50 items
     this.feedItems = this.feedItems.slice(0, 50);
   }
@@ -361,7 +433,7 @@ export class RealtimeDashboard {
   async generateDashboardHTML(): Promise<string> {
     const metrics = await this.getDashboardMetrics();
     const feed = this.getLiveFeed();
-    
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -725,14 +797,31 @@ export class RealtimeDashboard {
         <div class="overview-grid">
             <div class="card">
                 <div class="card-title">Architecture Health</div>
-                <div class="metric-large">${metrics.architecture.patternHealth}</div>
+                <div class="metric-large">${
+                  metrics.architecture.patternHealth
+                }</div>
                 <div class="metric-label">Overall Score</div>
                 <div class="health-bar">
-                    <div class="health-fill" style="width: ${metrics.architecture.patternHealth}%"></div>
+                    <div class="health-fill" style="width: ${
+                      metrics.architecture.patternHealth
+                    }%"></div>
                 </div>
                 <div style="margin-top: 12px;">
-                    <div class="trend ${metrics.architecture.complexityTrend === 'increasing' ? 'up' : metrics.architecture.complexityTrend === 'decreasing' ? 'down' : 'stable'}">
-                        ${metrics.architecture.complexityTrend === 'increasing' ? '↗' : metrics.architecture.complexityTrend === 'decreasing' ? '↘' : '→'} 
+                    <div class="trend ${
+                      metrics.architecture.complexityTrend === "increasing"
+                        ? "up"
+                        : metrics.architecture.complexityTrend === "decreasing"
+                        ? "down"
+                        : "stable"
+                    }">
+                        ${
+                          metrics.architecture.complexityTrend === "increasing"
+                            ? "↗"
+                            : metrics.architecture.complexityTrend ===
+                              "decreasing"
+                            ? "↘"
+                            : "→"
+                        } 
                         Complexity ${metrics.architecture.complexityTrend}
                     </div>
                 </div>
@@ -740,12 +829,18 @@ export class RealtimeDashboard {
             
             <div class="card">
                 <div class="card-title">Development Activity</div>
-                <div class="metric-medium">${metrics.development.recentChanges}</div>
+                <div class="metric-medium">${
+                  metrics.development.recentChanges
+                }</div>
                 <div class="metric-label">Recent Changes (24h)</div>
                 <div style="margin-top: 12px;">
-                    <div class="metric-label">Risk Score: ${metrics.development.riskScore.toFixed(1)}/10</div>
+                    <div class="metric-label">Risk Score: ${metrics.development.riskScore.toFixed(
+                      1
+                    )}/10</div>
                     <div class="health-bar">
-                        <div class="health-fill" style="width: ${metrics.development.riskScore * 10}%"></div>
+                        <div class="health-fill" style="width: ${
+                          metrics.development.riskScore * 10
+                        }%"></div>
                     </div>
                 </div>
             </div>
@@ -755,21 +850,31 @@ export class RealtimeDashboard {
                 <div class="metric-medium">${metrics.quality.codeHealth}</div>
                 <div class="metric-label">Health Score</div>
                 <div style="margin-top: 8px; font-size: 0.8rem; color: #aaa;">
-                    Confidence: ${metrics.quality.confidence}% • Coverage: ${metrics.quality.coverage}%
+                    Confidence: ${metrics.quality.confidence}% • Coverage: ${
+      metrics.quality.coverage
+    }%
                 </div>
             </div>
             
             <div class="card">
                 <div class="card-title">Pattern Distribution</div>
-                <div class="metric-medium">${metrics.architecture.totalPatterns}</div>
+                <div class="metric-medium">${
+                  metrics.architecture.totalPatterns
+                }</div>
                 <div class="metric-label">Total Patterns</div>
                 <div class="pattern-list">
-                    ${Object.entries(metrics.patterns.byType).map(([type, count]) => `
+                    ${Object.entries(metrics.patterns.byType)
+                      .map(
+                        ([type, count]) => `
                         <div class="pattern-item">
-                            <span class="pattern-name">${type.replace('-', ' ').toUpperCase()}</span>
+                            <span class="pattern-name">${type
+                              .replace("-", " ")
+                              .toUpperCase()}</span>
                             <span class="pattern-count">${count}</span>
                         </div>
-                    `).join('')}
+                    `
+                      )
+                      .join("")}
                 </div>
             </div>
         </div>
@@ -784,40 +889,59 @@ export class RealtimeDashboard {
         <div class="card live-feed">
             <div class="card-title">Live Feed</div>
             <div style="max-height: 300px; overflow-y: auto;">
-                ${feed.slice(0, 8).map(item => `
+                ${feed
+                  .slice(0, 8)
+                  .map(
+                    (item) => `
                     <div class="feed-item ${item.severity}">
                         <div class="feed-item-header">
                             <span class="feed-item-title">${item.title}</span>
-                            <span class="feed-item-time">${this.formatTime(item.timestamp)}</span>
+                            <span class="feed-item-time">${this.formatTime(
+                              item.timestamp
+                            )}</span>
                         </div>
                         <div class="feed-item-desc">${item.description}</div>
                     </div>
-                `).join('')}
+                `
+                  )
+                  .join("")}
             </div>
         </div>
         
         <div class="card insights">
             <div class="card-title">Critical Insights</div>
             <div style="max-height: 300px; overflow-y: auto;">
-                ${metrics.insights.critical.slice(0, 4).map(insight => `
+                ${metrics.insights.critical
+                  .slice(0, 4)
+                  .map(
+                    (insight) => `
                     <div class="insight-item">
                         <div class="insight-title">${insight.title}</div>
                         <div class="insight-desc">${insight.description}</div>
                     </div>
-                `).join('')}
+                `
+                  )
+                  .join("")}
             </div>
         </div>
         
         <div class="card actions">
             <div class="card-title">Recommended Actions</div>
             <div class="action-grid">
-                ${metrics.development.suggestedActions.slice(0, 3).map((action, index) => `
+                ${metrics.development.suggestedActions
+                  .slice(0, 3)
+                  .map(
+                    (action, index) => `
                     <div class="action-item">
-                        <div class="action-icon">${['🔍', '⚡', '🛠️'][index] || '📋'}</div>
+                        <div class="action-icon">${
+                          ["🔍", "⚡", "🛠️"][index] || "📋"
+                        }</div>
                         <div class="action-title">Action ${index + 1}</div>
                         <div class="action-desc">${action}</div>
                     </div>
-                `).join('')}
+                `
+                  )
+                  .join("")}
             </div>
         </div>
     </div>
@@ -830,7 +954,9 @@ export class RealtimeDashboard {
             data: {
                 labels: ${JSON.stringify(Object.keys(metrics.patterns.byType))},
                 datasets: [{
-                    data: ${JSON.stringify(Object.values(metrics.patterns.byType))},
+                    data: ${JSON.stringify(
+                      Object.values(metrics.patterns.byType)
+                    )},
                     backgroundColor: [
                         '#4ecdc4',
                         '#ff6b6b',
@@ -888,8 +1014,8 @@ export class RealtimeDashboard {
   private formatTime(date: Date): string {
     const now = new Date();
     const diff = now.getTime() - date.getTime();
-    
-    if (diff < 60000) return 'Just now';
+
+    if (diff < 60000) return "Just now";
     if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
     return `${Math.floor(diff / 86400000)}d ago`;
@@ -900,18 +1026,18 @@ export class RealtimeDashboard {
    */
   async startServer(port: number = 3000): Promise<void> {
     const html = await this.generateDashboardHTML();
-    console.log(`🚀 Dashboard generated! Open http://localhost:${port} to view`);
-    console.log('📊 Dashboard includes:');
-    console.log('  • Real-time architectural metrics');
-    console.log('  • Pattern distribution and trends');
-    console.log('  • Live development feed');
-    console.log('  • Critical insights and recommendations');
-    console.log('  • Beautiful, lightweight interface');
-    
+
+    console.log("📊 Dashboard includes:");
+    console.log("  • Real-time architectural metrics");
+    console.log("  • Pattern distribution and trends");
+    console.log("  • Live development feed");
+    console.log("  • Critical insights and recommendations");
+    console.log("  • Beautiful, lightweight interface");
+
     // In a real implementation, this would start an actual HTTP server
     // For now, just write to file for demo
-    await fs.writeFile('dashboard.html', html);
-    console.log('💾 Dashboard saved to dashboard.html');
+    await fs.writeFile("dashboard.html", html);
+    console.log("💾 Dashboard saved to dashboard.html");
   }
 
   close(): void {

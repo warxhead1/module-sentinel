@@ -1,13 +1,13 @@
 /**
  * Language Detection Service
- * 
+ *
  * Automatically detects programming languages present in a project
  * based on file extensions and patterns.
  */
 
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import { glob } from 'glob';
+import * as fs from "fs/promises";
+import * as path from "path";
+import { glob } from "glob";
 
 export interface LanguageInfo {
   name: string;
@@ -30,104 +30,122 @@ export class LanguageDetectionService {
   // Language definitions with file extensions and patterns
   private static readonly LANGUAGE_DEFINITIONS = {
     cpp: {
-      name: 'cpp',
-      displayName: 'C++',
-      extensions: ['.cpp', '.cxx', '.cc', '.c++', '.hpp', '.hxx', '.h++', '.h', '.ixx', '.cppm'],
-      patterns: ['**/*.{cpp,cxx,cc,c++,hpp,hxx,h++,h,ixx,cppm}'],
-      keywords: ['#include', 'namespace', 'class', 'template', 'std::', 'export module'],
-      weight: 1.0
+      name: "cpp",
+      displayName: "C++",
+      extensions: [
+        ".cpp",
+        ".cxx",
+        ".cc",
+        ".c++",
+        ".hpp",
+        ".hxx",
+        ".h++",
+        ".h",
+        ".ixx",
+        ".cppm",
+      ],
+      patterns: ["**/*.{cpp,cxx,cc,c++,hpp,hxx,h++,h,ixx,cppm}"],
+      keywords: [
+        "#include",
+        "namespace",
+        "class",
+        "template",
+        "std::",
+        "export module",
+      ],
+      weight: 1.0,
     },
     c: {
-      name: 'c',
-      displayName: 'C',
-      extensions: ['.c', '.h'],
-      patterns: ['**/*.{c,h}'],
-      keywords: ['#include', 'struct', 'typedef', 'malloc', 'free'],
-      weight: 0.8
+      name: "c",
+      displayName: "C",
+      extensions: [".c", ".h"],
+      patterns: ["**/*.{c,h}"],
+      keywords: ["#include", "struct", "typedef", "malloc", "free"],
+      weight: 0.8,
     },
     python: {
-      name: 'python',
-      displayName: 'Python',
-      extensions: ['.py', '.pyx', '.pyi', '.pyw'],
-      patterns: ['**/*.{py,pyx,pyi,pyw}'],
-      keywords: ['import ', 'def ', 'class ', 'if __name__', 'from '],
-      weight: 1.0
+      name: "python",
+      displayName: "Python",
+      extensions: [".py", ".pyx", ".pyi", ".pyw"],
+      patterns: ["**/*.{py,pyx,pyi,pyw}"],
+      keywords: ["import ", "def ", "class ", "if __name__", "from "],
+      weight: 1.0,
     },
     typescript: {
-      name: 'typescript',
-      displayName: 'TypeScript',
-      extensions: ['.ts', '.tsx'],
-      patterns: ['**/*.{ts,tsx}'],
-      keywords: ['interface ', 'type ', 'export ', 'import ', ': '],
-      weight: 1.0
+      name: "typescript",
+      displayName: "TypeScript",
+      extensions: [".ts", ".tsx"],
+      patterns: ["**/*.{ts,tsx}"],
+      keywords: ["interface ", "type ", "export ", "import ", ": "],
+      weight: 1.0,
     },
     javascript: {
-      name: 'javascript',
-      displayName: 'JavaScript',
-      extensions: ['.js', '.jsx', '.mjs'],
-      patterns: ['**/*.{js,jsx,mjs}'],
-      keywords: ['function', 'const ', 'let ', 'var ', 'require('],
-      weight: 0.9
+      name: "javascript",
+      displayName: "JavaScript",
+      extensions: [".js", ".jsx", ".mjs"],
+      patterns: ["**/*.{js,jsx,mjs}"],
+      keywords: ["function", "const ", "let ", "var ", "require("],
+      weight: 0.9,
     },
     rust: {
-      name: 'rust',
-      displayName: 'Rust',
-      extensions: ['.rs'],
-      patterns: ['**/*.rs'],
-      keywords: ['fn ', 'let ', 'mut ', 'use ', 'mod '],
-      weight: 1.0
+      name: "rust",
+      displayName: "Rust",
+      extensions: [".rs"],
+      patterns: ["**/*.rs"],
+      keywords: ["fn ", "let ", "mut ", "use ", "mod "],
+      weight: 1.0,
     },
     go: {
-      name: 'go',
-      displayName: 'Go',
-      extensions: ['.go'],
-      patterns: ['**/*.go'],
-      keywords: ['package ', 'func ', 'import ', 'type ', 'var '],
-      weight: 1.0
+      name: "go",
+      displayName: "Go",
+      extensions: [".go"],
+      patterns: ["**/*.go"],
+      keywords: ["package ", "func ", "import ", "type ", "var "],
+      weight: 1.0,
     },
     java: {
-      name: 'java',
-      displayName: 'Java',
-      extensions: ['.java'],
-      patterns: ['**/*.java'],
-      keywords: ['public class', 'import ', 'package ', 'public static'],
-      weight: 1.0
+      name: "java",
+      displayName: "Java",
+      extensions: [".java"],
+      patterns: ["**/*.java"],
+      keywords: ["public class", "import ", "package ", "public static"],
+      weight: 1.0,
     },
     csharp: {
-      name: 'csharp',
-      displayName: 'C#',
-      extensions: ['.cs'],
-      patterns: ['**/*.cs'],
-      keywords: ['using ', 'namespace ', 'public class', 'private '],
-      weight: 1.0
-    }
+      name: "csharp",
+      displayName: "C#",
+      extensions: [".cs"],
+      patterns: ["**/*.cs"],
+      keywords: ["using ", "namespace ", "public class", "private "],
+      weight: 1.0,
+    },
   };
 
   private static readonly DEFAULT_EXCLUDE_PATTERNS = [
-    'node_modules/**',
-    'dist/**',
-    'build/**',
-    'out/**',
-    '.git/**',
-    '.svn/**',
-    '.hg/**',
-    'target/**',
-    'bin/**',
-    'obj/**',
-    'Debug/**',
-    'Release/**',
-    'CMakeFiles/**',
-    '__pycache__/**',
-    '*.pyc',
-    '*.pyo',
-    '*.exe',
-    '*.dll',
-    '*.so',
-    '*.dylib',
-    '*.obj',
-    '*.o',
-    '*.a',
-    '*.lib'
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "out/**",
+    ".git/**",
+    ".svn/**",
+    ".hg/**",
+    "target/**",
+    "bin/**",
+    "obj/**",
+    "Debug/**",
+    "Release/**",
+    "CMakeFiles/**",
+    "__pycache__/**",
+    "*.pyc",
+    "*.pyo",
+    "*.exe",
+    "*.dll",
+    "*.so",
+    "*.dylib",
+    "*.obj",
+    "*.o",
+    "*.a",
+    "*.lib",
   ];
 
   /**
@@ -138,51 +156,57 @@ export class LanguageDetectionService {
     excludePatterns: string[] = [],
     maxFilesToSample: number = 1000
   ): Promise<ProjectLanguageProfile> {
-    const allExcludePatterns = [...this.DEFAULT_EXCLUDE_PATTERNS, ...excludePatterns];
-    
-    console.log(`🔍 Scanning project for languages: ${projectPath}`);
-    
+    const allExcludePatterns = [
+      ...this.DEFAULT_EXCLUDE_PATTERNS,
+      ...excludePatterns,
+    ];
+
     // Check if project path exists
     try {
       await fs.access(projectPath);
     } catch (error) {
-      throw new Error(`Project path does not exist or is not accessible: ${projectPath}`);
+      throw new Error(
+        `Project path does not exist or is not accessible: ${projectPath}`
+      );
     }
 
     const languages: LanguageInfo[] = [];
     let totalFiles = 0;
 
     // Scan for each language
-    for (const [langKey, langDef] of Object.entries(this.LANGUAGE_DEFINITIONS)) {
+    for (const [langKey, langDef] of Object.entries(
+      this.LANGUAGE_DEFINITIONS
+    )) {
       try {
         const files = await glob(langDef.patterns, {
           cwd: projectPath,
           absolute: true,
           ignore: allExcludePatterns,
-          nodir: true
+          nodir: true,
         });
 
         if (files.length > 0) {
-          console.log(`  Found ${files.length} ${langDef.displayName} files`);
-          
           // Sample files for content analysis
           const sampleFiles = files.slice(0, Math.min(5, files.length));
           const confidence = await this.calculateLanguageConfidence(
-            sampleFiles, 
+            sampleFiles,
             langDef,
             Math.min(files.length, maxFilesToSample)
           );
 
-          if (confidence > 0.1) { // Only include if we're somewhat confident
+          if (confidence > 0.1) {
+            // Only include if we're somewhat confident
             languages.push({
               name: langDef.name,
               displayName: langDef.displayName,
               extensions: langDef.extensions,
               fileCount: files.length,
-              sampleFiles: sampleFiles.map(f => path.relative(projectPath, f)),
-              confidence
+              sampleFiles: sampleFiles.map((f) =>
+                path.relative(projectPath, f)
+              ),
+              confidence,
             });
-            
+
             totalFiles += files.length;
           }
         }
@@ -209,14 +233,14 @@ export class LanguageDetectionService {
       totalFiles,
       languages,
       primaryLanguage,
-      recommendedParsers
+      recommendedParsers,
     };
 
     console.log(`✅ Language detection complete:`, {
       totalFiles,
       languagesFound: languages.length,
       primaryLanguage,
-      recommendedParsers
+      recommendedParsers,
     });
 
     return profile;
@@ -231,16 +255,17 @@ export class LanguageDetectionService {
     totalFileCount: number
   ): Promise<number> {
     let confidence = 0.3; // Base confidence from file extension match
-    
+
     // Analyze file contents for language-specific patterns
     let keywordMatches = 0;
     let totalSamples = 0;
 
-    for (const filePath of sampleFiles.slice(0, 3)) { // Limit content analysis
+    for (const filePath of sampleFiles.slice(0, 3)) {
+      // Limit content analysis
       try {
-        const content = await fs.readFile(filePath, 'utf8');
-        const lines = content.split('\n').slice(0, 50); // Only check first 50 lines
-        
+        const content = await fs.readFile(filePath, "utf8");
+        const lines = content.split("\n").slice(0, 50); // Only check first 50 lines
+
         for (const line of lines) {
           for (const keyword of langDef.keywords) {
             if (line.includes(keyword)) {
@@ -277,15 +302,15 @@ export class LanguageDetectionService {
    */
   private static getRecommendedParsers(languages: LanguageInfo[]): string[] {
     const parserMap = {
-      cpp: 'CppTreeSitterParser',
-      c: 'CppTreeSitterParser', // C can use C++ parser
-      python: 'PythonTreeSitterParser',
-      typescript: 'TypeScriptTreeSitterParser',
-      javascript: 'JavaScriptTreeSitterParser',
-      rust: 'RustTreeSitterParser',
-      go: 'GoTreeSitterParser',
-      java: 'JavaTreeSitterParser',
-      csharp: 'CSharpTreeSitterParser'
+      cpp: "CppTreeSitterParser",
+      c: "CppTreeSitterParser", // C can use C++ parser
+      python: "PythonTreeSitterParser",
+      typescript: "TypeScriptTreeSitterParser",
+      javascript: "JavaScriptTreeSitterParser",
+      rust: "RustTreeSitterParser",
+      go: "GoTreeSitterParser",
+      java: "JavaTreeSitterParser",
+      csharp: "CSharpTreeSitterParser",
     };
 
     const parsers: string[] = [];
@@ -307,7 +332,7 @@ export class LanguageDetectionService {
    */
   static getSupportedLanguages(): string[] {
     return [
-      'cpp', // Currently implemented
+      "cpp", // Currently implemented
       // 'python',     // TODO: Implement
       // 'typescript', // TODO: Implement
       // 'javascript', // TODO: Implement
@@ -323,13 +348,15 @@ export class LanguageDetectionService {
    */
   static async quickDetectLanguages(projectPath: string): Promise<string[]> {
     const detectedLanguages: string[] = [];
-    
+
     try {
-      for (const [langKey, langDef] of Object.entries(this.LANGUAGE_DEFINITIONS)) {
+      for (const [langKey, langDef] of Object.entries(
+        this.LANGUAGE_DEFINITIONS
+      )) {
         const files = await glob(langDef.patterns[0], {
           cwd: projectPath,
           ignore: this.DEFAULT_EXCLUDE_PATTERNS,
-          nodir: true
+          nodir: true,
         });
 
         if (files.length > 0) {
@@ -337,9 +364,11 @@ export class LanguageDetectionService {
         }
       }
     } catch (error) {
-      console.warn('Quick language detection failed:', error);
+      console.warn("Quick language detection failed:", error);
     }
 
-    return detectedLanguages.filter(lang => this.getSupportedLanguages().includes(lang));
+    return detectedLanguages.filter((lang) =>
+      this.getSupportedLanguages().includes(lang)
+    );
   }
 }

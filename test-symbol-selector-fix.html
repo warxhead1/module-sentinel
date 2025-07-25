@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Symbol Selector Fix Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            color: white;
+        }
+        
+        .test-container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+        
+        .button {
+            background: rgba(78, 205, 196, 0.2);
+            border: 1px solid rgba(78, 205, 196, 0.5);
+            color: #4ecdc4;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1rem;
+            margin: 10px;
+            transition: all 0.2s ease;
+            display: block;
+            width: 200px;
+            text-align: center;
+        }
+        
+        .button:hover {
+            background: rgba(78, 205, 196, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .test-results {
+            margin-top: 30px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .test-result {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .success { border-left: 4px solid #4ecdc4; }
+        .error { border-left: 4px solid #ff6b6b; }
+        .info { border-left: 4px solid #74b9ff; }
+
+        :root {
+            --primary-bg: #1a1a2e;
+            --secondary-bg: #16213e;
+            --card-bg: rgba(255, 255, 255, 0.1);
+            --card-border: rgba(255, 255, 255, 0.2);
+            --text-primary: #ffffff;
+            --text-secondary: #b3b3b3;
+            --text-muted: #888888;
+            --primary-accent: #9370db;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h1>🔍 Symbol Selector Fix Test</h1>
+        
+        <p>This test verifies that the symbol selector modal loads symbols properly and doesn't show the "Start typing to search for symbols" message when it should have symbols available.</p>
+        
+        <div style="text-align: center; margin: 30px 0;">
+            <button class="button" onclick="testSymbolSelector()">🧪 Test Symbol Selector</button>
+            <button class="button" onclick="testAPIDirectly()">🔌 Test API Directly</button>
+            <button class="button" onclick="testMultiLanguageFlow()">🌐 Test Multi-Language Flow</button>
+        </div>
+        
+        <div class="test-results" id="test-results">
+            <h3>Test Results:</h3>
+            <div id="results-content">Click a test button to run tests...</div>
+        </div>
+    </div>
+
+    <script type="module">
+        let testResults = [];
+
+        function addResult(type, message) {
+            testResults.push({ type, message, timestamp: new Date().toISOString() });
+            const resultsContent = document.getElementById('results-content');
+            resultsContent.innerHTML = testResults.map(result => 
+                `<div class="test-result ${result.type}">
+                    <strong>[${result.timestamp.split('T')[1].split('.')[0]}]</strong> ${result.message}
+                </div>`
+            ).join('');
+        }
+
+        window.testSymbolSelector = async function() {
+            addResult('info', 'Testing symbol selector modal...');
+            
+            try {
+                // Import the symbol selector
+                const { showSymbolSelector } = await import('./dist/dashboard/components/symbol-selector-modal.js');
+                addResult('success', 'Symbol selector module loaded successfully');
+                
+                // Test opening the modal
+                showSymbolSelector({
+                    title: 'Test Symbol Selector',
+                    onSelect: (symbol) => {
+                        addResult('success', `Selected symbol: ${symbol.name} (${symbol.kind})`);
+                        console.log('Selected symbol:', symbol);
+                    },
+                    onCancel: () => {
+                        addResult('info', 'Symbol selection cancelled by user');
+                    }
+                });
+                
+                addResult('info', 'Symbol selector modal opened - check if it shows symbols initially');
+                
+            } catch (error) {
+                addResult('error', `Failed to load symbol selector: ${error.message}`);
+                console.error('Symbol selector test error:', error);
+            }
+        };
+
+        window.testAPIDirectly = async function() {
+            addResult('info', 'Testing API endpoints directly...');
+            
+            try {
+                // Test symbols endpoint
+                const symbolsResponse = await fetch('/api/symbols?limit=5');
+                const symbolsData = await symbolsResponse.json();
+                
+                if (symbolsData.success && symbolsData.data && symbolsData.data.length > 0) {
+                    addResult('success', `Symbols API working: ${symbolsData.data.length} symbols found`);
+                    addResult('info', `First symbol: ${symbolsData.data[0].name} (${symbolsData.data[0].kind})`);
+                } else {
+                    addResult('error', `Symbols API returned no data: ${JSON.stringify(symbolsData)}`);
+                }
+                
+                // Test stats endpoint for type breakdown
+                const statsResponse = await fetch('/api/stats');
+                const statsData = await statsResponse.json();
+                
+                if (statsData.success && statsData.data && statsData.data.kindBreakdown) {
+                    const typeCount = Object.keys(statsData.data.kindBreakdown).length;
+                    addResult('success', `Stats API working: ${typeCount} symbol types available`);
+                } else {
+                    addResult('error', 'Stats API not working properly');
+                }
+                
+            } catch (error) {
+                addResult('error', `API test failed: ${error.message}`);
+            }
+        };
+
+        window.testMultiLanguageFlow = function() {
+            addResult('info', 'Opening Multi-Language Flow Explorer...');
+            window.open('/#/multi-language-flow', '_blank');
+            addResult('success', 'Multi-Language Flow Explorer opened in new tab');
+        };
+
+        // Auto-test API on load
+        setTimeout(() => {
+            addResult('info', 'Auto-testing API endpoints...');
+            testAPIDirectly();
+        }, 1000);
+    </script>
+</body>
+</html>

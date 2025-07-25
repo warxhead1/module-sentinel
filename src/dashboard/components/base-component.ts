@@ -20,6 +20,10 @@ export abstract class DashboardComponent extends HTMLElement {
   connectedCallback() {
     this.render();
     this.loadData().catch(error => {
+      // Ignore abort errors - they're expected when navigating away
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
       console.error(`Error loading data for ${this.tagName}:`, error);
       this._error = error instanceof Error ? error.message : String(error);
       this.render();

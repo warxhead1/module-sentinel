@@ -6,9 +6,6 @@
     <title>Module Sentinel - Code Analysis Dashboard</title>
     <meta name="description" content="Real-time architectural insights and code intelligence for C++ projects">
     
-    <!-- External dependencies -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
-    
     <style>
         * {
             margin: 0;
@@ -93,7 +90,7 @@
         
         /* Sidebar styling */
         nav-sidebar {
-            width: calc(var(--sidebar-width) - 1px); /* Account for border */
+            width: calc(var(--sidebar-width) - 1px);
             min-width: calc(var(--sidebar-width) - 1px);
             max-width: calc(var(--sidebar-width) - 1px);
             background: linear-gradient(180deg, 
@@ -116,8 +113,8 @@
             overflow-x: hidden;
             background: transparent;
             position: relative;
-            min-width: 0; /* Prevents flex item overflow */
-            margin-left: 5px; /* 4px buffer + 1px border spacing */
+            min-width: 0;
+            margin-left: 5px;
             padding: 0;
             box-sizing: border-box;
         }
@@ -251,14 +248,152 @@
                 backdrop-filter: blur(20px);
             }
         }
+
+        /* Breathing Life Animations */
+        @keyframes pulse-glow {
+          0%, 100% { 
+            opacity: 0.3; 
+            transform: scale(0.98);
+            filter: brightness(0.8);
+          }
+          50% { 
+            opacity: 0.6; 
+            transform: scale(1.02);
+            filter: brightness(1.2);
+          }
+        }
+
+        @keyframes shimmer {
+          0% { background-position: -1000px 0; }
+          100% { background-position: 1000px 0; }
+        }
+
+        @keyframes float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-20px); }
+        }
+
+        @keyframes gradient-shift {
+          0%, 100% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+        }
+
+        @keyframes fade-in {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes particle-float {
+          0% {
+            transform: translate(0, 100vh) scale(0);
+            opacity: 0;
+          }
+          10% { opacity: 1; }
+          90% { opacity: 1; }
+          100% {
+            transform: translate(0, -100vh) scale(1);
+            opacity: 0;
+          }
+        }
+
+        /* Enhanced empty states */
+        .empty-state {
+          animation: pulse-glow 3s ease-in-out infinite;
+        }
+
+        .empty-icon {
+          animation: float 4s ease-in-out infinite;
+        }
+
+        /* Loading skeleton */
+        .skeleton-loader {
+          background: linear-gradient(
+            90deg,
+            rgba(255, 255, 255, 0.05) 25%,
+            rgba(255, 255, 255, 0.1) 50%,
+            rgba(255, 255, 255, 0.05) 75%
+          );
+          background-size: 1000px 100%;
+          animation: shimmer 2s infinite;
+        }
+
+        /* Graph container fixes */
+        #relationshipGraph {
+          min-height: 500px !important;
+          background: radial-gradient(
+            circle at center,
+            rgba(147, 112, 219, 0.05) 0%,
+            transparent 70%
+          );
+          position: relative;
+        }
+
+        /* Subtle grid pattern for empty graph */
+        #relationshipGraph::before {
+          content: '';
+          position: absolute;
+          inset: 0;
+          background-image: 
+            linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+          background-size: 50px 50px;
+          pointer-events: none;
+          opacity: 0.5;
+        }
+
+        /* Particle effect styles */
+        .particle {
+          position: absolute;
+          width: 4px;
+          height: 4px;
+          background: var(--primary-accent);
+          border-radius: 50%;
+          animation: particle-float 10s linear infinite;
+        }
+
+        /* Fix navigation visibility */
+        navigation-actions {
+          display: block !important;
+          margin-bottom: 20px;
+          opacity: 1 !important;
+          animation: fade-in 0.5s ease-out;
+        }
+
+        /* Enhanced stats display */
+        .stat-value {
+          font-variant-numeric: tabular-nums;
+          transition: all 0.3s ease;
+        }
+
+        .stat-item:hover .stat-value {
+          transform: scale(1.1);
+          color: var(--primary-accent);
+          text-shadow: 0 0 20px currentColor;
+        }
+
+        /* Cross-language edge glow */
+        .cross-language-edge {
+          filter: drop-shadow(0 0 8px #feca57);
+          animation: pulse-glow 2s ease-in-out infinite;
+        }
     </style>
+    
+    <!-- External dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script type="module" crossorigin src="./assets/main-ZvMmH28-.js"></script>
 </head>
 <body>
     <!-- Loading screen -->
     <div id="loading" class="app-loading">
         <div class="loading-content">
             <div class="loading-logo">Module Sentinel</div>
-            <div class="loading-tagline" style="margin-top: 10px; color: #c9c9dd; font-size: 1rem;">Code Analysis Dashboard</div>
+            <div class="loading-tagline" style="margin-top: 10px; color: #c9c9dd; font-size: 1rem;">Code Analysis Dashboard v2.0</div>
             <div class="loading-spinner"></div>
         </div>
     </div>
@@ -274,49 +409,5 @@
     <!-- Modals and overlays will be appended here -->
     <div id="modals"></div>
     
-    <script type="module">
-        // Import and initialize the app
-        async function initializeApp() {
-            try {
-                // Import components
-                const { router } = await import('./app.js');
-                
-                // Set router outlet
-                const outlet = document.querySelector('router-outlet');
-                router.setOutlet(outlet);
-                
-                // Hide loading screen
-                document.getElementById('loading').style.display = 'none';
-                document.getElementById('app').style.display = 'flex';
-                
-                // Handle errors
-                window.addEventListener('error', (event) => {
-                    console.error('Application error:', event.error);
-                });
-                
-                // Handle unhandled promise rejections
-                window.addEventListener('unhandledrejection', (event) => {
-                    console.error('Unhandled promise rejection:', event.reason);
-                });
-                
-            } catch (error) {
-                console.error('Failed to initialize app:', error);
-                document.getElementById('loading').innerHTML = `
-                    <div class="loading-content">
-                        <h2 style="color: #ff6b6b;">Failed to load application</h2>
-                        <p style="margin-top: 10px; color: #888;">Please refresh the page or check your connection.</p>
-                        <p style="margin-top: 20px; color: #666; font-size: 0.9rem;">${error.message}</p>
-                    </div>
-                `;
-            }
-        }
-        
-        // Start initialization when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeApp);
-        } else {
-            initializeApp();
-        }
-    </script>
 </body>
 </html>

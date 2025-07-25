@@ -354,7 +354,7 @@ export class CodeFlowService {
       const internalCallsQuery = this.db.prepare<[number], SymbolCallWithCallee>(`
         SELECT 
           sc.*,
-          COALESCE(sc.target_function, s.name) as callee_name,
+          COALESCE(sc.targetFunction, s.name) as callee_name,
           s.kind as callee_kind
         FROM symbol_calls sc
         LEFT JOIN universal_symbols s ON sc.callee_id = s.id

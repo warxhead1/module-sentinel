@@ -1,20 +1,25 @@
 /**
  * Indexing Service for Module Sentinel API
- * 
+ *
  * Provides a clean interface between the API layer and the Universal Indexer
  * for handling multi-project, multi-language indexing operations.
  */
 
-import Database from 'better-sqlite3';
-import { UniversalIndexer, IndexOptions, IndexResult, IndexProgress } from '../../indexing/universal-indexer.js';
-import { EventEmitter } from 'events';
+import Database from "better-sqlite3";
+import {
+  UniversalIndexer,
+  IndexOptions,
+  IndexResult,
+  IndexProgress,
+} from "../../indexing/universal-indexer.js";
+import { EventEmitter } from "events";
 
 export interface IndexingJob {
   id: string;
   projectId: number;
   projectName: string;
   rootPath: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: IndexProgress | null;
   result: IndexResult | null;
   error: string | null;
@@ -34,14 +39,17 @@ export class IndexingService extends EventEmitter {
   private activeJobs: Set<string> = new Set();
   private options: Required<IndexingServiceOptions>;
 
-  constructor(database: Database.Database, options: IndexingServiceOptions = {}) {
+  constructor(
+    database: Database.Database,
+    options: IndexingServiceOptions = {}
+  ) {
     super();
     this.db = database;
-    
+
     this.options = {
       maxConcurrentJobs: options.maxConcurrentJobs || 2,
       enableProgressTracking: options.enableProgressTracking ?? true,
-      debugMode: options.debugMode || false
+      debugMode: options.debugMode || false,
     };
   }
 
@@ -55,7 +63,7 @@ export class IndexingService extends EventEmitter {
     indexOptions: Partial<IndexOptions> = {}
   ): Promise<string> {
     const jobId = this.generateJobId(projectId);
-    
+
     // Check if project is already being indexed
     if (this.activeJobs.has(jobId)) {
       throw new Error(`Project ${projectName} is already being indexed`);
@@ -63,7 +71,9 @@ export class IndexingService extends EventEmitter {
 
     // Check concurrent job limit
     if (this.activeJobs.size >= this.options.maxConcurrentJobs) {
-      throw new Error(`Maximum concurrent jobs (${this.options.maxConcurrentJobs}) reached`);
+      throw new Error(
+        `Maximum concurrent jobs (${this.options.maxConcurrentJobs}) reached`
+      );
     }
 
     // Create job record
@@ -72,16 +82,16 @@ export class IndexingService extends EventEmitter {
       projectId,
       projectName,
       rootPath,
-      status: 'queued',
+      status: "queued",
       progress: null,
       result: null,
       error: null,
       startTime: Date.now(),
-      endTime: null
+      endTime: null,
     };
 
     this.jobs.set(jobId, job);
-    this.emit('job-created', job);
+    this.emit("job-created", job);
 
     // Start indexing asynchronously
     this.startIndexing(jobId, indexOptions);
@@ -100,7 +110,9 @@ export class IndexingService extends EventEmitter {
    * Get all jobs
    */
   getAllJobs(): IndexingJob[] {
-    return Array.from(this.jobs.values()).sort((a, b) => b.startTime - a.startTime);
+    return Array.from(this.jobs.values()).sort(
+      (a, b) => b.startTime - a.startTime
+    );
   }
 
   /**
@@ -112,11 +124,11 @@ export class IndexingService extends EventEmitter {
       return false;
     }
 
-    if (job.status === 'running') {
-      job.status = 'cancelled';
+    if (job.status === "running") {
+      job.status = "cancelled";
       job.endTime = Date.now();
       this.activeJobs.delete(jobId);
-      this.emit('job-cancelled', job);
+      this.emit("job-cancelled", job);
       return true;
     }
 
@@ -126,7 +138,10 @@ export class IndexingService extends EventEmitter {
   /**
    * Start the actual indexing process
    */
-  private async startIndexing(jobId: string, indexOptions: Partial<IndexOptions>): Promise<void> {
+  private async startIndexing(
+    jobId: string,
+    indexOptions: Partial<IndexOptions>
+  ): Promise<void> {
     const job = this.jobs.get(jobId);
     if (!job) {
       return;
@@ -134,43 +149,45 @@ export class IndexingService extends EventEmitter {
 
     try {
       // Update job status
-      job.status = 'running';
+      job.status = "running";
       this.activeJobs.add(jobId);
-      this.emit('job-started', job);
+      this.emit("job-started", job);
 
-      this.debug(`🔄 Starting indexing job ${jobId} for project: ${job.projectName}`);
+      this.debug(
+        `🔄 Starting indexing job ${jobId} for project: ${job.projectName}`
+      );
 
       // Prepare indexing options
       const options: IndexOptions = {
         projectPath: job.rootPath,
         projectName: job.projectName,
-        languages: indexOptions.languages || ['cpp'],
+        languages: indexOptions.languages || ["cpp", "python", "typescript", "javascript", "go", "java"],
         debugMode: this.options.debugMode,
         enableSemanticAnalysis: indexOptions.enableSemanticAnalysis ?? true,
         enablePatternDetection: indexOptions.enablePatternDetection ?? true,
         parallelism: indexOptions.parallelism || 4,
         excludePatterns: indexOptions.excludePatterns || [
-          'node_modules/**',
-          'dist/**',
-          'build/**',
-          '.git/**',
-          'CMakeFiles/**',
-          '*.obj',
-          '*.o',
-          '*.exe'
+          "node_modules/**",
+          "dist/**",
+          "build/**",
+          ".git/**",
+          "CMakeFiles/**",
+          "*.obj",
+          "*.o",
+          "*.exe",
         ],
-        progressCallback: this.options.enableProgressTracking 
+        progressCallback: this.options.enableProgressTracking
           ? (progress) => this.handleProgress(jobId, progress)
           : undefined,
-        ...indexOptions
+        ...indexOptions,
       };
 
       // Create and run indexer
       const indexer = new UniversalIndexer(this.db, options);
-      
+
       // Set up progress tracking
       if (this.options.enableProgressTracking) {
-        indexer.on('progress', (progress: IndexProgress) => {
+        indexer.on("progress", (progress: IndexProgress) => {
           this.handleProgress(jobId, progress);
         });
       }
@@ -180,30 +197,29 @@ export class IndexingService extends EventEmitter {
 
       // Update job with result
       job.result = result;
-      job.status = result.success ? 'completed' : 'failed';
+      job.status = result.success ? "completed" : "failed";
       job.endTime = Date.now();
-      
+
       if (!result.success && result.errors.length > 0) {
-        job.error = result.errors.join('; ');
+        job.error = result.errors.join("; ");
       }
 
       this.activeJobs.delete(jobId);
-      this.emit('job-completed', job);
+      this.emit("job-completed", job);
 
       this.debug(`✅ Indexing job ${jobId} completed successfully`);
       this.debug(`   Files indexed: ${result.filesIndexed}`);
       this.debug(`   Symbols found: ${result.symbolsFound}`);
       this.debug(`   Relationships: ${result.relationshipsFound}`);
       this.debug(`   Duration: ${result.duration}ms`);
-
     } catch (error) {
       // Handle indexing error
-      job.status = 'failed';
+      job.status = "failed";
       job.error = error instanceof Error ? error.message : String(error);
       job.endTime = Date.now();
-      
+
       this.activeJobs.delete(jobId);
-      this.emit('job-failed', job);
+      this.emit("job-failed", job);
 
       console.error(`❌ Indexing job ${jobId} failed:`, error);
     }
@@ -219,15 +235,20 @@ export class IndexingService extends EventEmitter {
     }
 
     job.progress = progress;
-    this.emit('job-progress', job);
+    this.emit("job-progress", job);
 
     // Log progress for debugging
-    const percentage = job.progress.totalFiles > 0 
-      ? Math.round((job.progress.processedFiles / job.progress.totalFiles) * 100)
-      : 0;
+    const percentage =
+      job.progress.totalFiles > 0
+        ? Math.round(
+            (job.progress.processedFiles / job.progress.totalFiles) * 100
+          )
+        : 0;
 
-    this.debug(`📊 Job ${jobId} progress: ${percentage}% (${job.progress.processedFiles}/${job.progress.totalFiles}) - ${job.progress.phase}`);
-    
+    this.debug(
+      `📊 Job ${jobId} progress: ${percentage}% (${job.progress.processedFiles}/${job.progress.totalFiles}) - ${job.progress.phase}`
+    );
+
     if (job.progress.currentFile) {
       this.debug(`   Current: ${job.progress.currentFile}`);
     }
@@ -241,7 +262,7 @@ export class IndexingService extends EventEmitter {
     let cleaned = 0;
 
     for (const [jobId, job] of this.jobs.entries()) {
-      if (job.status !== 'running' && job.startTime < cutoff) {
+      if (job.status !== "running" && job.startTime < cutoff) {
         this.jobs.delete(jobId);
         cleaned++;
       }
@@ -271,7 +292,7 @@ export class IndexingService extends EventEmitter {
       running: 0,
       completed: 0,
       failed: 0,
-      cancelled: 0
+      cancelled: 0,
     };
 
     for (const job of this.jobs.values()) {
@@ -295,7 +316,6 @@ export class IndexingService extends EventEmitter {
    */
   private debug(message: string, ...args: any[]): void {
     if (this.options.debugMode) {
-      console.log(`[IndexingService] ${message}`, ...args);
     }
   }
 }

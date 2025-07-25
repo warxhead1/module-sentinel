@@ -1,95 +1,317 @@
-import { DashboardComponent, defineComponent } from './base-component.js';
-import { dataService } from '../services/data.service.js'; // Import dataService
-import { stateService } from '../services/state.service.js';
+/**
+ * RelationshipGraph - Refactored to use GraphVisualizationEngine
+ *
+ * This component now uses the modular graph visualization engine while
+ * preserving all existing functionality from the original implementation.
+ */
 
-import { GraphNode, GraphEdge } from '../../shared/types/api';
+import { DashboardComponent, defineComponent } from "./base-component.js";
+import { dataService } from "../services/data.service.js";
+import { stateService } from "../services/state.service.js";
+import {
+  GraphVisualizationEngine,
+  GraphConfig,
+  GraphEventCallbacks,
+  GraphData,
+} from "../utils/graph-viz-engine.js";
+import {
+  GraphDataProcessor,
+  GraphFilters,
+} from "../utils/graph-data-processor.js";
+import "./graph-filter-sidebar.js";
+import { MultiLanguageDetector } from "../utils/multi-language-detector.js";
+import { SymbolSelectorModal } from "./symbol-selector-modal.js";
+import "./navigation-actions.js";
+import { GraphInitializationHelper } from "./graph-initialization-fix.js";
+import { GraphGroupManager } from "../utils/graph-group-manager.js";
+import { enhancedNodeTooltip } from "./enhanced-node-tooltip.js";
+import { PatternNodeCategorizer } from "../services/pattern-node-categorizer.js";
+import { PatternLegend, PatternFilter } from "./pattern-legend.js";
+import {
+  PatternFilterPanel,
+  AdvancedPatternFilter,
+} from "./pattern-filter-panel.js";
 
-interface GraphData {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
+import { GraphNode, GraphEdge } from "../../shared/types/api";
 
 export class RelationshipGraph extends DashboardComponent {
   private graphData: GraphData | null = null;
-  private hierarchicalGraphData: GraphData | null = null; // New: Stores hierarchical data
+  private hierarchicalGraphData: GraphData | null = null;
   private selectedNode: string | null = null;
-  private simulation: any = null;
+  private currentFilters: GraphFilters | null = null;
+
+  // New modular components
+  private visualizationEngine: GraphVisualizationEngine | null = null;
+  private dataProcessor: GraphDataProcessor = new GraphDataProcessor();
+  private groupManager: GraphGroupManager = new GraphGroupManager();
+
+  // Language support
+  private languageDetector: MultiLanguageDetector = new MultiLanguageDetector();
+  private symbolSelector: SymbolSelectorModal | null = null;
+  private languageStats: Map<string, number> = new Map();
+  private crossLanguageEdges: Set<string> = new Set();
+
+  // Group expansion state
+  private expandedGroups: Set<string> = new Set();
+
+  // Pattern-based categorization components
+  private patternCategorizer: PatternNodeCategorizer =
+    new PatternNodeCategorizer();
+  private patternLegend: PatternLegend | null = null;
+  private patternFilterPanel: PatternFilterPanel | null = null;
+  private currentPatternFilters: AdvancedPatternFilter | null = null;
 
   async loadData(): Promise<void> {
     try {
-      const response = await dataService.getRelationships(); // Use dataService.getRelationships()
-      
-      // Convert to consistent format
-      this.graphData = {
-        nodes: response.nodes || [],
-        edges: response.edges || []
-      };
+      console.log("🔄 Loading relationship data...");
+      const response = await dataService.getRelationships();
 
-      this.hierarchicalGraphData = this.createHierarchicalGraphData(this.graphData); // New: Transform data
-      
+      console.log("📊 Raw response:", response);
+
+      // Check if response has data
+      if (!response || (Array.isArray(response) && response.length === 0)) {
+        console.warn("⚠️ No relationship data received");
+        this._error = "No relationship data available";
+        this.render();
+        return;
+      }
+
+      // Transform raw relationship data to graph format using the processor
+      this.graphData =
+        this.dataProcessor.transformRelationshipsToGraph(response);
+      console.log("🔄 Transformed graph data:", this.graphData);
+
+      // Add language detection to graph data
+      this.enhanceGraphDataWithLanguages(this.graphData);
+
+      // Apply pattern categorization to nodes
+      this.applyPatternCategorization(this.graphData);
+
+      // Create hierarchical data structure
+      this.hierarchicalGraphData =
+        this.dataProcessor.createHierarchicalGraphData(this.graphData);
+      console.log("📊 Hierarchical data:", {
+        nodes: this.hierarchicalGraphData?.nodes?.length || 0,
+        edges: this.hierarchicalGraphData?.edges?.length || 0,
+      });
+
+      // Initialize group manager with nodes
+      this.groupManager.initializeGroups(this.hierarchicalGraphData.nodes);
+
+      // Initialize all groups as expanded (done by group manager)
+      this.hierarchicalGraphData?.nodes.forEach((node) => {
+        if (node.type?.includes("-group")) {
+          this.expandedGroups.add(node.id);
+          node.isExpanded = true;
+        }
+      });
+
+      // Calculate language statistics
+      this.calculateLanguageStatistics();
+
+      // Initialize visualization after data is loaded
+      this._loading = false;
       this.render();
-      this.initializeGraph();
+
+      // Wait for render to complete before initializing visualization
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await this.initializeVisualizationEngine();
+
+      // Initialize pattern components after visualization engine
+      this.initializePatternComponents();
     } catch (error) {
+      console.error("❌ Error loading relationship data:", error);
       this._error = error instanceof Error ? error.message : String(error);
       this.render();
     }
   }
 
-  // New: Function to create hierarchical graph data
-  private createHierarchicalGraphData(data: GraphData): GraphData {
-    const newNodes: GraphNode[] = [...data.nodes];
-    const newEdges: GraphEdge[] = [...data.edges];
-    const moduleMap = new Map<string, GraphNode>();
-    const namespaceMap = new Map<string, GraphNode>();
+  connectedCallback() {
+    super.connectedCallback();
 
-    data.nodes.forEach(node => {
-      // Create module group nodes
-      if (node.moduleId && !moduleMap.has(node.moduleId)) {
-        const moduleNode: GraphNode = {
-          id: `module-group-${node.moduleId}`,
-          name: node.moduleId.split('/').pop() || node.moduleId, // Use last part of path as name
-          type: 'module-group',
-          size: 0, // Will aggregate later
-        };
-        newNodes.push(moduleNode);
-        moduleMap.set(node.moduleId, moduleNode);
-      }
+    // Listen for filter changes
+    this.addEventListener("filter-changed", ((event: CustomEvent) => {
+      this.handleFilterChange(event);
+    }) as EventListener);
 
-      // Create namespace group nodes
-      if (node.namespace && !namespaceMap.has(node.namespace)) {
-        const namespaceNode: GraphNode = {
-          id: `namespace-group-${node.namespace}`,
-          name: node.namespace.split('::').pop() || node.namespace, // Use last part of namespace as name
-          type: 'namespace-group',
-          size: 0, // Will aggregate later
-        };
-        newNodes.push(namespaceNode);
-        namespaceMap.set(node.namespace, namespaceNode);
-      }
+    // Subscribe to filter state changes
+    stateService.subscribe("graphFilters", (filters: GraphFilters) => {
+      this.currentFilters = filters;
+      this.applyFilters();
+    });
+  }
 
-      // Assign parentGroupId to nodes
-      if (node.moduleId) {
-        node.parentGroupId = moduleMap.get(node.moduleId)?.id; // Link to module group
-      } else if (node.namespace) {
-        node.parentGroupId = namespaceMap.get(node.namespace)?.id; // Link to namespace group
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.visualizationEngine) {
+      this.visualizationEngine.destroy();
+    }
+  }
+
+  /**
+   * Initialize the visualization engine with configuration and callbacks
+   */
+  private async initializeVisualizationEngine(): Promise<void> {
+    // Try multiple times to find the container
+    let container = this.shadow.getElementById("relationshipGraph");
+    let attempts = 0;
+
+    while (!container && attempts < 5) {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      container = this.shadow.getElementById("relationshipGraph");
+      attempts++;
+    }
+
+    if (!container) {
+      console.error("Graph container not found after multiple attempts");
+      // Try querySelector as fallback
+      container = this.shadow.querySelector(
+        "#relationshipGraph"
+      ) as HTMLElement;
+      if (!container) {
+        console.error("Graph container still not found with querySelector");
+        return;
       }
+    }
+
+    console.log("✅ Found graph container:", container);
+
+    // Show loading state while preparing
+    GraphInitializationHelper.createLoadingPlaceholder(container);
+
+    if (
+      !this.hierarchicalGraphData ||
+      !this.hierarchicalGraphData.nodes.length
+    ) {
+      console.warn("No graph data available for visualization");
+      GraphInitializationHelper.handleEmptyData(container, "relationships");
+      return;
+    }
+
+    console.log("📊 Graph data ready:", {
+      nodes: this.hierarchicalGraphData.nodes.length,
+      edges: this.hierarchicalGraphData.edges.length,
     });
 
-    // Aggregate sizes for group nodes (simple sum for now)
-    newNodes.forEach(node => {
-      if (node.type === 'module-group' || node.type === 'namespace-group') {
-        node.size = data.nodes.filter(n => 
-          (node.type === 'module-group' && n.moduleId === node.id.replace('module-group-', '')) ||
-          (node.type === 'namespace-group' && n.namespace === node.id.replace('namespace-group-', ''))
-        ).reduce((sum, n) => sum + (n.size || 1), 0);
-      }
-    });
+    // Ensure container has dimensions
+    const dimensions = await GraphInitializationHelper.ensureContainerReady(
+      container
+    );
 
-    // For now, we keep original edges. In later tasks, we might aggregate or create new edges between group nodes.
-    return { nodes: newNodes, edges: newEdges };
+    // Configuration for the visualization engine
+    const config: Partial<GraphConfig> = {
+      width: dimensions.width,
+      height: dimensions.height,
+      type: "force-directed",
+      enableZoom: true,
+      enableDrag: true,
+      enableAnimation: true,
+      theme: "dark",
+      renderingEngine: "svg",
+      simulation: {
+        strength: -300,
+        linkDistance: 100,
+        center: {
+          x: (container.clientWidth || 800) / 2,
+          y: (container.clientHeight || 600) / 2,
+        },
+        collisionRadius: 30,
+      },
+      clustering: {
+        enabled: true,
+        strength: 0.1,
+      },
+      semanticZooming: {
+        enabled: true,
+        thresholds: { 
+          overview: 0.3,
+          structure: 0.7, 
+          detail: 1.5,
+          inspection: 2.5
+        },
+        progressiveDisclosure: {
+          hideImportsExports: true,
+          hidePrivateMembers: true,
+          hideParameters: true,
+          hideMetrics: true
+        }
+      },
+    };
+
+    // Event callbacks for user interactions
+    const callbacks: GraphEventCallbacks = {
+      onNodeClick: (node: GraphNode, event: Event) => {
+        if (node.type.includes("-group")) {
+          this.toggleGroupExpansion(node);
+        } else {
+          this.selectNode(node);
+        }
+      },
+      onNodeHover: (node: GraphNode | null, event: Event) => {
+        // Enhanced hover with tooltips and highlighting
+        if (node && event instanceof MouseEvent) {
+          // Show enhanced tooltip
+          enhancedNodeTooltip.show(node, event);
+          // Highlight cross-language connections
+          this.highlightCrossLanguageConnections(node);
+        } else {
+          // Hide tooltip and clear highlights
+          enhancedNodeTooltip.hide();
+          this.clearLanguageHighlights();
+        }
+      },
+      onEdgeClick: (edge: GraphEdge, event: Event) => {
+        console.log("Edge clicked:", edge);
+        if ((edge as any).isCrossLanguage) {
+          console.log(
+            `Cross-language connection: ${(edge as any).sourceLanguage} → ${
+              (edge as any).targetLanguage
+            }`
+          );
+        }
+      },
+      onEdgeHover: (edge: GraphEdge | null, event: Event) => {
+        // Edge hover logic
+      },
+      onZoom: (transform) => {
+        // Handle zoom events if needed
+      },
+      onSimulationTick: (nodes, edges) => {
+        // Handle simulation tick if needed
+      },
+    };
+
+    // Create and initialize the visualization engine
+    this.visualizationEngine = new GraphVisualizationEngine(
+      container,
+      config,
+      callbacks
+    );
+
+    // Load the data into the engine
+    this.visualizationEngine.setData(this.hierarchicalGraphData);
+
+    // Force initial render and start simulation - this ensures nodes appear immediately
+    setTimeout(() => {
+      console.log("🎯 Starting force simulation...");
+      if (this.visualizationEngine) {
+        // Start the force simulation
+        this.visualizationEngine.startSimulation();
+
+        // Also trigger a render to ensure everything is displayed
+        this.visualizationEngine.render();
+      }
+    }, 100);
   }
 
   render() {
+    console.log(
+      "🎨 Rendering relationship graph, loading:",
+      this._loading,
+      "error:",
+      this._error
+    );
+
     if (this._loading) {
       this.shadow.innerHTML = this.renderLoading();
       return;
@@ -149,9 +371,10 @@ export class RelationshipGraph extends DashboardComponent {
         
         .graph-container {
           display: grid;
-          grid-template-columns: 1fr 350px;
-          gap: 30px;
+          grid-template-columns: 280px 1fr 300px;
+          gap: 20px;
           height: calc(100vh - 200px);
+          position: relative;
         }
         
         .graph-canvas {
@@ -270,6 +493,38 @@ export class RelationshipGraph extends DashboardComponent {
           transform: translateX(5px);
         }
         
+        .node-actions {
+          display: flex;
+          gap: 10px;
+          margin: 15px 0;
+        }
+        
+        .action-btn {
+          flex: 1;
+          padding: 8px 12px;
+          background: rgba(147, 112, 219, 0.2);
+          border: 1px solid var(--primary-accent);
+          color: var(--primary-accent);
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 0.85rem;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+        }
+        
+        .action-btn:hover {
+          background: rgba(147, 112, 219, 0.3);
+          transform: translateY(-1px);
+          box-shadow: 0 2px 8px rgba(147, 112, 219, 0.3);
+        }
+        
+        .action-btn:active {
+          transform: translateY(0);
+        }
+        
         .connection-name {
           color: #4ecdc4;
           font-size: 0.9rem;
@@ -278,41 +533,6 @@ export class RelationshipGraph extends DashboardComponent {
         .connection-type {
           color: #666;
           font-size: 0.8rem;
-        }
-        
-        /* D3 styles */
-        .node {
-          cursor: pointer;
-        }
-        
-        .node circle {
-          stroke: #fff;
-          stroke-width: 1.5px;
-        }
-        
-        .node text {
-          font-size: 12px;
-          fill: #e0e0e0;
-          text-anchor: middle;
-          pointer-events: none;
-        }
-        
-        .link {
-          fill: none;
-          stroke: #666;
-          stroke-width: 1.5px;
-          opacity: 0.6;
-        }
-        
-        .link.highlighted {
-          stroke: #4ecdc4;
-          stroke-width: 3px;
-          opacity: 1;
-        }
-        
-        .node.highlighted circle {
-          stroke: #4ecdc4;
-          stroke-width: 3px;
         }
         
         .legend {
@@ -337,18 +557,71 @@ export class RelationshipGraph extends DashboardComponent {
           height: 12px;
           border-radius: 50%;
         }
-
-        .graph-tooltip {
-          position: absolute;
-          background: rgba(0, 0, 0, 0.9);
-          color: #fff;
-          padding: 8px;
-          border-radius: 4px;
-          font-size: 12px;
-          pointer-events: none; /* Important for not interfering with graph interactions */
-          opacity: 0;
-          transition: opacity 0.2s ease-in-out;
-          z-index: 1000;
+        
+        /* Language badge styles */
+        .language-badge {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          margin-right: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          vertical-align: middle;
+        }
+        
+        .lang-cpp { background: #0055cc; color: white; }
+        .lang-python { background: #3776ab; color: white; }
+        .lang-typescript { background: #007acc; color: white; }
+        .lang-javascript { background: #f7df1e; color: black; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+        
+        /* Cross-language highlighting */
+        .cross-language-edge {
+          stroke: #feca57 !important;
+          stroke-width: 3px !important;
+          opacity: 0.9 !important;
+        }
+        
+        .cross-language-node {
+          stroke: #feca57 !important;
+          stroke-width: 2px !important;
+        }
+        
+        /* Language statistics */
+        .language-stats {
+          background: var(--card-bg);
+          border: 1px solid var(--card-border);
+          border-radius: var(--border-radius);
+          padding: 16px;
+          margin-bottom: 20px;
+        }
+        
+        .language-stats h4 {
+          margin: 0 0 12px 0;
+          color: var(--text-primary);
+          font-size: 1rem;
+        }
+        
+        .language-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 4px 0;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        
+        .language-item:last-child {
+          border-bottom: none;
+        }
+        
+        .language-count {
+          color: var(--primary-accent);
+          font-weight: 600;
         }
       </style>
       
@@ -357,14 +630,27 @@ export class RelationshipGraph extends DashboardComponent {
         <p class="subtitle">Interactive visualization of code dependencies and connections</p>
       </div>
       
+      <navigation-actions></navigation-actions>
+      
       <div class="graph-container">
+        <!-- Filter Sidebar -->
+        <graph-filter-sidebar></graph-filter-sidebar>
+        
+        <!-- Main Graph Canvas -->
         <div class="graph-canvas">
           <div class="graph-controls">
+            <button class="control-btn" onclick="this.getRootNode().host.openSymbolSelector()">🔍 Find Symbol</button>
             <button class="control-btn" onclick="this.getRootNode().host.resetZoom()">Reset Zoom</button>
             <button class="control-btn" onclick="this.getRootNode().host.toggleForce()">Toggle Force</button>
             <button class="control-btn" onclick="this.getRootNode().host.centerGraph()">Center</button>
           </div>
-          <svg id="relationshipGraph"></svg>
+          <div id="relationshipGraph"></div>
+          
+          <!-- Pattern Legend Container -->
+          <div id="pattern-legend-container"></div>
+          
+          <!-- Pattern Filter Panel Container -->
+          <div id="pattern-filter-container"></div>
           
           <div class="legend">
             <div class="legend-item">
@@ -379,10 +665,18 @@ export class RelationshipGraph extends DashboardComponent {
               <div class="legend-color" style="background: #51cf66;"></div>
               <span>Namespace</span>
             </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background: #6a0572;"></div>
+              <span>Module Group</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color" style="background: #8d0572;"></div>
+              <span>Namespace Group</span>
+            </div>
           </div>
-          <div id="graph-tooltip" class="graph-tooltip"></div> <!-- New: Tooltip element -->
         </div>
         
+        <!-- Stats Sidebar -->
         <div class="graph-sidebar">
           <div class="card">
             <h3>Graph Statistics</h3>
@@ -406,7 +700,11 @@ export class RelationshipGraph extends DashboardComponent {
             </div>
           </div>
           
-          <div class="card" id="nodeDetailsCard" style="display: ${this.selectedNode ? 'block' : 'none'};">
+          ${this.renderLanguageStatistics()}
+          
+          <div class="card" id="nodeDetailsCard" style="display: ${
+            this.selectedNode ? "block" : "none"
+          };">
             <h3>Node Details</h3>
             <div class="node-details" id="nodeDetails">
               <!-- Node details will be populated here -->
@@ -422,626 +720,649 @@ export class RelationshipGraph extends DashboardComponent {
       return { nodeCount: 0, edgeCount: 0, components: 0, avgDegree: 0 };
     }
 
-    const nodeCount = this.hierarchicalGraphData.nodes.length;
-    const edgeCount = this.hierarchicalGraphData.edges.length;
-    
-    // Calculate connected components
-    const components = this.calculateConnectedComponents();
-    
-    // Calculate average degree
-    const avgDegree = nodeCount > 0 ? (edgeCount * 2) / nodeCount : 0;
-
-    return { nodeCount, edgeCount, components, avgDegree };
-  }
-
-  private calculateConnectedComponents(): number {
-    if (!this.hierarchicalGraphData || this.hierarchicalGraphData.nodes.length === 0) return 0;
-
-    const visited = new Set<string>();
-    let components = 0;
-
-    const adjacencyList = new Map<string, string[]>();
-    this.hierarchicalGraphData.nodes.forEach(node => adjacencyList.set(node.id, []));
-    this.hierarchicalGraphData.edges.forEach(edge => {
-      adjacencyList.get(edge.source)?.push(edge.target);
-      adjacencyList.get(edge.target)?.push(edge.source);
-    });
-
-    const dfs = (nodeId: string) => {
-      visited.add(nodeId);
-      const neighbors = adjacencyList.get(nodeId) || [];
-      neighbors.forEach(neighbor => {
-        if (!visited.has(neighbor)) {
-          dfs(neighbor);
-        }
-      });
-    };
-
-    this.hierarchicalGraphData.nodes.forEach(node => {
-      if (!visited.has(node.id)) {
-        components++;
-        dfs(node.id);
-      }
-    });
-
-    return components;
-  }
-
-  private initializeGraph() {
-    if (!this.hierarchicalGraphData || !window.d3) {
-      console.error('D3.js not loaded or no graph data');
-      return;
-    }
-
-    const container = this.shadow.getElementById('relationshipGraph');
-    if (!container) return;
-
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-
-    // Clear existing graph
-    const d3 = window.d3;
-    d3.select(container).selectAll('*').remove();
-
-    const svg = d3.select(container)
-      .attr('width', width)
-      .attr('height', height);
-
-    // Create zoom behavior
-    const zoom = d3.zoom()
-      .scaleExtent([0.1, 10])
-      .on('zoom', (event: any) => {
-        g.attr('transform', event.transform);
-        // Update label visibility based on zoom level
-        node.selectAll('text')
-          .style('opacity', (d: any) => {
-            const currentScale = event.transform.k;
-            return currentScale > 0.5 ? 1 : 0;
-          });
-      });
-
-    svg.call(zoom);
-
-    const g = svg.append('g');
-
-    // Create force simulation
-    this.simulation = d3.forceSimulation(this.hierarchicalGraphData.nodes)
-      .force('link', d3.forceLink(this.hierarchicalGraphData.edges)
-        .id((d: any) => d.id)
-        .distance(100))
-      .force('charge', d3.forceManyBody().strength(-300))
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(30));
-
-    // New: Force to cluster nodes within their parent groups  
-    this.simulation.force('group', this.forceCluster());
-
-    // Create links
-    const link = g.append('g')
-      .selectAll('line')
-      .data(this.hierarchicalGraphData.edges)
-      .enter().append('line')
-      .attr('class', 'link')
-      .attr('stroke-dasharray', (d: any) => d.type === 'uses' ? '5,5' : null)
-      .style('stroke-width', (d: any) => d.weight ? d.weight * 1.5 : 1.5) // Use weight for stroke width
-      .style('opacity', (d: any) => {
-        // Dim links connected to group nodes or less important types
-        if (d.source.type.includes('-group') || d.target.type.includes('-group')) return 0.3; // Dim links to/from groups
-        if (d.type === 'uses') return 0.4; // Dim 'uses' links slightly
-        return 0.6; // Default opacity
-      })
-      .on('mouseover', (event: any, d: any) => {
-        const tooltip = this.shadow.getElementById('graph-tooltip');
-        if (tooltip && d.details) {
-          tooltip.style.opacity = '1';
-          tooltip.style.left = `${event.pageX + 10}px`;
-          tooltip.style.top = `${event.pageY + 10}px`;
-          tooltip.innerHTML = `<strong>Type:</strong> ${d.type}<br><strong>Details:</strong> ${d.details}`;
-        }
-      })
-      .on('mouseout', () => {
-        const tooltip = this.shadow.getElementById('graph-tooltip');
-        if (tooltip) {
-          tooltip.style.opacity = '0';
-        }
-      });
-
-    // Create nodes
-    // Create nodes
-    const node = g.append('g')
-      .selectAll('.node')
-      .data(this.hierarchicalGraphData.nodes)
-      .enter().append('g')
-      .attr('class', 'node')
-      .style('opacity', (d: any) => {
-        // Dim group nodes slightly to emphasize internal structure
-        if (d.type === 'module-group' || d.type === 'namespace-group') return 0.8; // Slightly dim group nodes
-        return 1; // Full opacity for regular nodes
-      })
-      .call(d3.drag()
-        .on('start', this.dragstarted.bind(this))
-        .on('drag', this.dragged.bind(this))
-        .on('end', this.dragended.bind(this)));
-
-    // Add circles to nodes
-    node.append('circle')
-      .attr('r', (d: any) => {
-        if (d.type === 'module-group' || d.type === 'namespace-group') {
-          return Math.max(20, Math.min(60, Math.sqrt(d.size || 100) * 2)); // Larger for groups
-        }
-        // Use metrics for sizing if available, fallback to existing size or default
-        const sizeMetric = d.metrics?.loc || d.metrics?.cyclomaticComplexity || d.size || 10;
-        return Math.max(5, Math.min(25, Math.sqrt(sizeMetric) * 2));
-      })
-      .attr('fill', (d: any) => {
-        if (d.type === 'module-group') return '#6a0572'; // Distinct color for module groups
-        if (d.type === 'namespace-group') return '#8d0572'; // Distinct color for namespace groups
-        return this.getNodeColor(d.type);
-      });
-
-    // Add labels to nodes
-    node.append('text')
-      .attr('dy', '.35em')
-      .text((d: any) => d.name)
-      .style('font-size', (d: any) => {
-        // Semantic zooming for labels: larger font for larger nodes or at higher zoom levels
-        const currentScale = (this as any)._zoom?.transform().k || 1;
-        const baseSize = 8; // Minimum font size
-        const scaledSize = baseSize + Math.log(d.size || 1) * 0.5; // Scale with node size
-        return `${Math.min(14, scaledSize * Math.sqrt(currentScale))}px`;
-      })
-      .style('opacity', (d: any) => {
-        // Hide labels at very low zoom levels
-        const currentScale = (this as any)._zoom?.transform().k || 1;
-        return currentScale > 0.5 ? 1 : 0;
-      });
-
-    // Placeholder for badges (Task 2.3 - future implementation)
-    // node.append('image') or node.append('text') for badges
-
-    // Add click handler for nodes
-    node.on('click', (event: any, d: any) => {
-      if (d.type === 'module-group' || d.type === 'namespace-group') {
-        this.toggleGroupExpansion(d);
-      } else {
-        this.selectNode(d);
-      }
-    });
-
-    // Update positions on simulation tick
-    this.simulation.on('tick', () => {
-      link
-        .attr('x1', (d: any) => d.source.x)
-        .attr('y1', (d: any) => d.source.y)
-        .attr('x2', (d: any) => d.target.x)
-        .attr('y2', (d: any) => d.target.y);
-
-      node
-        .attr('transform', (d: any) => `translate(${d.x},${d.y})`);
-    });
-
-    // Store references for later use
-    (this as any)._svg = svg;
-    (this as any)._g = g;
-    (this as any)._zoom = zoom;
-  }
-
-    // New: Function to toggle group expansion
-  private toggleGroupExpansion(groupNode: GraphNode) {
-    const d3 = window.d3;
-    const g = (this as any)._g;
-
-    // Get all nodes and links from the current simulation
-    let currentNodes = this.simulation.nodes();
-    let currentLinks = this.simulation.force('link').links();
-
-    // Find all nodes belonging to this group
-    const childNodes = this.hierarchicalGraphData?.nodes.filter(n => n.parentGroupId === groupNode.id) || [];
-    const childLinks = this.hierarchicalGraphData?.edges.filter(e => {
-      const sourceId = typeof e.source === 'string' ? e.source : (e.source as any)?.id;
-      const targetId = typeof e.target === 'string' ? e.target : (e.target as any)?.id;
-      return (childNodes.some(n => n.id === sourceId) && childNodes.some(n => n.id === targetId)) ||
-             (childNodes.some(n => n.id === sourceId) && targetId === groupNode.id) ||
-             (childNodes.some(n => n.id === targetId) && sourceId === groupNode.id);
-    }) || [];
-
-    if (groupNode.isExpanded) { // Collapse the group
-      groupNode.isExpanded = false;
-
-      // Remove child nodes and their internal links from the simulation
-      currentNodes = currentNodes.filter((n: any) => n.parentGroupId !== groupNode.id);
-      currentLinks = currentLinks.filter((l: any) => 
-        !(childNodes.some(n => n.id === l.source.id) && childNodes.some(n => n.id === l.target.id))
-      );
-
-      // Update links connected to the group node
-      currentLinks.forEach((l: any) => {
-        if (childNodes.some(n => n.id === l.source.id)) l.source = groupNode;
-        if (childNodes.some(n => n.id === l.target.id)) l.target = groupNode;
-      });
-
-    } else { // Expand the group
-      groupNode.isExpanded = true;
-
-      // Add child nodes back to simulation
-      currentNodes = [...currentNodes, ...childNodes];
-
-      // Re-add internal links and update links connected to the group node
-      currentLinks = [...currentLinks, ...childLinks];
-      currentLinks.forEach((l: any) => {
-        if (l.source.id === groupNode.id && childNodes.some(n => n.id === l.target.id)) l.source = l.target; // Simplified: link from group to child becomes child to child
-        if (l.target.id === groupNode.id && childNodes.some(n => n.id === l.source.id)) l.target = l.source; // Simplified
-      });
-    }
-
-    // Update simulation with new nodes and links
-    this.simulation.nodes(currentNodes);
-    this.simulation.force('link').links(currentLinks);
-
-    // Re-render nodes
-    const nodeSelection = g.selectAll('.node')
-      .data(this.simulation.nodes(), (d: any) => d.id);
-
-    nodeSelection.exit()
-      .transition().duration(500)
-      .style('opacity', 0)
-      .attr('transform', (d: any) => {
-        const parent = this.hierarchicalGraphData?.nodes.find(n => n.id === d.parentGroupId);
-        return parent ? `translate(${parent.x},${parent.y})` : `translate(${d.x},${d.y})`;
-      })
-      .remove();
-
-    const newNodeEnter = nodeSelection.enter().append('g')
-      .attr('class', 'node')
-      .style('opacity', 0) // Start invisible for transition
-      .attr('transform', (d: any) => {
-        const parent = this.hierarchicalGraphData?.nodes.find(n => n.id === d.parentGroupId);
-        return parent ? `translate(${parent.x},${parent.y})` : `translate(${d.x},${d.y})`;
-      })
-      .call(d3.drag()
-        .on('start', this.dragstarted.bind(this))
-        .on('drag', this.dragged.bind(this))
-        .on('end', this.dragended.bind(this)));
-
-    newNodeEnter.append('circle')
-      .attr('r', (d: any) => {
-        if (d.type === 'module-group' || d.type === 'namespace-group') {
-          return Math.max(20, Math.min(60, Math.sqrt(d.size || 100) * 2));
-        }
-        const sizeMetric = d.metrics?.loc || d.metrics?.cyclomaticComplexity || d.size || 10;
-        return Math.max(5, Math.min(25, Math.sqrt(sizeMetric) * 2));
-      })
-      .attr('fill', (d: any) => {
-        if (d.type === 'module-group') return '#6a0572';
-        if (d.type === 'namespace-group') return '#8d0572';
-        return this.getNodeColor(d.type);
-      });
-
-    newNodeEnter.append('text')
-      .attr('dy', '.35em')
-      .text((d: any) => d.name)
-      .style('font-size', (d: any) => {
-        const currentScale = (this as any)._zoom?.transform().k || 1;
-        const baseSize = 8;
-        const scaledSize = baseSize + Math.log(d.size || 1) * 0.5;
-        return `${Math.min(14, scaledSize * Math.sqrt(currentScale))}px`;
-      })
-      .style('opacity', (d: any) => {
-        const currentScale = (this as any)._zoom?.transform().k || 1;
-        return currentScale > 0.5 ? 1 : 0;
-      });
-
-    newNodeEnter.on('click', (event: any, d: any) => {
-      if (d.type === 'module-group' || d.type === 'namespace-group') {
-        this.toggleGroupExpansion(d);
-      } else {
-        this.selectNode(d);
-      }
-    });
-
-    newNodeEnter.transition().duration(500).style('opacity', (d: any) => {
-      if (d.type === 'module-group' || d.type === 'namespace-group') return 0.8;
-      return 1;
-    });
-
-    // Re-render links
-    const linkSelection = g.selectAll('.link')
-      .data(this.simulation.force('link').links(), (d: any) => `${d.source.id}-${d.target.id}`);
-
-    linkSelection.exit()
-      .transition().duration(500)
-      .style('opacity', 0)
-      .remove();
-
-    linkSelection.enter().append('line')
-      .attr('class', 'link')
-      .attr('stroke-dasharray', (d: any) => d.type === 'uses' ? '5,5' : null)
-      .style('stroke-width', (d: any) => d.weight ? d.weight * 1.5 : 1.5)
-      .style('opacity', 0) // Start invisible for transition
-      .on('mouseover', (event: any, d: any) => {
-        const tooltip = this.shadow.getElementById('graph-tooltip');
-        if (tooltip && d.details) {
-          tooltip.style.opacity = '1';
-          tooltip.style.left = `${event.pageX + 10}px`;
-          tooltip.style.top = `${event.pageY + 10}px`;
-          tooltip.innerHTML = `<strong>Type:</strong> ${d.type}<br><strong>Details:</strong> ${d.details}`;
-        }
-      })
-      .on('mouseout', () => {
-        const tooltip = this.shadow.getElementById('graph-tooltip');
-        if (tooltip) {
-          tooltip.style.opacity = '0';
-        }
-      });
-
-    linkSelection.transition().duration(500).style('opacity', (d: any) => {
-      if (d.source.type.includes('-group') || d.target.type.includes('-group')) return 0.3;
-      if (d.type === 'uses') return 0.4;
-      return 0.6;
-    });
-
-    // Restart simulation to apply changes
-    this.simulation.alpha(1).restart();
-  }
-
-  // New: Custom force for clustering
-  private forceCluster() {
-    let nodes: any[];
-    const strength = 0.1; // Adjust strength as needed
-
-    function force(alpha: number) {
-      const centroids = new Map<string, { x: number, y: number, count: number }>();
-
-      // Calculate centroid for each group
-      nodes.forEach(node => {
-        if (node.parentGroupId) {
-          let centroid = centroids.get(node.parentGroupId);
-          if (!centroid) {
-            centroid = { x: 0, y: 0, count: 0 };
-            centroids.set(node.parentGroupId, centroid);
-          }
-          centroid.x += node.x;
-          centroid.y += node.y;
-          centroid.count++;
-        }
-      });
-
-      centroids.forEach(centroid => {
-        centroid.x /= centroid.count;
-        centroid.y /= centroid.count;
-      });
-
-      // Apply force towards centroid
-      nodes.forEach(node => {
-        if (node.parentGroupId) {
-          const centroid = centroids.get(node.parentGroupId);
-          if (centroid) {
-            node.vx -= (node.x - centroid.x) * alpha * strength;
-            node.vy -= (node.y - centroid.y) * alpha * strength;
-          }
-        }
-      });
-    }
-
-    force.initialize = (_: any[]) => nodes = _;
-
-    return force;
-  }
-
-  private getNodeColor(type: string): string {
-    const colors: Record<string, string> = {
-      'class': '#4ecdc4',
-      'struct': '#4ecdc4',
-      'function': '#ff6b6b',
-      'namespace': '#51cf66',
-      'variable': '#ffd93d',
-      'enum': '#6c5ce7'
-    };
-    return colors[type] || '#888';
+    return this.dataProcessor.calculateStats(this.hierarchicalGraphData);
   }
 
   private selectNode(node: GraphNode) {
     this.selectedNode = node.id;
-    stateService.setState('selectedNodeId', node.id); // Publish selected node ID
+    stateService.setState("selectedNodeId", node.id);
+
+    // Update state with full symbol information
+    stateService.setState("selectedSymbol", {
+      id: parseInt(node.id),
+      name: node.name,
+      qualified_name: node.name,
+      kind: node.type || "unknown",
+      namespace: node.namespace,
+      file_path: undefined,
+      language: node.language,
+    });
 
     // Update node details
-    const detailsCard = this.shadow.getElementById('nodeDetailsCard');
-    const details = this.shadow.getElementById('nodeDetails');
-    
+    const detailsCard = this.shadow.getElementById("nodeDetailsCard");
+    const details = this.shadow.getElementById("nodeDetails");
+
     if (detailsCard && details) {
-      detailsCard.style.display = 'block';
-      
-      // Find connections using hierarchicalGraphData
-      const connections = this.hierarchicalGraphData?.edges.filter(
-        e => e.source === node.id || e.target === node.id
-      ) || [];
-      
+      detailsCard.style.display = "block";
+
+      // Find connections
+      const connections =
+        this.hierarchicalGraphData?.edges.filter(
+          (e) => e.source === node.id || e.target === node.id
+        ) || [];
+
       details.innerHTML = `
         <div class="node-info">
           <div class="node-name">${node.name}</div>
-          <div class="node-type">${node.type}${node.namespace ? ` • ${node.namespace}` : ''}</div>
+          <div class="node-type">${node.type}${
+        node.namespace ? ` • ${node.namespace}` : ""
+      }</div>
+        </div>
+        
+        <div class="node-actions">
+          <button class="action-btn impact-btn" data-node-id="${node.id}">
+            🌊 Analyze Impact
+          </button>
+          <button class="action-btn flow-btn" data-node-id="${node.id}">
+            🔄 View Code Flow
+          </button>
         </div>
         
         <h4>Connections (${connections.length})</h4>
         <div class="connections-list">
-          ${connections.map(conn => {
-            const otherNodeId = conn.source === node.id ? conn.target : conn.source;
-            const otherNode = this.hierarchicalGraphData?.nodes.find(n => n.id === otherNodeId);
-            return otherNode ? `
+          ${connections
+            .map((conn) => {
+              const otherNodeId =
+                conn.source === node.id ? conn.target : conn.source;
+              const otherNode = this.hierarchicalGraphData?.nodes.find(
+                (n) => n.id === otherNodeId
+              );
+              return otherNode
+                ? `
               <div class="connection-item" data-node="${otherNode.id}">
                 <span class="connection-name">${otherNode.name}</span>
                 <span class="connection-type">${conn.type}</span>
               </div>
-            ` : '';
-          }).join('')}
+            `
+                : "";
+            })
+            .join("")}
         </div>
       `;
-      
+
+      // Add click handlers for action buttons
+      const impactBtn = details.querySelector(".impact-btn");
+      if (impactBtn) {
+        impactBtn.addEventListener("click", () => {
+          const routerService = (window as any).dashboardServices?.router;
+          if (routerService) {
+            routerService.navigate("/impact");
+          }
+        });
+      }
+
+      const flowBtn = details.querySelector(".flow-btn");
+      if (flowBtn) {
+        flowBtn.addEventListener("click", () => {
+          const routerService = (window as any).dashboardServices?.router;
+          if (routerService) {
+            routerService.navigate("/code-flow");
+          }
+        });
+      }
+
       // Add click handlers for connections
-      details.querySelectorAll('.connection-item').forEach(item => {
-        item.addEventListener('click', (e) => {
-          const nodeId = (e.currentTarget as HTMLElement).getAttribute('data-node');
-          const node = this.hierarchicalGraphData?.nodes.find(n => n.id === nodeId);
-          if (node) this.selectNode(node);
+      details.querySelectorAll(".connection-item").forEach((item) => {
+        item.addEventListener("click", (e) => {
+          const nodeId = (e.currentTarget as HTMLElement).getAttribute(
+            "data-node"
+          );
+          const clickedNode = this.hierarchicalGraphData?.nodes.find(
+            (n) => n.id === nodeId
+          );
+          if (clickedNode) this.selectNode(clickedNode);
         });
       });
     }
-    
-    // Highlight node and connections in graph with smooth transitions
-    this.highlightNode(node.id);
 
-    // Center and zoom to the selected node
-    if ((this as any)._svg && (this as any)._g && (this as any)._zoom && node.x !== undefined && node.y !== undefined) {
-      const d3 = window.d3;
-      const graphContainer = this.shadow.getElementById('relationshipGraph');
-      if (graphContainer) {
-        const transform = d3.zoomIdentity
-          .translate(graphContainer.clientWidth / 2, graphContainer.clientHeight / 2)
-          .scale(2) // Zoom in to 2x
-          .translate(-node.x, -node.y);
+    // Highlight node in the visualization
+    if (this.visualizationEngine) {
+      this.visualizationEngine.highlightElements([node.id]);
+      this.visualizationEngine.zoomToNode(node.id, 2);
+    }
+  }
 
-        d3.select((this as any)._svg)
-          .transition()
-          .duration(750)
-          .call((this as any)._zoom.transform, 
-            transform);
+  private toggleGroupExpansion(groupNode: GraphNode) {
+    console.log(
+      "Toggle group expansion for:",
+      groupNode.name,
+      "type:",
+      groupNode.type
+    );
+
+    // Toggle the expansion state
+    const isExpanded = this.groupManager.toggleGroup(groupNode.id);
+    groupNode.isExpanded = isExpanded;
+
+    // Update the visualization with filtered data
+    if (this.visualizationEngine && this.hierarchicalGraphData) {
+      // Use the group manager to filter nodes and edges
+      const { visibleNodes, visibleEdges } =
+        this.groupManager.filterByGroupExpansion(
+          this.hierarchicalGraphData.nodes,
+          this.hierarchicalGraphData.edges
+        );
+
+      // Create filtered data
+      const filteredData: GraphData = {
+        nodes: visibleNodes,
+        edges: visibleEdges,
+      };
+
+      // Update the visualization with filtered data
+      this.visualizationEngine.setData(filteredData);
+
+      // Update group node appearance to show expansion state
+      setTimeout(() => {
+        const svg = this.shadow.querySelector("#relationshipGraph svg");
+        if (svg) {
+          const groupNodeElement = svg.querySelector(
+            `[data-node-id="${groupNode.id}"]`
+          );
+          if (groupNodeElement) {
+            this.updateGroupNodeVisual(groupNodeElement, isExpanded);
+          }
+        }
+
+        // Restart simulation to reorganize
+        this.visualizationEngine?.startSimulation();
+      }, 100);
+    }
+  }
+
+  private updateGroupNodeVisual(element: Element, isExpanded: boolean) {
+    // Add visual indicator for expansion state
+    const indicator = isExpanded ? "▼" : "▶";
+
+    // Try to update existing text or add new one
+    let textElement = element.querySelector(".expansion-indicator");
+    if (!textElement) {
+      textElement = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "text"
+      );
+      textElement.setAttribute("class", "expansion-indicator");
+      textElement.setAttribute("x", "-25");
+      textElement.setAttribute("y", "5");
+      textElement.setAttribute("fill", "#4ecdc4");
+      textElement.setAttribute("font-size", "14px");
+      element.appendChild(textElement);
+    }
+    textElement.textContent = indicator;
+  }
+
+  /**
+   * Handle filter change events
+   */
+  private handleFilterChange(event: CustomEvent) {
+    this.currentFilters = event.detail;
+    this.applyFilters();
+  }
+
+  /**
+   * Apply filters to the graph data using the visualization engine
+   */
+  private applyFilters() {
+    if (
+      !this.hierarchicalGraphData ||
+      !this.currentFilters ||
+      !this.visualizationEngine
+    ) {
+      return;
+    }
+
+    this.visualizationEngine.applyFilters(this.currentFilters);
+  }
+
+  // Language enhancement methods
+  private enhanceGraphDataWithLanguages(graphData: GraphData): void {
+    // Add language information to nodes
+    graphData.nodes.forEach((node) => {
+      // Only detect language if it's not already set
+      if (!(node as any).language) {
+        const language = this.detectLanguageFromNode(node);
+        (node as any).language = language;
       }
+      (node as any).languageBadge = this.renderLanguageBadge((node as any).language);
+    });
+
+    // Detect cross-language edges
+    graphData.edges.forEach((edge) => {
+      const sourceNode = graphData.nodes.find((n) => n.id === edge.source);
+      const targetNode = graphData.nodes.find((n) => n.id === edge.target);
+
+      if (sourceNode && targetNode) {
+        const sourceLanguage = (sourceNode as any).language;
+        const targetLanguage = (targetNode as any).language;
+        const isCrossLanguage = sourceLanguage !== targetLanguage;
+
+        (edge as any).isCrossLanguage = isCrossLanguage;
+        (edge as any).sourceLanguage = sourceLanguage;
+        (edge as any).targetLanguage = targetLanguage;
+
+        if (isCrossLanguage) {
+          this.crossLanguageEdges.add(`${edge.source}-${edge.target}`);
+        }
+      }
+    });
+  }
+
+  private calculateLanguageStatistics(): void {
+    this.languageStats.clear();
+
+    if (!this.hierarchicalGraphData) return;
+
+    this.hierarchicalGraphData.nodes.forEach((node) => {
+      const language = (node as any).language || "unknown";
+      this.languageStats.set(
+        language,
+        (this.languageStats.get(language) || 0) + 1
+      );
+    });
+  }
+
+  private detectLanguageFromNode(node: GraphNode): string {
+    // Try to detect from file_path first
+    if ((node as any).file_path) {
+      return this.languageDetector.detectLanguageFromPath(
+        (node as any).file_path
+      );
+    }
+
+    // Try to detect from file property
+    if ((node as any).file) {
+      return this.languageDetector.detectLanguageFromPath((node as any).file);
+    }
+
+    // Fall back to type-based detection
+    if (node.type === "module" && node.name) {
+      if (node.name.endsWith(".py")) return "python";
+      if (node.name.endsWith(".ts")) return "typescript";
+      if (node.name.endsWith(".js")) return "javascript";
+      if (node.name.endsWith(".cpp") || node.name.endsWith(".hpp"))
+        return "cpp";
+    }
+
+    return "unknown";
+  }
+
+  private renderLanguageBadge(language: string): string {
+    if (!language || language === "unknown") return "";
+    return `<span class="language-badge lang-${language}">${language
+      .substring(0, 3)
+      .toUpperCase()}</span>`;
+  }
+
+  private getLanguageColor(language: string): string {
+    const colors: Record<string, string> = {
+      cpp: "#0055cc",
+      python: "#3776ab",
+      typescript: "#007acc",
+      javascript: "#f7df1e",
+      rust: "#ce422b",
+      go: "#00add8",
+      java: "#ed8b00",
+      unknown: "#666",
+    };
+    return colors[language] || "#666";
+  }
+
+  private renderLanguageStatistics(): string {
+    if (this.languageStats.size === 0) {
+      return "";
+    }
+
+    const totalNodes = Array.from(this.languageStats.values()).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+    const crossLanguageConnections = this.crossLanguageEdges.size;
+
+    return `
+      <div class="card">
+        <h3>Language Distribution</h3>
+        <div class="language-stats">
+          ${Array.from(this.languageStats.entries())
+            .sort(([, a], [, b]) => b - a)
+            .map(
+              ([language, count]) => `
+              <div class="language-item">
+                <div style="display: flex; align-items: center;">
+                  ${this.renderLanguageBadge(language)}
+                  <span>${language}</span>
+                </div>
+                <span class="language-count">${count} (${(
+                (count / totalNodes) *
+                100
+              ).toFixed(1)}%)</span>
+              </div>
+            `
+            )
+            .join("")}
+        </div>
+        
+        <div class="stats-grid" style="margin-top: 16px;">
+          <div class="stat-item">
+            <div class="stat-value">${this.languageStats.size}</div>
+            <div class="stat-label">Languages</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${crossLanguageConnections}</div>
+            <div class="stat-label">Cross-Language</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // Symbol selector integration
+  private initializeSymbolSelector(): void {
+    if (!this.symbolSelector) {
+      this.symbolSelector = SymbolSelectorModal.getInstance();
     }
   }
 
-  private highlightNode(nodeId: string) {
-    if (!window.d3) return;
-    
-    const d3 = window.d3;
-    const g = (this as any)._g;
-    
-    // Reset all highlights with transition
-    g.selectAll('.node')
-      .transition().duration(200)
-      .classed('highlighted', false)
-      .style('opacity', 1); // Reset opacity
-    g.selectAll('.link')
-      .transition().duration(200)
-      .classed('highlighted', false)
-      .style('opacity', 0.6); // Reset opacity
-    
-    // Highlight selected node with transition
-    g.selectAll('.node')
-      .filter((d: any) => d.id === nodeId)
-      .transition().duration(200)
-      .classed('highlighted', true)
-      .style('opacity', 1); // Ensure selected node is fully visible
-    
-    // Highlight connected links with transition
-    g.selectAll('.link')
-      .filter((d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source?.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target?.id;
-        return sourceId === nodeId || targetId === nodeId;
-      })
-      .transition().duration(200)
-      .classed('highlighted', true)
-      .style('opacity', 1); // Ensure connected links are fully visible
-
-    // Dim non-connected nodes and links
-    g.selectAll('.node')
-      .filter((d: any) => {
-        if (d.id === nodeId) return false;
-        return !this.hierarchicalGraphData?.edges.some(e => {
-          const sourceId = typeof e.source === 'string' ? e.source : (e.source as any)?.id;
-          const targetId = typeof e.target === 'string' ? e.target : (e.target as any)?.id;
-          return (sourceId === nodeId && targetId === d.id) || (targetId === nodeId && sourceId === d.id);
-        });
-      })
-      .transition().duration(200)
-      .style('opacity', 0.2); // Dim non-connected nodes
-
-    g.selectAll('.link')
-      .filter((d: any) => {
-        const sourceId = typeof d.source === 'string' ? d.source : d.source?.id;
-        const targetId = typeof d.target === 'string' ? d.target : d.target?.id;
-        return sourceId !== nodeId && targetId !== nodeId;
-      })
-      .transition().duration(200)
-      .style('opacity', 0.1); // Dim non-connected links
+  public openSymbolSelector(): void {
+    this.initializeSymbolSelector();
+    if (this.symbolSelector) {
+      this.symbolSelector.show({
+        title: "Select Symbol for Relationship Analysis",
+        onSelect: (symbol) => {
+          if (symbol && symbol.id) {
+            // Center the graph on the selected symbol
+            this.selectNodeById(symbol.id.toString());
+          }
+        },
+      });
+    }
   }
 
-  // D3 drag handlers
-  private dragstarted(event: any, d: any) {
-    if (!event.active) this.simulation.alphaTarget(0.3).restart();
-    d.fx = d.x;
-    d.fy = d.y;
+  private selectNodeById(nodeId: string): void {
+    const node = this.hierarchicalGraphData?.nodes.find((n) => n.id === nodeId);
+    if (node) {
+      this.selectNode(node);
+      // Zoom to the selected node
+      this.visualizationEngine?.zoomToNode(nodeId, 2);
+    }
   }
 
-  private dragged(event: any, d: any) {
-    d.fx = event.x;
-    d.fy = event.y;
-  }
-
-  private dragended(event: any, d: any) {
-    if (!event.active) this.simulation.alphaTarget(0);
-    d.fx = null;
-    d.fy = null;
-  }
-
-  // Public methods for controls
+  // Public methods for controls (called from HTML buttons)
   resetZoom() {
-    if ((this as any)._svg && (this as any)._zoom) {
-      const d3 = window.d3;
-      d3.select((this as any)._svg)
-        .transition()
-        .duration(750)
-        .call((this as any)._zoom.transform, d3.zoomIdentity);
-    }
+    this.visualizationEngine?.resetZoom();
   }
 
   toggleForce() {
-    if (this.simulation) {
-      if (this.simulation.alpha() > 0) {
-        this.simulation.stop();
-      } else {
-        this.simulation.alpha(1).restart();
-      }
-    }
+    this.visualizationEngine?.toggleSimulation();
   }
 
   centerGraph() {
-    if ((this as any)._svg && (this as any)._g) {
-      const svg = (this as any)._svg.node();
-      const bounds = (this as any)._g.node().getBBox();
-      const fullWidth = svg.clientWidth;
-      const fullHeight = svg.clientHeight;
-      const width = bounds.width;
-      const height = bounds.height;
-      const midX = bounds.x + width / 2;
-      const midY = bounds.y + height / 2;
-      
-      const scale = Math.min(fullWidth / width, fullHeight / height) * 0.8;
-      const translate = [fullWidth / 2 - scale * midX, fullHeight / 2 - scale * midY];
-      
-      const d3 = window.d3;
-      d3.select((this as any)._svg)
-        .transition()
-        .duration(750)
-        .call((this as any)._zoom.transform, 
-          d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale));
+    this.visualizationEngine?.centerGraph();
+  }
+
+  // Language-aware highlighting methods
+  private highlightCrossLanguageConnections(node: GraphNode): void {
+    if (!this.hierarchicalGraphData || !this.visualizationEngine) return;
+
+    const nodeLanguage = (node as any).language;
+    if (!nodeLanguage) return;
+
+    // Find all edges connected to this node
+    const connectedEdges = this.hierarchicalGraphData.edges.filter(
+      (edge) => edge.source === node.id || edge.target === node.id
+    );
+
+    // Highlight cross-language edges
+    const crossLanguageEdgeIds: string[] = [];
+    const crossLanguageNodeIds: string[] = [];
+
+    connectedEdges.forEach((edge) => {
+      if ((edge as any).isCrossLanguage) {
+        crossLanguageEdgeIds.push(`edge-${edge.source}-${edge.target}`);
+
+        // Highlight the connected node
+        const otherNodeId = edge.source === node.id ? edge.target : edge.source;
+        crossLanguageNodeIds.push(otherNodeId);
+      }
+    });
+
+    // Apply highlighting through D3.js
+    const svg = this.shadow.querySelector("#relationshipGraph svg");
+    if (svg) {
+      // Highlight cross-language edges
+      crossLanguageEdgeIds.forEach((edgeId) => {
+        const edgeElement = svg.querySelector(`[data-edge-id="${edgeId}"]`);
+        if (edgeElement) {
+          edgeElement.classList.add("cross-language-edge");
+        }
+      });
+
+      // Highlight cross-language nodes
+      crossLanguageNodeIds.forEach((nodeId) => {
+        const nodeElement = svg.querySelector(`[data-node-id="${nodeId}"]`);
+        if (nodeElement) {
+          nodeElement.classList.add("cross-language-node");
+        }
+      });
     }
   }
 
-  // Clean up when component is removed
-  disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this.simulation) {
-      this.simulation.stop();
+  private clearLanguageHighlights(): void {
+    const svg = this.shadow.querySelector("#relationshipGraph svg");
+    if (svg) {
+      // Remove cross-language highlighting classes
+      svg.querySelectorAll(".cross-language-edge").forEach((element) => {
+        element.classList.remove("cross-language-edge");
+      });
+
+      svg.querySelectorAll(".cross-language-node").forEach((element) => {
+        element.classList.remove("cross-language-node");
+      });
     }
   }
-}
 
-// Extend window interface for D3
-declare global {
-  interface Window {
-    d3: any;
+  /**
+   * Apply pattern categorization to graph nodes
+   */
+  private applyPatternCategorization(graphData: GraphData): void {
+    console.log("🎨 Applying pattern categorization to nodes...");
+
+    if (!graphData.nodes) return;
+
+    let categorizedCount = 0;
+    graphData.nodes.forEach((node) => {
+      const classification = this.patternCategorizer.categorizeNode(node);
+      if (classification) {
+        // Merge pattern classification into node
+        if (!node.patterns) {
+          node.patterns = {};
+        }
+
+        node.patterns.primaryPattern = classification.primaryPattern;
+        node.patterns.secondaryPatterns = classification.secondaryPatterns;
+        node.patterns.patternMetrics = classification.patternMetrics;
+
+        categorizedCount++;
+      }
+    });
+  }
+
+  /**
+   * Initialize pattern components (legend and filter panel)
+   */
+  private initializePatternComponents(): void {
+    console.log("🎨 Initializing pattern components...");
+
+    // Initialize pattern legend
+    const legendContainer = this.shadow.getElementById(
+      "pattern-legend-container"
+    );
+    if (legendContainer && this.hierarchicalGraphData) {
+      this.patternLegend = new PatternLegend(
+        legendContainer,
+        this.visualizationEngine?.getThemeManager()!,
+        this.patternCategorizer,
+        {
+          showStatistics: true,
+          showHealthIndicators: true,
+          showPatternIcons: true,
+          collapsible: true,
+          position: "top-right",
+        }
+      );
+
+      // Update legend with current nodes
+      this.patternLegend.updateNodes(this.hierarchicalGraphData.nodes);
+
+      // Set up filter change callback
+      this.patternLegend.onFilterChange((filters: PatternFilter) => {
+        this.handlePatternFilterChange(filters);
+      });
+    }
+
+    // Initialize pattern filter panel
+    const filterContainer = this.shadow.getElementById(
+      "pattern-filter-container"
+    );
+    if (filterContainer && this.hierarchicalGraphData) {
+      this.patternFilterPanel = new PatternFilterPanel(
+        filterContainer,
+        this.patternCategorizer,
+        {
+          showAdvancedFilters: true,
+          showMetricFilters: true,
+          showSearchBox: true,
+          collapsible: true,
+          position: "left",
+        }
+      );
+
+      // Update filter panel with current nodes
+      this.patternFilterPanel.updateNodes(this.hierarchicalGraphData.nodes);
+
+      // Set up filter change callback
+      this.patternFilterPanel.onFilterChange(
+        (filters: AdvancedPatternFilter) => {
+          this.handleAdvancedPatternFilterChange(filters);
+        }
+      );
+    }
+
+    console.log("✅ Pattern components initialized successfully");
+  }
+
+  /**
+   * Handle pattern filter changes from the legend
+   */
+  private handlePatternFilterChange(filters: PatternFilter): void {
+    console.log("🔍 Pattern filter changed:", filters);
+
+    if (!this.hierarchicalGraphData || !this.visualizationEngine) return;
+
+    // Filter nodes based on pattern criteria
+    const filteredNodes = this.hierarchicalGraphData.nodes.filter((node) => {
+      return this.patternLegend?.nodeMatchesFilters(node) ?? true;
+    });
+
+    // Update visualization with filtered nodes
+    this.applyNodeFiltering(filteredNodes);
+  }
+
+  /**
+   * Handle advanced pattern filter changes from the filter panel
+   */
+  private handleAdvancedPatternFilterChange(
+    filters: AdvancedPatternFilter
+  ): void {
+    console.log("🔍 Advanced pattern filter changed:", filters);
+
+    this.currentPatternFilters = filters;
+
+    if (!this.hierarchicalGraphData || !this.visualizationEngine) return;
+
+    // Filter nodes based on advanced pattern criteria
+    const filteredNodes = this.hierarchicalGraphData.nodes.filter((node) => {
+      const legendMatch = this.patternLegend?.nodeMatchesFilters(node) ?? true;
+      const panelMatch =
+        this.patternFilterPanel?.nodeMatchesFilters(node) ?? true;
+      return legendMatch && panelMatch;
+    });
+
+    // Update visualization with filtered nodes
+    this.applyNodeFiltering(filteredNodes);
+  }
+
+  /**
+   * Apply node filtering to the visualization
+   */
+  private applyNodeFiltering(filteredNodes: GraphNode[]): void {
+    if (!this.visualizationEngine || !this.hierarchicalGraphData) return;
+
+    // Create set of visible node IDs for fast lookup
+    const visibleNodeIds = new Set(filteredNodes.map((node) => node.id));
+
+    // Filter edges to only show those between visible nodes
+    const filteredEdges = this.hierarchicalGraphData.edges.filter(
+      (edge) =>
+        visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target)
+    );
+
+    // Update visualization with filtered data
+    const filteredData: GraphData = {
+      nodes: filteredNodes,
+      edges: filteredEdges,
+    };
+
+    // Apply pattern-based styling to filtered nodes
+    this.applyPatternStyling(filteredNodes);
+
+    // Update the visualization engine with filtered data
+    this.visualizationEngine.updateData(filteredData);
+  }
+
+  /**
+   * Apply pattern-based styling to nodes
+   */
+  private applyPatternStyling(nodes: GraphNode[]): void {
+    if (!this.visualizationEngine) return;
+
+    const themeManager = this.visualizationEngine.getThemeManager();
+
+    nodes.forEach((node) => {
+      if (node.patterns?.primaryPattern) {
+        // Apply pattern-based color
+        const patternColor = themeManager.getPatternColor(node);
+
+        // Apply pattern-based size multiplier
+        const sizeMultiplier = themeManager.getPatternSizeMultiplier(node);
+
+        // Apply pattern-based effects
+        const patternEffect = themeManager.getPatternEffect(node);
+
+        // Apply pattern-based border
+        const patternBorder = themeManager.getPatternBorder(node);
+
+        // Store pattern styling in node for visualization engine
+        (node as any).patternStyling = {
+          color: patternColor,
+          sizeMultiplier,
+          effect: patternEffect,
+          border: patternBorder,
+          shape: themeManager.getPatternShape(node),
+          icon: themeManager.getPatternIcon(node),
+        };
+      }
+    });
   }
 }
 
-defineComponent('relationship-graph', RelationshipGraph);
+defineComponent("relationship-graph", RelationshipGraph);

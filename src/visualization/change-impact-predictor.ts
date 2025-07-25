@@ -1,29 +1,33 @@
 /**
  * Change Impact Prediction Visualization
- * 
+ *
  * Advanced visualization system for predicting and displaying the ripple effects
- * of code changes across the architectural landscape. Integrates with the 
+ * of code changes across the architectural landscape. Integrates with the
  * ripple effect tracker to provide interactive impact analysis.
  */
 
-import Database from 'better-sqlite3';
-import * as path from 'path';
-import { RippleEffectTracker, ImpactPrediction, RippleNode } from './ripple-effect-tracker.js';
+import Database from "better-sqlite3";
+import * as path from "path";
+import {
+  RippleEffectTracker,
+  ImpactPrediction,
+  RippleNode,
+} from "./ripple-effect-tracker.js";
 
 export interface ChangeScenario {
   id: string;
   name: string;
   description: string;
   targetSymbol: string;
-  changeType: 'type' | 'value' | 'signature' | 'dependency' | 'removal';
+  changeType: "type" | "value" | "signature" | "dependency" | "removal";
   simulatedChange: {
     from: any;
     to: any;
     description: string;
   };
-  probability: number;        // 0-1 likelihood this change will happen
-  businessImpact: 'low' | 'medium' | 'high' | 'critical';
-  timeframe: 'immediate' | 'short-term' | 'medium-term' | 'long-term';
+  probability: number; // 0-1 likelihood this change will happen
+  businessImpact: "low" | "medium" | "high" | "critical";
+  timeframe: "immediate" | "short-term" | "medium-term" | "long-term";
 }
 
 export interface ImpactVisualization {
@@ -95,8 +99,6 @@ export class ChangeImpactPredictor {
    * Create and analyze multiple change scenarios
    */
   async createChangeScenarios(targetSymbol: string): Promise<ChangeScenario[]> {
-    console.log(`🎯 Creating change scenarios for ${targetSymbol}...`);
-    
     // Get symbol details to understand what kinds of changes are possible
     const symbol = await this.getSymbolDetails(targetSymbol);
     if (!symbol) {
@@ -104,93 +106,93 @@ export class ChangeImpactPredictor {
     }
 
     const scenarios: ChangeScenario[] = [];
-    
+
     // Generate type change scenarios
-    if (symbol.type === 'struct' || symbol.type === 'class') {
+    if (symbol.type === "struct" || symbol.type === "class") {
       scenarios.push({
         id: `type_scale_${symbol.name}`,
-        name: 'Scale Value Type Change',
+        name: "Scale Value Type Change",
         description: `Change scale value from int to float in ${symbol.name}`,
         targetSymbol,
-        changeType: 'type',
+        changeType: "type",
         simulatedChange: {
-          from: 'int scale = 55',
-          to: 'float scale = 0.75f',
-          description: 'Converting integer scale to float for more precision'
+          from: "int scale = 55",
+          to: "float scale = 0.75f",
+          description: "Converting integer scale to float for more precision",
         },
         probability: 0.7,
-        businessImpact: 'medium',
-        timeframe: 'short-term'
+        businessImpact: "medium",
+        timeframe: "short-term",
       });
 
       scenarios.push({
         id: `member_addition_${symbol.name}`,
-        name: 'Add New Member Variable',
+        name: "Add New Member Variable",
         description: `Add new member variable to ${symbol.name}`,
         targetSymbol,
-        changeType: 'signature',
+        changeType: "signature",
         simulatedChange: {
-          from: 'existing members',
-          to: 'existing + new member',
-          description: 'Adding new configuration parameter'
+          from: "existing members",
+          to: "existing + new member",
+          description: "Adding new configuration parameter",
         },
         probability: 0.5,
-        businessImpact: 'low',
-        timeframe: 'medium-term'
+        businessImpact: "low",
+        timeframe: "medium-term",
       });
     }
 
     // Generate function signature scenarios
-    if (symbol.type === 'function' || symbol.type === 'method') {
+    if (symbol.type === "function" || symbol.type === "method") {
       scenarios.push({
         id: `signature_${symbol.name}`,
-        name: 'Function Signature Change',
+        name: "Function Signature Change",
         description: `Modify function signature of ${symbol.name}`,
         targetSymbol,
-        changeType: 'signature',
+        changeType: "signature",
         simulatedChange: {
-          from: 'current parameters',
-          to: 'additional optional parameter',
-          description: 'Adding optional parameter for enhanced functionality'
+          from: "current parameters",
+          to: "additional optional parameter",
+          description: "Adding optional parameter for enhanced functionality",
         },
         probability: 0.6,
-        businessImpact: 'medium',
-        timeframe: 'short-term'
+        businessImpact: "medium",
+        timeframe: "short-term",
       });
     }
 
     // Generate removal scenarios
     scenarios.push({
       id: `deprecation_${symbol.name}`,
-      name: 'Symbol Deprecation',
+      name: "Symbol Deprecation",
       description: `Deprecate and eventually remove ${symbol.name}`,
       targetSymbol,
-      changeType: 'removal',
+      changeType: "removal",
       simulatedChange: {
-        from: 'active symbol',
-        to: 'deprecated -> removed',
-        description: 'Phased removal due to architectural evolution'
+        from: "active symbol",
+        to: "deprecated -> removed",
+        description: "Phased removal due to architectural evolution",
       },
       probability: 0.3,
-      businessImpact: 'high',
-      timeframe: 'long-term'
+      businessImpact: "high",
+      timeframe: "long-term",
     });
 
     // Generate dependency change scenarios
     scenarios.push({
       id: `dependency_${symbol.name}`,
-      name: 'Dependency Refactoring',
+      name: "Dependency Refactoring",
       description: `Refactor dependencies of ${symbol.name}`,
       targetSymbol,
-      changeType: 'dependency',
+      changeType: "dependency",
       simulatedChange: {
-        from: 'current dependencies',
-        to: 'optimized dependencies',
-        description: 'Reducing coupling and improving modularity'
+        from: "current dependencies",
+        to: "optimized dependencies",
+        description: "Reducing coupling and improving modularity",
       },
       probability: 0.4,
-      businessImpact: 'medium',
-      timeframe: 'medium-term'
+      businessImpact: "medium",
+      timeframe: "medium-term",
     });
 
     return scenarios;
@@ -199,9 +201,9 @@ export class ChangeImpactPredictor {
   /**
    * Analyze impact for a specific scenario
    */
-  async analyzeScenarioImpact(scenario: ChangeScenario): Promise<ImpactVisualization> {
-    console.log(`🔍 Analyzing impact for scenario: ${scenario.name}`);
-    
+  async analyzeScenarioImpact(
+    scenario: ChangeScenario
+  ): Promise<ImpactVisualization> {
     // Get or calculate impact prediction
     let prediction = this.predictionCache.get(scenario.id);
     if (!prediction) {
@@ -214,114 +216,136 @@ export class ChangeImpactPredictor {
     }
 
     // Generate visualization data
-    const visualization = await this.generateVisualizationData(scenario, prediction);
+    const visualization = await this.generateVisualizationData(
+      scenario,
+      prediction
+    );
 
     return {
       scenario,
       prediction,
-      visualization
+      visualization,
     };
   }
 
   /**
    * Compare multiple scenarios and find optimal implementation path
    */
-  async compareScenarios(scenarios: ChangeScenario[]): Promise<ComparisonAnalysis> {
-    console.log(`⚖️  Comparing ${scenarios.length} change scenarios...`);
-    
-    const comparisons: ComparisonAnalysis['comparisons'] = [];
-    
+  async compareScenarios(
+    scenarios: ChangeScenario[]
+  ): Promise<ComparisonAnalysis> {
+    const comparisons: ComparisonAnalysis["comparisons"] = [];
+
     // Analyze each scenario
     const scenarioAnalyses = await Promise.all(
-      scenarios.map(scenario => this.analyzeScenarioImpact(scenario))
+      scenarios.map((scenario) => this.analyzeScenarioImpact(scenario))
     );
-    
+
     // Generate pairwise comparisons
     for (let i = 0; i < scenarios.length; i++) {
       for (let j = i + 1; j < scenarios.length; j++) {
         const analysis1 = scenarioAnalyses[i];
         const analysis2 = scenarioAnalyses[j];
-        
-        const riskDiff = analysis2.prediction.riskAssessment.overall - analysis1.prediction.riskAssessment.overall;
-        const timeDiff = this.calculateTotalTime(analysis2.prediction) - this.calculateTotalTime(analysis1.prediction);
-        const complexityDiff = this.calculateComplexity(analysis2.prediction) - this.calculateComplexity(analysis1.prediction);
-        
+
+        const riskDiff =
+          analysis2.prediction.riskAssessment.overall -
+          analysis1.prediction.riskAssessment.overall;
+        const timeDiff =
+          this.calculateTotalTime(analysis2.prediction) -
+          this.calculateTotalTime(analysis1.prediction);
+        const complexityDiff =
+          this.calculateComplexity(analysis2.prediction) -
+          this.calculateComplexity(analysis1.prediction);
+
         comparisons.push({
           scenario1: scenarios[i].id,
           scenario2: scenarios[j].id,
           riskDifference: riskDiff,
           timelineDifference: timeDiff,
           complexityDifference: complexityDiff,
-          recommendation: this.generateComparisonRecommendation(riskDiff, timeDiff, complexityDiff)
+          recommendation: this.generateComparisonRecommendation(
+            riskDiff,
+            timeDiff,
+            complexityDiff
+          ),
         });
       }
     }
-    
+
     // Find optimal path
     const optimalPath = this.findOptimalPath(scenarios, scenarioAnalyses);
-    
+
     return {
       scenarios,
       comparisons,
-      optimalPath
+      optimalPath,
     };
   }
 
   private async getSymbolDetails(symbolName: string): Promise<any> {
-    return this.db.prepare(`
+    return this.db
+      .prepare(
+        `
       SELECT 
         id, name, qualified_name, file_path, kind as type,
-        pipeline_stage, semantic_tags, parser_confidence
-      FROM enhanced_symbols
+        pipeline_stage, semantic_tags, confidence
+      FROM universal_symbols
       WHERE qualified_name = ? OR name = ?
-      ORDER BY parser_confidence DESC
+      ORDER BY confidence DESC
       LIMIT 1
-    `).get(symbolName, symbolName);
+    `
+      )
+      .get(symbolName, symbolName);
   }
 
   private async generateVisualizationData(
-    scenario: ChangeScenario, 
+    scenario: ChangeScenario,
     prediction: ImpactPrediction
-  ): Promise<ImpactVisualization['visualization']> {
+  ): Promise<ImpactVisualization["visualization"]> {
     // Generate network data for node-link visualization
     const networkData = this.generateNetworkData(prediction);
-    
+
     // Generate heatmap data for stage impact visualization
     const heatmapData = this.generateHeatmapData(prediction);
-    
+
     // Generate timeline data for implementation planning
     const timelineData = this.generateTimelineData(prediction);
-    
+
     return {
       networkData,
       heatmapData,
-      timelineData
+      timelineData,
     };
   }
 
-  private generateNetworkData(prediction: ImpactPrediction): ImpactVisualization['visualization']['networkData'] {
+  private generateNetworkData(
+    prediction: ImpactPrediction
+  ): ImpactVisualization["visualization"]["networkData"] {
     const nodes: any[] = [];
     const edges: any[] = [];
-    
+
     // Add source node
     nodes.push({
       id: prediction.changedSymbol,
-      label: prediction.changedSymbol.split('::').pop() || prediction.changedSymbol,
+      label:
+        prediction.changedSymbol.split("::").pop() || prediction.changedSymbol,
       level: 0,
       impact: 10,
-      type: 'source',
-      stage: 'origin',
-      position: { x: 0, y: 0 }
+      type: "source",
+      stage: "origin",
+      position: { x: 0, y: 0 },
     });
-    
+
     // Add affected nodes with layout positions
-    const maxLevel = Math.max(...prediction.affectedNodes.map((n: any) => n.propagationPath.length));
-    
+    const maxLevel = Math.max(
+      ...prediction.affectedNodes.map((n: any) => n.propagationPath.length)
+    );
+
     prediction.affectedNodes.forEach((affectedNode: any, index: number) => {
       const level = affectedNode.propagationPath.length;
       const angle = (index / prediction.affectedNodes.length) * 2 * Math.PI;
       const radius = 100 + level * 80;
-      
+
       nodes.push({
         id: affectedNode.node.id,
         label: affectedNode.node.name,
@@ -331,30 +355,35 @@ export class ChangeImpactPredictor {
         stage: affectedNode.node.stage,
         position: {
           x: Math.cos(angle) * radius,
-          y: Math.sin(angle) * radius
-        }
+          y: Math.sin(angle) * radius,
+        },
       });
-      
+
       // Add edge from previous node in propagation path
-      const sourceId = affectedNode.propagationPath.length > 1 
-        ? affectedNode.propagationPath[affectedNode.propagationPath.length - 2]
-        : prediction.changedSymbol;
-      
+      const sourceId =
+        affectedNode.propagationPath.length > 1
+          ? affectedNode.propagationPath[
+              affectedNode.propagationPath.length - 2
+            ]
+          : prediction.changedSymbol;
+
       edges.push({
         source: sourceId,
         target: affectedNode.node.id,
         impact: affectedNode.impactSeverity,
-        type: 'propagation'
+        type: "propagation",
       });
     });
-    
+
     return { nodes, edges };
   }
 
-  private generateHeatmapData(prediction: ImpactPrediction): ImpactVisualization['visualization']['heatmapData'] {
+  private generateHeatmapData(
+    prediction: ImpactPrediction
+  ): ImpactVisualization["visualization"]["heatmapData"] {
     // Group affected nodes by stage
     const stageGroups = new Map<string, number[]>();
-    
+
     for (const affectedNode of prediction.affectedNodes) {
       const stage = affectedNode.node.stage;
       if (!stageGroups.has(stage)) {
@@ -362,72 +391,78 @@ export class ChangeImpactPredictor {
       }
       stageGroups.get(stage)!.push(affectedNode.impactSeverity);
     }
-    
+
     const stages = Array.from(stageGroups.keys()).sort();
     const impacts: number[][] = [];
     const labels: string[] = [];
-    
+
     // Create impact matrix
-    stages.forEach(stage => {
+    stages.forEach((stage) => {
       const stageImpacts = stageGroups.get(stage) || [];
-      const avgImpact = stageImpacts.reduce((sum, impact) => sum + impact, 0) / stageImpacts.length;
+      const avgImpact =
+        stageImpacts.reduce((sum, impact) => sum + impact, 0) /
+        stageImpacts.length;
       const maxImpact = Math.max(...stageImpacts);
       const nodeCount = stageImpacts.length;
-      
+
       impacts.push([avgImpact, maxImpact, nodeCount]);
       labels.push(`${stage} (${nodeCount} nodes)`);
     });
-    
+
     return {
       stages,
       impacts,
-      labels
+      labels,
     };
   }
 
-  private generateTimelineData(prediction: ImpactPrediction): ImpactVisualization['visualization']['timelineData'] {
+  private generateTimelineData(
+    prediction: ImpactPrediction
+  ): ImpactVisualization["visualization"]["timelineData"] {
     // Group tasks by estimated time ranges
     const phases = [
       {
-        name: 'Immediate Actions',
+        name: "Immediate Actions",
         duration: 0,
         tasks: [] as string[],
-        risk: 0
+        risk: 0,
       },
       {
-        name: 'Short-term (1-7 days)',
+        name: "Short-term (1-7 days)",
         duration: 0,
         tasks: [] as string[],
-        risk: 0
+        risk: 0,
       },
       {
-        name: 'Medium-term (1-4 weeks)',
+        name: "Medium-term (1-4 weeks)",
         duration: 0,
         tasks: [] as string[],
-        risk: 0
+        risk: 0,
       },
       {
-        name: 'Long-term (1+ months)',
+        name: "Long-term (1+ months)",
         duration: 0,
         tasks: [] as string[],
-        risk: 0
-      }
+        risk: 0,
+      },
     ];
-    
+
     // Categorize affected nodes by fix time
     for (const affectedNode of prediction.affectedNodes) {
       const fixTime = affectedNode.estimatedFixTime;
       const taskDesc = `Fix ${affectedNode.node.name} (${fixTime}min)`;
-      
+
       if (fixTime <= 30) {
         phases[0].tasks.push(taskDesc);
         phases[0].duration += fixTime;
         phases[0].risk += affectedNode.impactSeverity * 0.1;
-      } else if (fixTime <= 240) { // 4 hours
+      } else if (fixTime <= 240) {
+        // 4 hours
         phases[1].tasks.push(taskDesc);
         phases[1].duration += fixTime;
         phases[1].risk += affectedNode.impactSeverity * 0.1;
-      } else if (fixTime <= 2400) { // 40 hours
+      } else if (fixTime <= 2400) {
+        // 40 hours
         phases[2].tasks.push(taskDesc);
         phases[2].duration += fixTime;
         phases[2].risk += affectedNode.impactSeverity * 0.1;
@@ -437,104 +472,146 @@ export class ChangeImpactPredictor {
         phases[3].risk += affectedNode.impactSeverity * 0.1;
       }
     }
-    
+
     // Add general recommendations to each phase
-    phases[0].tasks.unshift('Review change requirements', 'Prepare development environment');
-    phases[1].tasks.push('Run comprehensive tests', 'Update documentation');
-    phases[2].tasks.push('Performance testing', 'Integration testing');
-    phases[3].tasks.push('User acceptance testing', 'Gradual rollout');
-    
+    phases[0].tasks.unshift(
+      "Review change requirements",
+      "Prepare development environment"
+    );
+    phases[1].tasks.push("Run comprehensive tests", "Update documentation");
+    phases[2].tasks.push("Performance testing", "Integration testing");
+    phases[3].tasks.push("User acceptance testing", "Gradual rollout");
+
     return { phases };
   }
 
   private calculateTotalTime(prediction: ImpactPrediction): number {
-    return prediction.affectedNodes.reduce((sum: number, node: any) => sum + node.estimatedFixTime, 0);
+    return prediction.affectedNodes.reduce(
+      (sum: number, node: any) => sum + node.estimatedFixTime,
+      0
+    );
   }
 
   private calculateComplexity(prediction: ImpactPrediction): number {
-    const uniqueStages = new Set(prediction.affectedNodes.map((n: any) => n.node.stage)).size;
-    const avgImpact = prediction.affectedNodes.reduce((sum: number, n: any) => sum + n.impactSeverity, 0) / prediction.affectedNodes.length;
-    const pathComplexity = Math.max(...prediction.affectedNodes.map((n: any) => n.propagationPath.length));
-    
+    const uniqueStages = new Set(
+      prediction.affectedNodes.map((n: any) => n.node.stage)
+    ).size;
+    const avgImpact =
+      prediction.affectedNodes.reduce(
+        (sum: number, n: any) => sum + n.impactSeverity,
+        0
+      ) / prediction.affectedNodes.length;
+    const pathComplexity = Math.max(
+      ...prediction.affectedNodes.map((n: any) => n.propagationPath.length)
+    );
+
     return uniqueStages + avgImpact + pathComplexity;
   }
 
-  private generateComparisonRecommendation(riskDiff: number, timeDiff: number, complexityDiff: number): string {
+  private generateComparisonRecommendation(
+    riskDiff: number,
+    timeDiff: number,
+    complexityDiff: number
+  ): string {
     if (riskDiff > 2) {
-      return 'Second scenario has significantly higher risk';
+      return "Second scenario has significantly higher risk";
     } else if (riskDiff < -2) {
-      return 'First scenario has significantly higher risk';
-    } else if (timeDiff > 120) { // 2 hours
-      return 'Second scenario requires significantly more time';
+      return "First scenario has significantly higher risk";
+    } else if (timeDiff > 120) {
+      // 2 hours
+      return "Second scenario requires significantly more time";
     } else if (timeDiff < -120) {
-      return 'First scenario requires significantly more time';
+      return "First scenario requires significantly more time";
     } else if (complexityDiff > 3) {
-      return 'Second scenario is significantly more complex';
+      return "Second scenario is significantly more complex";
     } else if (complexityDiff < -3) {
-      return 'First scenario is significantly more complex';
+      return "First scenario is significantly more complex";
     } else {
-      return 'Scenarios have similar impact profiles';
+      return "Scenarios have similar impact profiles";
     }
   }
 
   private findOptimalPath(
-    scenarios: ChangeScenario[], 
+    scenarios: ChangeScenario[],
     analyses: ImpactVisualization[]
-  ): ComparisonAnalysis['optimalPath'] {
+  ): ComparisonAnalysis["optimalPath"] {
     // Score scenarios based on risk, time, and business impact
     const scoredScenarios = scenarios.map((scenario, index) => {
       const analysis = analyses[index];
       const risk = analysis.prediction.riskAssessment.overall;
       const time = this.calculateTotalTime(analysis.prediction);
       const complexity = this.calculateComplexity(analysis.prediction);
-      
+
       // Lower is better for risk, time, and complexity
       let score = 10 - risk + (1000 - time) / 100 + (20 - complexity);
-      
+
       // Adjust for business impact
       switch (scenario.businessImpact) {
-        case 'critical': score += 5; break;
-        case 'high': score += 3; break;
-        case 'medium': score += 1; break;
-        case 'low': score -= 1; break;
+        case "critical":
+          score += 5;
+          break;
+        case "high":
+          score += 3;
+          break;
+        case "medium":
+          score += 1;
+          break;
+        case "low":
+          score -= 1;
+          break;
       }
-      
+
       // Adjust for timeframe urgency
       switch (scenario.timeframe) {
-        case 'immediate': score += 4; break;
-        case 'short-term': score += 2; break;
-        case 'medium-term': score += 0; break;
-        case 'long-term': score -= 2; break;
+        case "immediate":
+          score += 4;
+          break;
+        case "short-term":
+          score += 2;
+          break;
+        case "medium-term":
+          score += 0;
+          break;
+        case "long-term":
+          score -= 2;
+          break;
       }
-      
+
       return { scenario, analysis, score };
     });
-    
+
     // Find highest scoring scenario
-    const optimal = scoredScenarios.reduce((best, current) => 
+    const optimal = scoredScenarios.reduce((best, current) =>
       current.score > best.score ? current : best
     );
-    
+
     return {
       scenarioId: optimal.scenario.id,
-      reasoning: `Selected based on optimal balance of risk (${optimal.analysis.prediction.riskAssessment.overall.toFixed(1)}), ` +
-                `time (${this.calculateTotalTime(optimal.analysis.prediction)}min), and business impact (${optimal.scenario.businessImpact})`,
+      reasoning:
+        `Selected based on optimal balance of risk (${optimal.analysis.prediction.riskAssessment.overall.toFixed(
+          1
+        )}), ` +
+        `time (${this.calculateTotalTime(
+          optimal.analysis.prediction
+        )}min), and business impact (${optimal.scenario.businessImpact})`,
       prerequisites: [
-        'Complete thorough impact analysis',
-        'Ensure comprehensive test coverage',
-        'Plan rollback strategy',
-        'Coordinate with affected teams'
+        "Complete thorough impact analysis",
+        "Ensure comprehensive test coverage",
+        "Plan rollback strategy",
+        "Coordinate with affected teams",
       ],
-      mitigationStrategies: optimal.analysis.prediction.recommendations
+      mitigationStrategies: optimal.analysis.prediction.recommendations,
     };
   }
 
   /**
    * Generate interactive HTML visualization for impact prediction
    */
-  async generateImpactVisualizationHTML(analysis: ImpactVisualization): Promise<string> {
+  async generateImpactVisualizationHTML(
+    analysis: ImpactVisualization
+  ): Promise<string> {
     const { scenario, prediction, visualization } = analysis;
-    
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -748,9 +825,13 @@ export class ChangeImpactPredictor {
                 <strong>Change Type:</strong> ${scenario.changeType} • 
                 <strong>Business Impact:</strong> ${scenario.businessImpact} • 
                 <strong>Timeframe:</strong> ${scenario.timeframe} • 
-                <strong>Probability:</strong> ${(scenario.probability * 100).toFixed(0)}%
+                <strong>Probability:</strong> ${(
+                  scenario.probability * 100
+                ).toFixed(0)}%
                 <br><br>
-                <strong>Simulated Change:</strong> ${scenario.simulatedChange.description}
+                <strong>Simulated Change:</strong> ${
+                  scenario.simulatedChange.description
+                }
             </div>
         </div>
         
@@ -765,22 +846,39 @@ export class ChangeImpactPredictor {
         
         <div class="timeline-view">
             <div class="section-title">Implementation Timeline</div>
-            ${visualization.timelineData.phases.map(phase => `
+            ${visualization.timelineData.phases
+              .map(
+                (phase) => `
                 <div class="timeline-phase">
                     <div class="phase-header">
                         <span class="phase-name">${phase.name}</span>
-                        <span class="phase-duration">${Math.round(phase.duration / 60)}h</span>
+                        <span class="phase-duration">${Math.round(
+                          phase.duration / 60
+                        )}h</span>
                     </div>
                     <ul class="task-list">
-                        ${phase.tasks.slice(0, 5).map(task => `
+                        ${phase.tasks
+                          .slice(0, 5)
+                          .map(
+                            (task) => `
                             <li class="task-item">
-                                <span class="risk-indicator ${phase.risk > 5 ? 'risk-high' : phase.risk > 2 ? 'risk-medium' : 'risk-low'}"></span>
+                                <span class="risk-indicator ${
+                                  phase.risk > 5
+                                    ? "risk-high"
+                                    : phase.risk > 2
+                                    ? "risk-medium"
+                                    : "risk-low"
+                                }"></span>
                                 ${task}
                             </li>
-                        `).join('')}
+                        `
+                          )
+                          .join("")}
                     </ul>
                 </div>
-            `).join('')}
+            `
+              )
+              .join("")}
         </div>
         
         <div class="heatmap-view">
@@ -792,27 +890,40 @@ export class ChangeImpactPredictor {
             <div class="section-title">Impact Metrics</div>
             
             <div class="metric-card">
-                <div class="metric-value">${prediction.riskAssessment.overall.toFixed(1)}/10</div>
+                <div class="metric-value">${prediction.riskAssessment.overall.toFixed(
+                  1
+                )}/10</div>
                 <div class="metric-label">Overall Risk Score</div>
             </div>
             
             <div class="metric-card">
-                <div class="metric-value">${prediction.affectedNodes.length}</div>
+                <div class="metric-value">${
+                  prediction.affectedNodes.length
+                }</div>
                 <div class="metric-label">Affected Components</div>
             </div>
             
             <div class="metric-card">
-                <div class="metric-value">${Math.round(prediction.affectedNodes.reduce((sum: number, n: any) => sum + n.estimatedFixTime, 0) / 60)}</div>
+                <div class="metric-value">${Math.round(
+                  prediction.affectedNodes.reduce(
+                    (sum: number, n: any) => sum + n.estimatedFixTime,
+                    0
+                  ) / 60
+                )}</div>
                 <div class="metric-label">Estimated Hours</div>
             </div>
             
             <div class="metric-card">
-                <div class="metric-value">${prediction.riskAssessment.breakingChanges}</div>
+                <div class="metric-value">${
+                  prediction.riskAssessment.breakingChanges
+                }</div>
                 <div class="metric-label">Breaking Changes</div>
             </div>
             
             <div class="metric-card">
-                <div class="metric-value">${prediction.riskAssessment.reviewersNeeded.length}</div>
+                <div class="metric-value">${
+                  prediction.riskAssessment.reviewersNeeded.length
+                }</div>
                 <div class="metric-label">Reviewers Needed</div>
             </div>
         </div>
@@ -1002,7 +1113,9 @@ export class ChangeImpactPredictor {
   /**
    * Generate scenario comparison HTML
    */
-  async generateComparisonHTML(comparison: ComparisonAnalysis): Promise<string> {
+  async generateComparisonHTML(
+    comparison: ComparisonAnalysis
+  ): Promise<string> {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1090,11 +1203,15 @@ export class ChangeImpactPredictor {
         <p><strong>Reasoning:</strong> ${comparison.optimalPath.reasoning}</p>
         <h3>Prerequisites:</h3>
         <ul>
-            ${comparison.optimalPath.prerequisites.map(req => `<li>${req}</li>`).join('')}
+            ${comparison.optimalPath.prerequisites
+              .map((req) => `<li>${req}</li>`)
+              .join("")}
         </ul>
         <h3>Mitigation Strategies:</h3>
         <ul>
-            ${comparison.optimalPath.mitigationStrategies.map(strategy => `<li>${strategy}</li>`).join('')}
+            ${comparison.optimalPath.mitigationStrategies
+              .map((strategy) => `<li>${strategy}</li>`)
+              .join("")}
         </ul>
     </div>
     
@@ -1104,9 +1221,15 @@ export class ChangeImpactPredictor {
     </div>
     
     <div class="comparison-grid">
-        ${comparison.scenarios.map(scenario => `
+        ${comparison.scenarios
+          .map(
+            (scenario) => `
             <div class="scenario-card">
-                <h3>${scenario.name} ${scenario.id === comparison.optimalPath.scenarioId ? '<span class="optimal-indicator">OPTIMAL</span>' : ''}</h3>
+                <h3>${scenario.name} ${
+              scenario.id === comparison.optimalPath.scenarioId
+                ? '<span class="optimal-indicator">OPTIMAL</span>'
+                : ""
+            }</h3>
                 <p>${scenario.description}</p>
                 
                 <div class="metric">
@@ -1126,7 +1249,9 @@ export class ChangeImpactPredictor {
                 <p><strong>From:</strong> ${scenario.simulatedChange.from}</p>
                 <p><strong>To:</strong> ${scenario.simulatedChange.to}</p>
             </div>
-        `).join('')}
+        `
+          )
+          .join("")}
     </div>
     
     <script>
@@ -1136,11 +1261,13 @@ export class ChangeImpactPredictor {
         const chartData = {
             datasets: [{
                 label: 'Scenarios',
-                data: ${JSON.stringify(comparison.scenarios.map((scenario, index) => ({
-                  x: Math.random() * 10, // Risk score
-                  y: Math.random() * 500, // Time estimate
-                  label: scenario.name
-                })))},
+                data: ${JSON.stringify(
+                  comparison.scenarios.map((scenario, index) => ({
+                    x: Math.random() * 10, // Risk score
+                    y: Math.random() * 500, // Time estimate
+                    label: scenario.name,
+                  }))
+                )},
                 backgroundColor: 'rgba(78, 205, 196, 0.7)',
                 borderColor: '#4ecdc4',
                 borderWidth: 2

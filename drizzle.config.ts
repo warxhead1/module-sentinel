@@ -2,11 +2,17 @@ import type { Config } from 'drizzle-kit';
 import * as path from 'path';
 import * as os from 'os';
 
-// Determine environment
+// Determine environment and use same logic as DatabaseConfig
 const env = process.env.NODE_ENV || 'development';
-const baseDir = path.join(os.homedir(), '.module-sentinel', env);
-const dbName = env === 'production' ? 'production.db' : 'development.db';
-const dbPath = path.join(baseDir, dbName);
+
+let dbPath: string;
+if (env === 'production') {
+  dbPath = process.env.PROD_DB || path.join(os.homedir(), '.module-sentinel', 'production.db');
+} else if (env === 'test') {
+  dbPath = process.env.TEST_DB || path.join(os.homedir(), '.module-sentinel', 'test', 'test.db');
+} else {
+  dbPath = process.env.DEV_DB || path.join(os.homedir(), '.module-sentinel', 'development.db');
+}
 
 export default {
   schema: './src/database/drizzle/schema.ts',

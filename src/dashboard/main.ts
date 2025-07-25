@@ -22,6 +22,9 @@ import './components/performance-hotspots';
 import './components/search-interface';
 import './components/code-flow-explorer';
 import './components/enhanced-code-flow';
+import './components/multi-language-flow-explorer';
+import './components/impact-visualization';
+import './components/symbol-selector-modal';
 import './components/not-found';
 
 class DashboardApp {
@@ -116,7 +119,9 @@ class DashboardApp {
       { path: '/performance', component: 'performance-hotspots' },
       { path: '/search', component: 'search-interface' },
       { path: '/code-flow', component: 'code-flow-explorer' },
-      { path: '/enhanced-flow', component: 'enhanced-code-flow' }
+      { path: '/enhanced-flow', component: 'enhanced-code-flow' },
+      { path: '/multi-language-flow', component: 'multi-language-flow-explorer' },
+      { path: '/impact', component: 'impact-visualization' }
     ];
 
     this.routerService.setRoutes(routes);

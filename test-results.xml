@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="Module Sentinel Test Suite" tests="11" failures="2" skipped="0" time="39.486">
+  <testsuite name="Module Sentinel" tests="11" failures="2" skipped="0" time="39.486">
+    <testcase classname="CrossLanguageFlowTest" name="CrossLanguageFlowTest" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Index multi-language microservices project" time="11150">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect cross-language relationships" time="1">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect gRPC/Protobuf usage" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Detect HTTP/REST API patterns" time="0">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="CrossLanguageDetector pattern detection" time="1">
+    </testcase>
+    <testcase classname="CrossLanguageMicroservicesTest" name="Analyze service-to-service communication" time="1">
+    </testcase>
+    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect gRPC client calls in Go" time="2">
+      <failure message="❌ Assertion failed: Should track calling method (expected: checkoutService.getUserCart, actual: unknown)">
+Error: ❌ Assertion failed: Should track calling method (expected: checkoutService.getUserCart, actual: unknown)
+    at GrpcCrossLanguageRelationshipTest.assert (/workspace/test/helpers/BaseTest.ts:34:13)
+    at GrpcCrossLanguageRelationshipTest.assertEqual (/workspace/test/helpers/BaseTest.ts:43:10)
+    at &lt;anonymous&gt; (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:46:12)
+    at async GrpcCrossLanguageRelationshipTest.runTest (/workspace/test/helpers/BaseTest.ts:153:7)
+    at async GrpcCrossLanguageRelationshipTest.run (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:17:18)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:234:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:101:23)
+      </failure>
+    </testcase>
+    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect gRPC service implementation in C#" time="0">
+    </testcase>
+    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Link gRPC clients to service implementations" time="95">
+      <failure message="❌ Assertion failed: From language should be Go (expected: go, actual: cpp)">
+Error: ❌ Assertion failed: From language should be Go (expected: go, actual: cpp)
+    at GrpcCrossLanguageRelationshipTest.assert (/workspace/test/helpers/BaseTest.ts:34:13)
+    at GrpcCrossLanguageRelationshipTest.assertEqual (/workspace/test/helpers/BaseTest.ts:43:10)
+    at &lt;anonymous&gt; (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:180:14)
+    at GrpcCrossLanguageRelationshipTest.runTest (/workspace/test/helpers/BaseTest.ts:153:13)
+    at GrpcCrossLanguageRelationshipTest.run (/workspace/test/unit/GrpcCrossLanguageRelationshipTest.ts:87:29)
+    at async TestRunner.runTests (/workspace/test/TestRunner.ts:234:29)
+    at async TestRunner.run (/workspace/test/TestRunner.ts:101:23)
+      </failure>
+    </testcase>
+    <testcase classname="GrpcCrossLanguageRelationshipTest" name="Detect Python gRPC stub usage" time="8">
+    </testcase>
+  </testsuite>
+</testsuites>

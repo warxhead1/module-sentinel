@@ -1,5 +1,5 @@
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
-import { relations } from 'drizzle-orm';
+import { sqliteTable, text, integer, real, foreignKey, index } from 'drizzle-orm/sqlite-core';
+import { relations, sql } from 'drizzle-orm';
 
 /**
  * Schema for code flow analysis tables
@@ -11,7 +11,7 @@ export const symbolCalls = sqliteTable('symbol_calls', {
   callerId: integer('caller_id').notNull(),
   calleeId: integer('callee_id'),
   projectId: integer('project_id'),
-  targetFunction: text('target_function'),
+  targetFunction: text('targetFunction'),
   lineNumber: integer('line_number').notNull(),
   columnNumber: integer('column_number'),
   callType: text('call_type').notNull().default('direct'), // direct, virtual, delegate, etc.
@@ -49,8 +49,14 @@ export const controlFlowBlocks = sqliteTable('control_flow_blocks', {
   parentBlockId: integer('parent_block_id'),
   condition: text('condition'), // for conditional blocks
   loopType: text('loop_type'), // for, while, do-while
-  complexity: integer('complexity').default(1)
-});
+  complexity: integer('complexity').default(1),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`)
+}, (table) => ({
+  symbolIdx: index('idx_control_flow_blocks_symbol').on(table.symbolId),
+  projectIdx: index('idx_control_flow_blocks_project').on(table.projectId),
+  typeIdx: index('idx_control_flow_blocks_type').on(table.blockType),
+  parentIdx: index('idx_control_flow_blocks_parent').on(table.parentBlockId)
+}));
 
 // Tracks data flow within and between functions
 export const dataFlowEdges = sqliteTable('data_flow_edges', {

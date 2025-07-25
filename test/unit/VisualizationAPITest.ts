@@ -39,6 +39,9 @@ export class VisualizationAPITest {
     // Test 7: SQL queries are valid
     results.push(await this.testSQLQueries());
     
+    // Test 8: Analytics impact endpoint
+    results.push(await this.testAnalyticsImpactEndpoint());
+    
     return results;
   }
   
@@ -411,6 +414,73 @@ export class VisualizationAPITest {
         time: Date.now() - startTime,
         error: error instanceof Error ? error : new Error(String(error))
       };
+    }
+  }
+  
+  private async testAnalyticsImpactEndpoint(): Promise<TestResult> {
+    const startTime = Date.now();
+    let api: ModernApiServer | null = null;
+    
+    try {
+      // First, get a symbol ID to test with
+      const symbol = this.db.prepare(`
+        SELECT id FROM universal_symbols LIMIT 1
+      `).get() as any;
+      
+      if (!symbol) {
+        // If no symbols exist, create a test one
+        throw new Error('No symbols found in database to test analytics');
+      }
+      
+      // Start API on random port
+      api = new ModernApiServer(this.db, 0);
+      await api.start();
+      
+      // Get the actual port
+      const address = (api as any).server?.address();
+      if (!address || typeof address === 'string') {
+        throw new Error('Could not get server port');
+      }
+      const port = address.port;
+      
+      // Make request to analytics impact endpoint
+      const response = await this.makeRequest(`http://localhost:${port}/api/analytics/impact/${symbol.id}`);
+      const data = JSON.parse(response);
+      
+      if (!data.success || !data.data) {
+        throw new Error(`Expected success response with data from analytics endpoint. Got: ${response}`);
+      }
+      
+      const analysis = data.data;
+      // The analytics response should have the expected structure
+      if (!analysis || typeof analysis !== 'object') {
+        throw new Error('Analytics response missing data object');
+      }
+      
+      // Check for expected properties in impact analysis
+      const expectedProps = ['directImpact', 'indirectImpact', 'rippleEffect', 'severityScore'];
+      for (const prop of expectedProps) {
+        if (!(prop in analysis)) {
+          throw new Error(`Analytics response missing property: ${prop}`);
+        }
+      }
+      
+      return {
+        name: 'testAnalyticsImpactEndpoint',
+        status: 'passed',
+        time: Date.now() - startTime
+      };
+    } catch (error) {
+      return {
+        name: 'testAnalyticsImpactEndpoint',
+        status: 'failed',
+        time: Date.now() - startTime,
+        error: error instanceof Error ? error : new Error(String(error))
+      };
+    } finally {
+      if (api) {
+        await api.stop();
+      }
     }
   }
 }

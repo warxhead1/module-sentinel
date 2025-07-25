@@ -1,90 +1,77 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import * as d3 from 'd3';
+import { ControlFlowEngine, ControlFlowAnalysis, ControlFlowNode, ControlFlowEdge } from '../utils/control-flow-engine.js';
+import { ComplexityAnalyzer } from '../utils/complexity-analyzer.js';
+import { NavigationTreeBuilder, NavigationContext, BreadcrumbItem } from '../utils/navigation-tree-builder.js';
+import { HotspotDetector } from '../utils/hotspot-detector.js';
+import { DataFlowTracker } from '../utils/data-flow-tracker.js';
+import { SymbolSelectorModal } from './symbol-selector-modal.js';
+import { MultiLanguageDetector } from '../utils/multi-language-detector.js';
+import { stateService } from '../services/state.service.js';
+import './navigation-actions.js';
 
-// Type declaration for D3.js to avoid TypeScript issues
-declare const d3Local: any;
-
-interface FlowMetrics {
-  cyclomaticComplexity: number;
-  cognitiveComplexity: number;
-  nestingDepth: number;
-  paramCount: number;
-  localVariables: number;
-  returnPoints: number;
-}
-
-interface DataFlowEdge {
-  variable: string;
-  from: number;
-  to: number;
-  type: 'read' | 'write' | 'modify';
-  value?: string;
-}
-
-interface ControlFlowNode {
-  id: string;
-  type: 'entry' | 'exit' | 'statement' | 'condition' | 'loop' | 'return' | 'exception';
-  line: number;
-  code: string;
-  metrics?: {
-    executionTime?: number;
-    callCount?: number;
-    memoryUsage?: number;
-  };
-}
-
-interface ControlFlowEdge {
-  from: string;
-  to: string;
-  type: 'normal' | 'true' | 'false' | 'exception' | 'loop-back';
-  probability?: number;
-  label?: string;
-}
-
-interface EnhancedControlFlow {
-  nodes: ControlFlowNode[];
-  edges: ControlFlowEdge[];
-  metrics: FlowMetrics;
-  dataFlows: DataFlowEdge[];
-  hotPaths: string[][];
-  deadCode: number[];
-  symbol: any; // Store the symbol information for navigation
-  functionCalls: any[]; // Store the function call edges from API
-  blocks: any[]; // Store the control flow blocks from API
-  callers: any[]; // Functions that call this function
-  callees: any[]; // Functions called by this function
-}
-
-interface NavigationContext {
-  symbolId: number;
-  symbolName: string;
-  controlFlow: EnhancedControlFlow;
-  position?: { x: number; y: number; scale: number };
-}
+// Types are now imported from the engine modules
 
 export class EnhancedCodeFlow extends DashboardComponent {
   private symbolId: number | null = null;
-  private controlFlow: EnhancedControlFlow | null = null;
+  private controlFlow: ControlFlowAnalysis | null = null;
   private viewMode: 'control' | 'data' | 'metrics' | 'hotspots' = 'control';
   private highlightedPath: string[] = [];
   private selectedVariable: string | null = null;
   private searchQuery: string = '';
   private searchResults: any[] = [];
-  
-  // Navigation state for multi-level function exploration
-  private navigationStack: NavigationContext[] = [];
-  private currentContext: NavigationContext | null = null;
   private isNavigating: boolean = false;
+  
+  // Engine instances
+  private flowEngine: ControlFlowEngine;
+  private complexityAnalyzer: ComplexityAnalyzer;
+  private navigationBuilder: NavigationTreeBuilder;
+  private languageDetector: MultiLanguageDetector;
+  
+  // Symbol selector modal
+  private symbolSelector: SymbolSelectorModal;
+  
+  // Language info
+  private currentLanguage: string = 'unknown';
+  private crossLanguageCalls: Set<string> = new Set();
+  
+  constructor() {
+    super();
+    
+    // Initialize engines
+    this.flowEngine = new ControlFlowEngine();
+    this.complexityAnalyzer = new ComplexityAnalyzer();
+    this.navigationBuilder = new NavigationTreeBuilder();
+    this.languageDetector = new MultiLanguageDetector();
+    
+    // Get symbol selector instance
+    this.symbolSelector = SymbolSelectorModal.getInstance();
+  }
+  
+  get navigationStack(): NavigationContext[] {
+    return this.navigationBuilder.getNavigationState().stack;
+  }
+  
+  get currentContext(): NavigationContext | null {
+    return this.navigationBuilder.getNavigationState().current;
+  }
 
   async loadData(): Promise<void> {
     const params = new URLSearchParams(window.location.search);
-    const symbolId = params.get('symbolId');
+    const symbolId = params.get('symbolId') || params.get('symbol_id');
     
     if (symbolId) {
       this.symbolId = parseInt(symbolId);
       await this.loadEnhancedFlow();
     } else {
-      this.render();
+      // Check route data for context
+      const routeData = (this as any).routeData;
+      if (routeData?.context?.selectedSymbol) {
+        this.symbolId = routeData.context.selectedSymbol.id;
+        await this.loadEnhancedFlow();
+      } else {
+        this.render();
+      }
     }
   }
 
@@ -123,7 +110,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
       }
 
       // Transform the response into our enhanced format
-      this.controlFlow = this.transformControlFlow(data);
+      this.controlFlow = await this.transformControlFlow(data);
       
       // Load caller/callee information
       await this.loadCallGraph();
@@ -148,286 +135,56 @@ export class EnhancedCodeFlow extends DashboardComponent {
     }
   }
 
-  private transformControlFlow(data: any): EnhancedControlFlow {
+  private async transformControlFlow(data: any): Promise<ControlFlowAnalysis> {
     console.log('Transforming control flow data:', data);
     
     try {
-      // Calculate complexity metrics
-      console.log('Calculating metrics...');
-      const metrics: FlowMetrics = {
-        cyclomaticComplexity: this.calculateCyclomaticComplexity(data),
-        cognitiveComplexity: this.calculateCognitiveComplexity(data),
-        nestingDepth: this.calculateNestingDepth(data),
-        paramCount: data.symbol.signature?.match(/\(/g)?.length || 0,
-        localVariables: this.countLocalVariables(data),
-        returnPoints: data.exit_points?.length || 1
-      };
-      console.log('Calculated metrics:', metrics);
-
-      // Build control flow nodes and edges
-      console.log('Building nodes and edges...');
-      const nodes: ControlFlowNode[] = [];
-      const edges: ControlFlowEdge[] = [];
-    
-    // Entry node
-    nodes.push({
-      id: 'entry',
-      type: 'entry',
-      line: data.entry_point,
-      code: `${data.symbol.name}(${this.extractParameters(data.symbol.signature)})`
-    });
-
-    // Process blocks
-    data.blocks?.forEach((block: any) => {
-      const nodeId = `block_${block.id}`;
-      nodes.push({
-        id: nodeId,
-        type: this.mapBlockType(block.block_type),
-        line: block.start_line,
-        code: block.condition || `Lines ${block.start_line}-${block.end_line}`
-      });
-
-      // Add edges based on block relationships
-      if (block.parent_block_id) {
-        edges.push({
-          from: `block_${block.parent_block_id}`,
-          to: nodeId,
-          type: 'normal'
-        });
-      } else {
-        edges.push({
-          from: 'entry',
-          to: nodeId,
-          type: 'normal'
-        });
-      }
-    });
-
-    // If no blocks, create a simple flow from entry to exit
-    if (!data.blocks || data.blocks.length === 0) {
-      // Add a statement node representing the function body
-      nodes.push({
-        id: 'function_body',
-        type: 'statement',
-        line: data.entry_point,
-        code: `Function body (${data.symbol.name})`
-      });
+      // Use the engine to analyze the symbol
+      // Detect language from file path if available
+      this.currentLanguage = data.filePath ? 
+        this.languageDetector.detectLanguageFromPath(data.filePath) : 'unknown';
       
-      edges.push({
-        from: 'entry',
-        to: 'function_body',
-        type: 'normal'
-      });
-    }
-
-      // Exit nodes
-      console.log('Adding exit nodes...');
-      data.exit_points?.forEach((exitLine: number, index: number) => {
-        const exitId = `exit_${index}`;
-        nodes.push({
-          id: exitId,
-          type: 'exit',
-          line: exitLine,
-          code: 'return'
-        });
-        
-        // Connect function body to exit if no blocks
-        if (!data.blocks || data.blocks.length === 0) {
-          edges.push({
-            from: 'function_body',
-            to: exitId,
-            type: 'normal'
-          });
-        }
+      const analysis = await this.flowEngine.analyzeSymbol(data, {
+        includeDataFlow: true,
+        detectHotspots: true,
+        language: this.currentLanguage as any
       });
 
-      // Analyze hot paths and dead code
-      console.log('Analyzing paths...');
-      const hotPaths = this.findHotPaths(nodes, edges);
-      const deadCode = this.findDeadCode(nodes, edges);
-
-      console.log('Returning transformed data with', nodes.length, 'nodes and', edges.length, 'edges');
-      return {
-        nodes,
-        edges,
-        metrics,
-        dataFlows: [],
-        hotPaths,
-        deadCode,
-        symbol: data.symbol, // Include symbol information for navigation
-        functionCalls: data.edges || [], // Store function call edges from API
-        blocks: data.blocks || [], // Store control flow blocks from API
-        callers: [], // Will be populated from call graph API
-        callees: [] // Will be populated from call graph API
-      };
+      // Store additional data from API
+      analysis.callers = [];
+      analysis.callees = [];
+      
+      console.log('Returning transformed data with', analysis.nodes.length, 'nodes and', analysis.edges.length, 'edges');
+      return analysis;
     } catch (error) {
       console.error('Error in transformControlFlow:', error);
       throw new Error(`Transform failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
-  private calculateCyclomaticComplexity(data: any): number {
-    // McCabe's cyclomatic complexity: E - N + 2P
-    // E = edges, N = nodes, P = connected components (usually 1)
-    const nodeCount = (data.blocks?.length || 0) + 2; // +2 for entry and exit
-    const edgeCount = data.edges?.length || nodeCount - 1;
-    return edgeCount - nodeCount + 2;
-  }
-
-  private calculateCognitiveComplexity(data: any): number {
-    let complexity = 0;
-    let nestingLevel = 0;
-    
-    data.blocks?.forEach((block: any) => {
-      if (block.block_type === 'condition') {
-        complexity += 1 + nestingLevel;
-      } else if (block.block_type === 'loop') {
-        complexity += 1 + nestingLevel;
-      }
-      
-      if (block.parent_block_id) {
-        nestingLevel++;
-      }
-    });
-    
-    return complexity;
-  }
-
-  private calculateNestingDepth(data: any): number {
-    let maxDepth = 0;
-    const blockMap = new Map(data.blocks?.map((b: any) => [b.id, b]) || []);
-    
-    data.blocks?.forEach((block: any) => {
-      let depth = 0;
-      let current = block;
-      
-      while (current.parent_block_id) {
-        depth++;
-        current = blockMap.get(current.parent_block_id);
-        if (!current) break;
-      }
-      
-      maxDepth = Math.max(maxDepth, depth);
-    });
-    
-    return maxDepth;
-  }
-
-  private countLocalVariables(data: any): number {
-    // This would require parsing the actual code
-    // For now, return an estimate based on complexity
-    return Math.floor(data.blocks?.length * 1.5 || 0);
-  }
-
-  private extractParameters(signature: string | null): string {
-    if (!signature) return '';
-    const match = signature.match(/\((.*?)\)/);
-    return match ? match[1] : '';
-  }
-
-  private mapBlockType(blockType: string): ControlFlowNode['type'] {
-    const mapping: Record<string, ControlFlowNode['type']> = {
-      'entry': 'entry',
-      'exit': 'exit',
-      'conditional': 'condition',
-      'condition': 'condition',
-      'loop': 'loop',
-      'try': 'exception',
-      'catch': 'exception',
-      'return': 'return'
-    };
-    return mapping[blockType] || 'statement';
-  }
-
-  private findHotPaths(nodes: ControlFlowNode[], edges: ControlFlowEdge[]): string[][] {
-    // Find paths with highest execution probability
-    const paths: string[][] = [];
-    const visited = new Set<string>();
-    
-    const dfs = (nodeId: string, path: string[]) => {
-      if (visited.has(nodeId)) return;
-      visited.add(nodeId);
-      
-      const node = nodes.find(n => n.id === nodeId);
-      if (!node) return;
-      
-      path.push(nodeId);
-      
-      if (node.type === 'exit') {
-        paths.push([...path]);
-      } else {
-        const outgoing = edges.filter(e => e.from === nodeId);
-        outgoing.forEach(edge => {
-          dfs(edge.to, path);
-        });
-      }
-      
-      path.pop();
-      visited.delete(nodeId);
-    };
-    
-    dfs('entry', []);
-    
-    // Sort by length (shorter paths are often hotter)
-    return paths.sort((a, b) => a.length - b.length).slice(0, 5);
-  }
-
-  private findDeadCode(nodes: ControlFlowNode[], edges: ControlFlowEdge[]): number[] {
-    // Find unreachable nodes
-    const reachable = new Set<string>();
-    const queue = ['entry'];
-    
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
-      if (reachable.has(nodeId)) continue;
-      
-      reachable.add(nodeId);
-      
-      const outgoing = edges.filter(e => e.from === nodeId);
-      outgoing.forEach(edge => {
-        if (!reachable.has(edge.to)) {
-          queue.push(edge.to);
-        }
-      });
-    }
-    
-    // Return line numbers of unreachable nodes
-    return nodes
-      .filter(n => !reachable.has(n.id))
-      .map(n => n.line);
-  }
 
   private renderBreadcrumbs(): string {
-    // Always show breadcrumbs if we have control flow data, even if no navigation stack
-    if (this.navigationStack.length === 0 && !this.currentContext && !this.controlFlow) {
+    const breadcrumbs = this.navigationBuilder.buildBreadcrumbs();
+    
+    // Always show breadcrumbs if we have control flow data
+    if (breadcrumbs.length === 0 && !this.controlFlow) {
       return '';
     }
 
-    const breadcrumbItems = [];
-    
-    // Add navigation stack items
-    this.navigationStack.forEach((context, index) => {
-      breadcrumbItems.push(`
-        <span class="breadcrumb-item" data-nav-index="${index}">
-          <span class="breadcrumb-icon">🔗</span>
-          ${context.symbolName}
-        </span>
-      `);
-    });
+    const breadcrumbItems = breadcrumbs.map((item, index) => `
+      <span class="breadcrumb-item ${item.type === 'current' ? 'current' : ''}" 
+            ${item.type !== 'current' ? `data-nav-index="${index}"` : ''}>
+        <span class="breadcrumb-icon">${item.icon || '📍'}</span>
+        ${item.label}
+      </span>
+    `);
 
-    // Add current context or current function if no context
-    if (this.currentContext) {
+    // Add current function if no navigation context
+    if (breadcrumbs.length === 0 && this.controlFlow && this.controlFlow.symbol) {
       breadcrumbItems.push(`
         <span class="breadcrumb-item current">
           <span class="breadcrumb-icon">📍</span>
-          ${this.currentContext.symbolName}
-        </span>
-      `);
-    } else if (this.controlFlow && this.controlFlow.symbol) {
-      // Show current function even without navigation context
-      breadcrumbItems.push(`
-        <span class="breadcrumb-item current">
-          <span class="breadcrumb-icon">📍</span>
+          ${this.renderLanguageBadge(this.currentLanguage)}
           ${this.controlFlow.symbol.name || this.controlFlow.symbol.qualified_name || 'Current Function'}
         </span>
       `);
@@ -437,7 +194,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
       <div class="navigation-breadcrumbs">
         <div class="breadcrumb-header">
           <div class="nav-controls">
-            ${this.navigationStack.length > 0 ? `
+            ${breadcrumbs.length > 0 ? `
               <button class="nav-button back-button" data-nav-back title="Go back one step">
                 <span>⬅️</span>
                 Back
@@ -449,7 +206,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
               </button>
             ` : ''}
             <span class="breadcrumb-title">🧭 Navigation Path</span>
-            ${this.navigationStack.length > 0 ? `
+            ${breadcrumbs.length > 0 ? `
               <button class="nav-button home-button" data-nav-home title="Return to starting function">
                 <span>🏠</span>
                 Home
@@ -486,12 +243,17 @@ export class EnhancedCodeFlow extends DashboardComponent {
                 Called by (${callers.length})
               </h4>
               <div class="relationship-list">
-                ${callers.slice(0, 5).map(caller => `
-                  <button class="relationship-item caller-item" data-action="navigate" data-symbol-id="${caller.id}">
-                    <span class="relationship-name">${caller.name}</span>
-                    <span class="relationship-meta">${caller.kind} • ${caller.call_info?.call_count || 1} calls</span>
-                  </button>
-                `).join('')}
+                ${callers.slice(0, 5).map(caller => {
+                  const callerLanguage = this.detectLanguageFromFile(caller.file || '');
+                  const isCrossLanguage = callerLanguage !== this.currentLanguage;
+                  return `
+                    <button class="relationship-item caller-item${isCrossLanguage ? ' cross-language' : ''}" data-action="navigate" data-symbol-id="${caller.id}">
+                      ${isCrossLanguage ? this.renderLanguageBadge(callerLanguage) : ''}
+                      <span class="relationship-name">${caller.name}</span>
+                      <span class="relationship-meta">${caller.kind} • ${caller.call_info?.call_count || 1} calls</span>
+                    </button>
+                  `;
+                }).join('')}
                 ${callers.length > 5 ? `
                   <button class="show-more-btn" data-action="show-callers">
                     +${callers.length - 5} more callers
@@ -508,12 +270,17 @@ export class EnhancedCodeFlow extends DashboardComponent {
                 Calls (${callees.length})
               </h4>
               <div class="relationship-list">
-                ${callees.slice(0, 5).map(callee => `
-                  <button class="relationship-item callee-item" data-action="navigate" data-symbol-id="${callee.id}">
-                    <span class="relationship-name">${callee.name}</span>
-                    <span class="relationship-meta">${callee.kind} • ${callee.call_info?.call_count || 1} calls</span>
-                  </button>
-                `).join('')}
+                ${callees.slice(0, 5).map(callee => {
+                  const calleeLanguage = this.detectLanguageFromFile(callee.file || '');
+                  const isCrossLanguage = calleeLanguage !== this.currentLanguage;
+                  return `
+                    <button class="relationship-item callee-item${isCrossLanguage ? ' cross-language' : ''}" data-action="navigate" data-symbol-id="${callee.id}">
+                      ${isCrossLanguage ? this.renderLanguageBadge(calleeLanguage) : ''}
+                      <span class="relationship-name">${callee.name}</span>
+                      <span class="relationship-meta">${callee.kind} • ${callee.call_info?.call_count || 1} calls</span>
+                    </button>
+                  `;
+                }).join('')}
                 ${callees.length > 5 ? `
                   <button class="show-more-btn" data-action="show-callees">
                     +${callees.length - 5} more callees
@@ -1006,6 +773,52 @@ export class EnhancedCodeFlow extends DashboardComponent {
           font-weight: 500;
           text-anchor: middle;
           pointer-events: none;
+        }
+        
+        /* Language badges */
+        .language-badge {
+          display: inline-block;
+          padding: 2px 8px;
+          border-radius: 12px;
+          font-size: 0.7rem;
+          font-weight: 600;
+          margin-right: 8px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          vertical-align: middle;
+        }
+        
+        .lang-cpp { background: #0055cc; color: white; }
+        .lang-python { background: #3776ab; color: white; }
+        .lang-typescript { background: #007acc; color: white; }
+        .lang-javascript { background: #f7df1e; color: black; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+        .lang-rust { background: #ce422b; color: white; }
+        .lang-go { background: #00add8; color: white; }
+        .lang-java { background: #ed8b00; color: white; }
+        .lang-unknown { background: #666; color: white; }
+        
+        /* Cross-language highlighting */
+        .cross-language-call {
+          stroke: #feca57 !important;
+          stroke-width: 3px !important;
+          stroke-dasharray: 5,5;
+          animation: dash 0.5s linear infinite;
+        }
+        
+        @keyframes dash {
+          to {
+            stroke-dashoffset: -10;
+          }
+        }
+        
+        .caller-item.cross-language,
+        .callee-item.cross-language {
+          background: rgba(254, 202, 87, 0.1);
+          border-left: 3px solid #feca57;
         }
         
         .control-edge {
@@ -1508,6 +1321,8 @@ export class EnhancedCodeFlow extends DashboardComponent {
         <p class="subtitle">Deep insights into control flow, complexity, and execution patterns</p>
       </div>
       
+      <navigation-actions></navigation-actions>
+      
       <div class="flow-container">
         <div class="flow-main">
           ${this.controlFlow ? `
@@ -1984,6 +1799,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
     });
 
     // Add enhanced labels with better information
+    const self = this; // Capture context for use inside D3 callbacks
     node.each(function(this: SVGGElement, d: any) {
       const nodeData = d.data;
       const nodeG = d3Local.select(this);
@@ -2017,13 +1833,46 @@ export class EnhancedCodeFlow extends DashboardComponent {
             .text(`Condition: ${nodeData.code}`);
         }
       } else {
-        // For other blocks, show line range
+        // For other blocks, show line range and language badge
         nodeG.append('text')
           .attr('dy', '0.35em')
           .attr('text-anchor', 'middle')
           .attr('fill', 'white')
           .attr('font-size', '10px')
           .text(`L${nodeData.line}`);
+          
+        // Add language badge for nodes with function calls
+        const functionCalls = self.flowEngine.getFunctionCallsFromLine(nodeData.line, self.controlFlow!, nodeData);
+        if (functionCalls.length > 0) {
+          // Check if any calls are cross-language
+          const crossLanguageCalls = functionCalls.filter((call: string) => {
+            // For now, assume cross-language if call name suggests different language
+            const callLang = self.detectLanguageFromFunctionName(call);
+            return callLang !== self.currentLanguage;
+          });
+          
+          if (crossLanguageCalls.length > 0) {
+            // Add a small language indicator
+            nodeG.append('circle')
+              .attr('cx', 20)
+              .attr('cy', -15)
+              .attr('r', 6)
+              .attr('fill', self.getLanguageColor('mixed'))
+              .attr('stroke', '#fff')
+              .attr('stroke-width', 1)
+              .style('filter', 'drop-shadow(0 0 2px rgba(0,0,0,0.3))');
+              
+            nodeG.append('text')
+              .attr('x', 20)
+              .attr('y', -15)
+              .attr('dy', '0.35em')
+              .attr('text-anchor', 'middle')
+              .attr('fill', 'white')
+              .attr('font-size', '8px')
+              .attr('font-weight', 'bold')
+              .text('⚡');
+          }
+        }
       }
     });
     
@@ -2445,11 +2294,11 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
       // Update current context
       if (this.controlFlow) {
-        this.currentContext = {
+        this.navigationBuilder.navigateTo({
           symbolId: targetSymbol.id,
           symbolName: targetSymbol.name || targetSymbol.qualified_name,
           controlFlow: this.controlFlow
-        };
+        });
       }
 
     } catch (error) {
@@ -2466,17 +2315,16 @@ export class EnhancedCodeFlow extends DashboardComponent {
     
     if (targetIndex !== undefined && targetIndex >= 0 && targetIndex < this.navigationStack.length) {
       // Navigate to specific index
-      targetContext = this.navigationStack[targetIndex];
-      this.navigationStack = this.navigationStack.slice(0, targetIndex);
+      targetContext = this.navigationBuilder.navigateToIndex(targetIndex)!;
     } else {
       // Navigate to previous function
-      targetContext = this.navigationStack.pop()!;
+      targetContext = this.navigationBuilder.navigateBack()!;
     }
 
     // Restore the context
     this.symbolId = targetContext.symbolId;
     this.controlFlow = targetContext.controlFlow;
-    this.currentContext = targetContext;
+    // Context is already updated by navigationBuilder
     
     // Re-render
     this.render();
@@ -2495,9 +2343,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
     // Get the root context
     const rootContext = this.navigationStack[0];
     
-    // Clear the navigation stack
-    this.navigationStack = [];
-    this.currentContext = rootContext;
+    // Navigation is handled by navigationBuilder
     
     // Restore the root context
     this.symbolId = rootContext.symbolId;
@@ -2516,8 +2362,7 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
   private returnToSearch() {
     // Clear all navigation state and return to search mode
-    this.navigationStack = [];
-    this.currentContext = null;
+    this.navigationBuilder.clearNavigation();
     this.symbolId = null;
     this.controlFlow = null;
     this.searchQuery = '';
@@ -2555,11 +2400,11 @@ export class EnhancedCodeFlow extends DashboardComponent {
 
       // Update current context
       if (this.controlFlow) {
-        this.currentContext = {
+        this.navigationBuilder.navigateTo({
           symbolId: symbolId,
           symbolName: this.controlFlow.symbol.name || this.controlFlow.symbol.qualified_name || `Symbol ${symbolId}`,
           controlFlow: this.controlFlow
-        };
+        });
       }
 
     } catch (error) {
@@ -2589,6 +2434,52 @@ export class EnhancedCodeFlow extends DashboardComponent {
     
     // TODO: Implement modal view for all callees
     alert(`All callees (${this.controlFlow.callees.length}):\n${this.controlFlow.callees.map(c => c.name).join('\n')}`);
+  }
+  
+  private detectLanguageFromFile(filePath: string): string {
+    return this.languageDetector.detectLanguageFromPath(filePath);
+  }
+  
+  private detectLanguageFromNode(node: any): string {
+    if (node.file) {
+      return this.detectLanguageFromFile(node.file);
+    }
+    if (this.controlFlow?.symbol?.file) {
+      return this.detectLanguageFromFile(this.controlFlow.symbol.file);
+    }
+    return 'unknown';
+  }
+  
+  private renderLanguageBadge(language: string): string {
+    if (!language || language === 'unknown') return '';
+    return `<span class="language-badge lang-${language}">${language.substring(0, 3).toUpperCase()}</span>`;
+  }
+  
+  private getLanguageColor = (language: string): string => {
+    const colors: Record<string, string> = {
+      cpp: '#0055cc',
+      python: '#3776ab',
+      typescript: '#007acc',
+      javascript: '#f7df1e',
+      rust: '#ce422b',
+      go: '#00add8',
+      java: '#ed8b00',
+      mixed: '#ff6b6b'
+    };
+    return colors[language] || '#666';
+  }
+  
+  private detectLanguageFromFunctionName(functionName: string): string {
+    // Simple heuristics to detect language from function call patterns
+    if (functionName.includes('::') || functionName.includes('std::')) return 'cpp';
+    if (functionName.includes('.') && !functionName.includes('()')) return 'python';
+    if (functionName.includes('await ') || functionName.includes('async ')) return 'typescript';
+    if (functionName.includes('console.') || functionName.includes('window.')) return 'javascript';
+    if (functionName.includes('println!') || functionName.includes('vec!')) return 'rust';
+    if (functionName.includes('fmt.') || functionName.includes('log.')) return 'go';
+    if (functionName.includes('System.') || functionName.includes('.class')) return 'java';
+    
+    return this.currentLanguage; // Default to current file's language
   }
 }
 
