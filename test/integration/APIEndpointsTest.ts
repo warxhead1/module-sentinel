@@ -281,7 +281,7 @@ export const API_VERSION = "1.0.0";
 
     try {
       // Test symbol search
-      const searchResponse = await fetch(`${this.baseUrl}/api/search/symbols?query=API&limit=5`);
+      const searchResponse = await fetch(`${this.baseUrl}/api/search?q=API&limit=5`);
       if (!searchResponse.ok) {
         throw new Error(`Symbol search failed: ${searchResponse.status}`);
       }
@@ -291,14 +291,23 @@ export const API_VERSION = "1.0.0";
         throw new Error("Search returned unsuccessful response");
       }
 
-      if (!Array.isArray(searchData.data)) {
+      if (!Array.isArray(searchData.data.results)) {
         throw new Error("Search results should be an array");
       }
 
       // Test file search
-      const fileSearchResponse = await fetch(`${this.baseUrl}/api/search/files?query=.ts&limit=5`);
+      const fileSearchResponse = await fetch(`${this.baseUrl}/api/search?q=.ts&limit=5`);
       if (!fileSearchResponse.ok) {
         throw new Error(`File search failed: ${fileSearchResponse.status}`);
+      }
+
+      const fileSearchData = await fileSearchResponse.json();
+      if (!fileSearchData.success) {
+        throw new Error("File search returned unsuccessful response");
+      }
+
+      if (!Array.isArray(fileSearchData.data.results)) {
+        throw new Error("File search results should be an array");
       }
 
       logger.info(`✅ ${testName} passed`);
@@ -337,7 +346,7 @@ export const API_VERSION = "1.0.0";
 
     try {
       // Test overview stats
-      const response = await fetch(`${this.baseUrl}/api/stats/overview`);
+      const response = await fetch(`${this.baseUrl}/api/stats`);
       if (!response.ok) {
         throw new Error(`Get stats overview failed: ${response.status}`);
       }
@@ -348,9 +357,10 @@ export const API_VERSION = "1.0.0";
       }
 
       // Verify stats structure
-      if (typeof data.data.totalProjects !== "number" || 
-          typeof data.data.totalSymbols !== "number") {
-        throw new Error("Invalid stats structure");
+      if (typeof data.data.symbolCount !== "number" || 
+          typeof data.data.namespaceCount !== "number" ||
+          typeof data.data.kindBreakdown !== "object") {
+        throw new Error(`Invalid stats structure. Got: ${JSON.stringify(data.data)}`);
       }
 
       logger.info(`✅ ${testName} passed`);
