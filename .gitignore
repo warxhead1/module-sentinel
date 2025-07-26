@@ -105,3 +105,12 @@ Cargo.lock
 napi-bindings/*.node
 module-sentinel-rust.node
 module-sentinel-rust/napi-bindings/*.node
+
+# ML model files (too large for git, should be downloaded at runtime)
+*.onnx
+*.pt
+*.pth
+*.h5
+*.pb
+*.tflite
+module-sentinel-rust/parser-service/models/
