@@ -351,7 +351,7 @@ export class ModuleBrowser extends HTMLElement {
       badgeText = `${symbol.children.length} items`;
     }
 
-    let html = `
+    const html = `
       <div class="tree-node" data-path="${nodePath}">
         <div class="node-content ${isSelected ? 'selected' : ''}" data-type="${symbol.kind}" data-path="${nodePath}" data-qualified-name="${symbol.qualifiedName || nodePath}">
           ${isExpandable ? `

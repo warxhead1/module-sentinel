@@ -8,6 +8,8 @@
 
 import { Logger, createLogger } from "../utils/logger.js";
 import { MemoryMonitor, getGlobalMemoryMonitor } from "../utils/memory-monitor.js";
+import { DrizzleDatabase, type DrizzleDb } from "../database/drizzle-db.js";
+import type Database from 'better-sqlite3';
 
 export interface MetricsInput {
   // Source code inputs
@@ -434,7 +436,7 @@ export class CodeMetricsAnalyzer {
   /**
    * Get comprehensive database statistics for advanced anti-pattern detection
    */
-  async getComprehensiveDbStats(db: any): Promise<{
+  async getComprehensiveDbStats(db: Database.Database | DrizzleDb): Promise<{
     symbols: Array<{
       id: number;
       name: string;
@@ -453,32 +455,11 @@ export class CodeMetricsAnalyzer {
     }>;
   }> {
     try {
-      // Get symbols with their metrics
-      const symbols = db.prepare(`
-        SELECT 
-          id, name, kind, 
-          cyclomatic_complexity as cyclomaticComplexity,
-          fan_in as fanIn,
-          fan_out as fanOut,
-          lines_of_code as linesOfCode,
-          parameter_count as parameterCount,
-          semantic_tags
-        FROM universal_symbols 
-        WHERE confidence > 0.5
-        ORDER BY cyclomatic_complexity DESC, fan_out DESC
-      `).all();
-
-      // Get relationships for dependency analysis
-      const relationships = db.prepare(`
-        SELECT 
-          source_symbol_id as sourceSymbolId,
-          target_symbol_id as targetSymbolId,
-          relationship_type as relationshipType
-        FROM symbol_relationships
-        WHERE relationship_type IN ('depends_on', 'calls', 'inherits_from')
-      `).all();
-
-      return { symbols, relationships };
+      // Use DrizzleDatabase wrapper for consistent access
+      const drizzleDb = new DrizzleDatabase(db);
+      
+      // Get metrics specifically for anti-pattern detection
+      return await drizzleDb.getMetricsForAntiPatterns();
     } catch (error) {
       this.logger.warn('Failed to get comprehensive database stats', error);
       return { symbols: [], relationships: [] };

@@ -5,7 +5,7 @@
  * across the codebase to predict architectural impact and guide development.
  */
 
-import Database from "better-sqlite3";
+import { DrizzleDatabase } from "../database/drizzle-db.js";
 import { getFileDisplayName } from "../utils/path-utils.js";
 
 export interface RippleNode {
@@ -65,49 +65,38 @@ export interface ImpactPrediction {
 }
 
 export class RippleEffectTracker {
-  private db: Database.Database;
+  private drizzleDb: DrizzleDatabase;
   private impactCache = new Map<string, ImpactPrediction>();
   private dependencyGraph = new Map<string, Set<string>>();
   private reverseDependencyGraph = new Map<string, Set<string>>();
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
+  constructor(drizzleDb: DrizzleDatabase) {
+    this.drizzleDb = drizzleDb;
     this.initializeGraphs();
   }
 
-  private initializeGraphs(): void {
+  private async initializeGraphs(): Promise<void> {
     // Build dependency graphs for fast impact calculation
     try {
-      const relationships = this.db
-        .prepare(
-          `
-        SELECT 
-          s1.qualified_name as source_symbol,
-          s2.qualified_name as target_symbol,
-          sr.type,
-          sr.confidence
-        FROM universal_relationships sr
-        JOIN universal_symbols s1 ON sr.from_symbol_id = s1.id
-        JOIN universal_symbols s2 ON sr.to_symbol_id = s2.id
-        WHERE sr.confidence > 0.7
-      `
-        )
-        .all() as any[];
+      const relationships = await this.drizzleDb.getRippleRelationships();
 
       for (const rel of relationships) {
+        // Skip if either symbol is null (should be filtered by query but double-check)
+        if (!rel.sourceSymbol || !rel.targetSymbol) continue;
+        
         // Forward dependencies
-        if (!this.dependencyGraph.has(rel.source_symbol)) {
-          this.dependencyGraph.set(rel.source_symbol, new Set());
+        if (!this.dependencyGraph.has(rel.sourceSymbol)) {
+          this.dependencyGraph.set(rel.sourceSymbol, new Set());
         }
-        this.dependencyGraph.get(rel.source_symbol)!.add(rel.target_symbol);
+        this.dependencyGraph.get(rel.sourceSymbol)!.add(rel.targetSymbol);
 
         // Reverse dependencies
-        if (!this.reverseDependencyGraph.has(rel.target_symbol)) {
-          this.reverseDependencyGraph.set(rel.target_symbol, new Set());
+        if (!this.reverseDependencyGraph.has(rel.targetSymbol)) {
+          this.reverseDependencyGraph.set(rel.targetSymbol, new Set());
         }
         this.reverseDependencyGraph
-          .get(rel.target_symbol)!
-          .add(rel.source_symbol);
+          .get(rel.targetSymbol)!
+          .add(rel.sourceSymbol);
       }
     } catch (error) {
       console.warn("Could not initialize dependency graphs:", error);
@@ -176,53 +165,24 @@ export class RippleEffectTracker {
     symbolName: string
   ): Promise<RippleNode | null> {
     try {
-      const symbol = this.db
-        .prepare(
-          `
-        SELECT 
-          id,
-          name,
-          qualified_name,
-          file_path,
-          kind,
-          confidence,
-          semantic_tags,
-          line,
-          column,
-          language_features,
-          namespace
-        FROM universal_symbols
-        WHERE qualified_name = ? OR name = ?
-        ORDER BY confidence DESC
-        LIMIT 1
-      `
-        )
-        .get(symbolName, symbolName) as any;
+      const symbol = await this.drizzleDb.getSymbolForRipple(symbolName);
 
       if (!symbol) return null;
 
       // Get usage count
-      const usageCount = this.db
-        .prepare(
-          `
-        SELECT COUNT(*) as count
-        FROM universal_relationships sr
-        WHERE sr.to_symbol_id = ?
-      `
-        )
-        .get(symbol.id) as any;
+      const usageCount = await this.drizzleDb.getSymbolUsageCount(symbol.id);
 
       // Get dependencies
       const dependencies =
-        this.dependencyGraph.get(symbol.qualified_name) || new Set();
+        this.dependencyGraph.get(symbol.qualifiedName) || new Set();
       const dependents =
-        this.reverseDependencyGraph.get(symbol.qualified_name) || new Set();
+        this.reverseDependencyGraph.get(symbol.qualifiedName) || new Set();
 
       const rippleNode: RippleNode = {
-        id: symbol.qualified_name,
+        id: symbol.qualifiedName,
         name: symbol.name,
         type: symbol.kind as any,
-        filePath: symbol.file_path,
+        filePath: symbol.filePath,
         stage: "analysis", // Universal symbols don't have pipeline_stage
         impactLevel: this.calculateImpactLevel(symbol),
         changeType: "type", // Will be updated based on analysis
@@ -234,9 +194,9 @@ export class RippleEffectTracker {
         ),
         dependencies: Array.from(dependencies),
         dependents: Array.from(dependents),
-        semanticTags: Array.isArray(symbol.semantic_tags)
-          ? symbol.semantic_tags
-          : (symbol.semantic_tags ? [symbol.semantic_tags] : []),
+        semanticTags: Array.isArray(symbol.semanticTags)
+          ? symbol.semanticTags
+          : (symbol.semanticTags ? [symbol.semanticTags] : []),
         location: {
           line: symbol.line || 0,
           column: symbol.column || 0,
@@ -249,7 +209,7 @@ export class RippleEffectTracker {
       };
       
       // Add display-friendly file name for UI purposes
-      (rippleNode as any).fileDisplayName = getFileDisplayName(symbol.file_path);
+      (rippleNode as any).fileDisplayName = getFileDisplayName(symbol.filePath);
       
       return rippleNode;
     } catch (error) {
@@ -339,8 +299,8 @@ export class RippleEffectTracker {
       impact += 2;
     }
 
-    // Higher impact for template types
-    if (symbol.template_info) {
+    // Higher impact for language features like templates
+    if (symbol.languageFeatures?.includes("template")) {
       impact += 1;
     }
 
@@ -365,8 +325,8 @@ export class RippleEffectTracker {
 
     // File-based criticality (headers are more critical)
     if (
-      symbol.file_path?.includes("include/") ||
-      symbol.file_path?.endsWith(".ixx")
+      symbol.filePath?.includes("include/") ||
+      symbol.filePath?.endsWith(".ixx")
     ) {
       score += 1;
     }
@@ -378,13 +338,13 @@ export class RippleEffectTracker {
     let complexity = 1;
 
     // Template complexity
-    if (symbol.template_info) {
+    if (symbol.languageFeatures?.includes("template")) {
       complexity += 2;
     }
 
     // Namespace nesting
-    if (symbol.namespace_info) {
-      complexity += symbol.namespace_info.split("::").length * 0.5;
+    if (symbol.namespace) {
+      complexity += symbol.namespace.split("::").length * 0.5;
     }
 
     // Semantic complexity
@@ -662,6 +622,6 @@ export class RippleEffectTracker {
   }
 
   close(): void {
-    this.db.close();
+    this.drizzleDb.close();
   }
 }

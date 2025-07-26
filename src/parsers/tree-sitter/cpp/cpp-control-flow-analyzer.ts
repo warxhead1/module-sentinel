@@ -708,12 +708,28 @@ export class CppControlFlowAnalyzer {
   }
 
   private findFunctionBody(functionNode: Parser.SyntaxNode): Parser.SyntaxNode | null {
+    // First try the 'body' field
+    const bodyField = functionNode.childForFieldName('body');
+    if (bodyField && bodyField.type === 'compound_statement') {
+      return bodyField;
+    }
+    
+    // Fallback to searching for compound_statement
     for (let i = 0; i < functionNode.childCount; i++) {
       const child = functionNode.child(i);
       if (child && child.type === 'compound_statement') {
         return child;
       }
     }
+    
+    this.logger.debug('Function body not found', {
+      nodeType: functionNode.type,
+      childCount: functionNode.childCount,
+      childTypes: Array.from({length: functionNode.childCount}, (_, i) => 
+        functionNode.child(i)?.type || 'null'
+      )
+    });
+    
     return null;
   }
 

@@ -14,12 +14,19 @@
     "build:dashboard": "vite build",
     "dev": "npm run build && concurrently --names \"TSC,SERVER\" --prefix-colors \"blue,green\" \"tsc --watch\" \"npm run dev:server\"",
     "dev:server": "sleep 2 && NODE_ENV=development tsx --watch unified-server.ts",
+    "dev:no-watch": "npm run build && NODE_ENV=development tsx unified-server.ts",
     "start": "npm run build && tsx unified-server.ts",
     "test": "npm run build && tsx test/TestRunner.ts",
     "test:filter": "npm run build && tsx test/TestRunner.ts --filter",
     "test:semantic": "npm run build && tsx test/TestRunner.ts --semantic",
     "test:fast": "npm run build && tsx test/TestRunner.ts --skip-index",
     "test:reset": "npm run build && tsx test/TestRunner.ts --rebuild",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:report": "playwright show-report",
+    "test:e2e:update-snapshots": "playwright test --update-snapshots",
     "lint": "eslint src/**/*.ts test/**/*.ts",
     "lint:fix": "eslint src/**/*.ts test/**/*.ts --fix",
     "lint:check": "eslint src/**/*.ts test/**/*.ts --max-warnings 0",
@@ -31,6 +38,7 @@
     "clean": "rm -rf dist dashboard/dist",
     "test:workflows": "tsx scripts/test-workflows.ts",
     "test:workflows:validate": "tsx scripts/test-workflows.ts --validate-only",
+    "log:indexer": "tsx scripts/tail-indexer-log.ts",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -60,6 +68,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/d3": "^7.4.3",
     "@types/express": "^5.0.3",
@@ -77,6 +86,7 @@
     "husky": "^9.1.7",
     "js-yaml": "^4.1.0",
     "lint-staged": "^16.1.2",
+    "playwright": "^1.54.1",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vite": "^7.0.5",

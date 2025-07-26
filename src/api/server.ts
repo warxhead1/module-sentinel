@@ -25,6 +25,7 @@ import { SearchRoutes } from "./routes/search.js";
 import { CrossLanguageRoutes } from "./routes/cross-language.js";
 import { AnalyticsRoutes } from "./routes/analytics.js";
 import { SemanticInsightsRoutes } from "./routes/semantic-insights.js";
+import { IndexingRoutes } from "./routes/indexing.js";
 
 // Types
 import type { Request, Response } from "./types/express.js";
@@ -58,6 +59,7 @@ export class ModernApiServer {
   private crossLanguageRoutes: CrossLanguageRoutes;
   private analyticsRoutes: AnalyticsRoutes;
   private semanticInsightsRoutes: SemanticInsightsRoutes;
+  private indexingRoutes: IndexingRoutes;
 
   constructor(database: Database.Database, port: number = 8080) {
     this.db = database;
@@ -82,6 +84,7 @@ export class ModernApiServer {
     this.crossLanguageRoutes = new CrossLanguageRoutes(this.dbService);
     this.analyticsRoutes = new AnalyticsRoutes(database);
     this.semanticInsightsRoutes = new SemanticInsightsRoutes(database);
+    this.indexingRoutes = new IndexingRoutes(this.indexingService);
 
     // Create HTTP server
     this.server = http.createServer(this.handleRequest.bind(this));
@@ -435,6 +438,10 @@ export class ModernApiServer {
         await this.semanticInsightsRoutes.analyzeFiles(req, res);
       } else if (apiPath === "/rebuild-index" && req.method === "POST") {
         await this.statsRoutes.rebuildIndex(req, res);
+      } else if (apiPath === "/indexing/status" && req.method === "GET") {
+        await this.indexingRoutes.getStatus(req, res);
+      } else if (apiPath === "/indexing/logs" && req.method === "GET") {
+        await this.indexingRoutes.getLogs(req, res);
       } else if (apiPath === "/patterns" && req.method === "GET") {
         await this.statsRoutes.getPatterns(req, res);
       } else if (apiPath === "/performance/hotspots" && req.method === "GET") {
@@ -555,13 +562,13 @@ export class ModernApiServer {
    * Handle static file requests (dashboard files)
    */
   private async handleStaticRequest(pathname: string, res: Response) {
-    // Serve dashboard files
-    const dashboardDir = path.join(process.cwd(), "dashboard");
+    // Serve dashboard files from dist directory (built files)
+    const dashboardDir = path.join(process.cwd(), "dashboard", "dist");
 
     // Default to index.html for SPA routing
     let filePath: string;
     if (pathname === "/" || !path.extname(pathname)) {
-      filePath = path.join(dashboardDir, "spa", "index.html");
+      filePath = path.join(dashboardDir, "index.html");
     } else {
       filePath = path.join(dashboardDir, pathname.substring(1));
     }
@@ -777,8 +784,8 @@ export class ModernApiServer {
       }
 
       // Get project details from database
-      const projects = this.dbService.getProjects();
-      const project = projects.find((p) => p.id === projectId);
+      const projects = await this.dbService.getProjects();
+      const project = projects.find((p: any) => p.id === projectId);
 
       if (!project) {
         const response: ApiResponse = {
@@ -841,7 +848,7 @@ export class ModernApiServer {
           debugMode:
             indexingOptions.debugMode ?? process.env.NODE_ENV === "development",
           enableSemanticAnalysis:
-            indexingOptions.enableSemanticAnalysis ?? true,
+            indexingOptions.enableSemanticAnalysis ?? true, // Enabled by default
           enablePatternDetection:
             indexingOptions.enablePatternDetection ?? true,
           parallelism: indexingOptions.parallelism || 4,
@@ -966,8 +973,8 @@ export class ModernApiServer {
       }
 
       // Get project details from database
-      const projects = this.dbService.getProjects();
-      const project = projects.find((p) => p.id === projectId);
+      const projects = await this.dbService.getProjects();
+      const project = projects.find((p: any) => p.id === projectId);
 
       if (!project) {
         const response: ApiResponse = {

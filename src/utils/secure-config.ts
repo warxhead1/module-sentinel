@@ -5,7 +5,16 @@ import * as os from "os";
 export interface SecureConfig {
   geminiApiKey?: string;
   projectPath?: string;
+  projectName?: string;
+  languages?: string[];
   dbPath?: string;
+  debugMode?: boolean;
+  scanPaths?: string[];
+  filePatterns?: {
+    source?: string[];
+    header?: string[];
+  };
+  enableMultiLanguage?: boolean;
 }
 
 export class SecureConfigManager {
@@ -19,22 +28,43 @@ export class SecureConfigManager {
   );
 
   /**
-   * Get configuration from secure location
+   * Get configuration from multiple sources (secure + project config)
    */
   static getConfig(): SecureConfig {
+    let config: SecureConfig = {};
+
     try {
+      // First, try to read project config (module-sentinel.config.json)
+      const projectConfigPaths = [
+        path.join(process.cwd(), "module-sentinel.config.json"),
+        path.join(process.cwd(), "module-sentinel.config.example.json")
+      ];
+
+      for (const projectConfigPath of projectConfigPaths) {
+        if (fs.existsSync(projectConfigPath)) {
+          try {
+            const projectConfigData = fs.readFileSync(projectConfigPath, "utf8");
+            const projectConfig = JSON.parse(projectConfigData) as SecureConfig;
+            config = { ...config, ...projectConfig };
+            break;
+          } catch (error) {
+            console.warn(`[SecureConfig] Error reading project config ${projectConfigPath}:`, error);
+          }
+        }
+      }
+
       // Ensure config directory exists
       if (!fs.existsSync(SecureConfigManager.CONFIG_DIR)) {
         fs.mkdirSync(SecureConfigManager.CONFIG_DIR, { mode: 0o700 }); // Only owner can read/write
       }
 
-      // Try to read config file
+      // Try to read secure config file (overrides project config for sensitive data)
       if (fs.existsSync(SecureConfigManager.CONFIG_FILE)) {
         const configData = fs.readFileSync(
           SecureConfigManager.CONFIG_FILE,
           "utf8"
         );
-        const config = JSON.parse(configData) as SecureConfig;
+        const secureConfig = JSON.parse(configData) as SecureConfig;
 
         // Validate file permissions (should be 600 - only owner read/write)
         const stats = fs.statSync(SecureConfigManager.CONFIG_FILE);
@@ -51,13 +81,14 @@ export class SecureConfigManager {
           );
         }
 
-        return config;
+        // Merge secure config over project config
+        config = { ...config, ...secureConfig };
       }
     } catch (error) {
       console.error("[SecureConfig] Error reading config:", error);
     }
 
-    return {};
+    return config;
   }
 
   /**

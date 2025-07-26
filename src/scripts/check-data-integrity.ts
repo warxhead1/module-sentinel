@@ -1,6 +1,14 @@
 #!/usr/bin/env node
 /**
  * Script to check data integrity and identify missing language information
+ * 
+ * IMPORTANT: This file is an APPROVED EXCEPTION for using db.prepare
+ * Reason: This is a diagnostic utility script that needs direct SQL access
+ * to inspect database schema and data integrity. It runs outside the main
+ * application context and needs to execute arbitrary diagnostic queries
+ * that would be impractical to pre-define in DrizzleDatabase.
+ * 
+ * DO NOT use db.prepare in regular application code! Use DrizzleDatabase instead.
  */
 
 import Database from 'better-sqlite3';

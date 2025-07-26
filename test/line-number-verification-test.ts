@@ -155,7 +155,7 @@ async function runLineNumberVerificationTest(): Promise<void> {
   await initializer.initialize();
 
   let passedLanguages = 0;
-  let totalLanguages = testCases.length;
+  const totalLanguages = testCases.length;
   let totalIssues = 0;
 
   for (const testCase of testCases) {

@@ -18,7 +18,7 @@ export class StatsRoutes {
    */
   async getStats(req: Request, res: Response) {
     try {
-      const stats = this.dbService.getStats();
+      const stats = await this.dbService.getStats();
 
       const response: ApiResponse = {
         success: true,
@@ -62,7 +62,7 @@ export class StatsRoutes {
           .filter((id) => !isNaN(id));
       }
 
-      const namespaces = this.dbService.getNamespaces({
+      const namespaces = await this.dbService.getNamespaces({
         projectIds,
         languageId,
       });
@@ -112,7 +112,7 @@ export class StatsRoutes {
           .filter((id) => !isNaN(id));
       }
 
-      const symbols = this.dbService.getNamespaceSymbols(namespace, {
+      const symbols = await this.dbService.getNamespaceSymbols(namespace, {
         projectIds,
         languageId,
         limit: Math.min(limit, 500),
@@ -146,7 +146,7 @@ export class StatsRoutes {
    */
   async getProjects(req: Request, res: Response) {
     try {
-      const projects = this.dbService.getProjects();
+      const projects = await this.dbService.getProjects();
 
       const response: ApiResponse = {
         success: true,
@@ -174,7 +174,7 @@ export class StatsRoutes {
    */
   async getLanguages(req: Request, res: Response) {
     try {
-      const languages = this.dbService.getLanguages();
+      const languages = await this.dbService.getLanguages();
 
       const response: ApiResponse = {
         success: true,
@@ -205,7 +205,7 @@ export class StatsRoutes {
     
     try {
       // Comprehensive health checks
-      const dbHealth = this.dbService.healthCheck();
+      const dbHealth = await this.dbService.healthCheck();
       const memoryUsage = process.memoryUsage();
       const uptime = process.uptime();
       
@@ -300,7 +300,7 @@ export class StatsRoutes {
 
       try {
         // Get all projects from database
-        const projects = this.dbService.getProjects();
+        const projects = await this.dbService.getProjects();
         
         if (projects.length === 0) {
           sendUpdate("No projects found to rebuild");
@@ -437,7 +437,7 @@ export class StatsRoutes {
       }
 
       // Get project details from database
-      const projects = this.dbService.getProjects();
+      const projects = await this.dbService.getProjects();
       const project = projects.find((p) => p.id === projectId);
 
       if (!project) {

@@ -6,6 +6,7 @@
 
 import { ILanguageParser, ParseResult as IParseResult, ParserConfig, UniversalSymbolKind, UniversalRelationshipType, UniversalSymbol, UniversalRelationship } from '../language-parser-interface.js';
 import { OptimizedCppTreeSitterParser } from '../tree-sitter/optimized-cpp-parser.js';
+import { SymbolInfo, RelationshipInfo, PatternInfo } from '../tree-sitter/parser-types.js';
 import { Database } from 'better-sqlite3';
 import * as fs from 'fs/promises';
 
@@ -90,7 +91,7 @@ export class CppLanguageParser implements ILanguageParser {
     
     // Convert to IParseResult format
     return {
-      symbols: result.symbols.map(s => ({
+      symbols: result.symbols.map((s: SymbolInfo) => ({
         id: `${filePath}:${s.line}:${s.column}`,
         name: s.name,
         qualifiedName: s.qualifiedName,
@@ -115,7 +116,7 @@ export class CppLanguageParser implements ILanguageParser {
         semanticTags: s.semanticTags,
         confidence: s.confidence
       })),
-      relationships: result.relationships.map(r => ({
+      relationships: result.relationships.map((r: RelationshipInfo) => ({
         fromSymbolId: `${filePath}:${r.fromName}`,
         toSymbolId: `${filePath}:${r.toName}`,
         type: this.mapRelationshipType(r.relationshipType),
@@ -129,7 +130,7 @@ export class CppLanguageParser implements ILanguageParser {
           bridgeType: r.bridgeType
         }
       })),
-      patterns: result.patterns.map(p => ({
+      patterns: result.patterns.map((p: PatternInfo) => ({
         type: p.patternType,
         confidence: p.confidence,
         symbols: [], // TODO: extract symbol IDs

@@ -116,33 +116,46 @@ export class CppAstUtils {
   extractFunctionModifiers(node: Parser.SyntaxNode, content: string): string[] {
     const modifiers: string[] = [];
 
-    // Check each child for modifiers
-    for (let i = 0; i < node.childCount; i++) {
-      const child = node.child(i);
-      if (!child) continue;
-
-      const childText = this.getNodeText(child, content);
-
+    // Recursive helper to find modifiers in the tree
+    const findModifiers = (n: Parser.SyntaxNode) => {
       // Storage class specifiers
-      if (child.type === 'storage_class_specifier') {
-        modifiers.push(childText);
+      if (n.type === 'storage_class_specifier') {
+        modifiers.push(this.getNodeText(n, content));
       }
 
       // Function specifiers
-      if (child.type === 'function_specifier') {
-        modifiers.push(childText);
+      if (n.type === 'function_specifier') {
+        modifiers.push(this.getNodeText(n, content));
       }
 
       // Type qualifiers
-      if (child.type === 'type_qualifier') {
-        modifiers.push(childText);
+      if (n.type === 'type_qualifier') {
+        modifiers.push(this.getNodeText(n, content));
       }
 
-      // Check for specific keywords
-      if (['virtual', 'override', 'final', 'constexpr', 'inline', 'explicit', 'static'].includes(childText)) {
-        modifiers.push(childText);
+      // Virtual specifiers (override, final)
+      if (n.type === 'virtual_specifier') {
+        modifiers.push(this.getNodeText(n, content));
       }
-    }
+
+      // Check for specific keywords in text
+      const nodeText = this.getNodeText(n, content);
+      if (['virtual', 'override', 'final', 'constexpr', 'inline', 'explicit', 'static'].includes(nodeText)) {
+        if (!modifiers.includes(nodeText)) {
+          modifiers.push(nodeText);
+        }
+      }
+
+      // Recurse into children
+      for (let i = 0; i < n.childCount; i++) {
+        const child = n.child(i);
+        if (child) {
+          findModifiers(child);
+        }
+      }
+    };
+
+    findModifiers(node);
 
     return modifiers;
   }
@@ -214,7 +227,15 @@ export class CppAstUtils {
     
     // Extract just the class name (without namespace)
     const className = parentClassName.split('::').pop() || '';
-    return functionName === className;
+    
+    // Check for exact match (normal constructor)
+    if (functionName === className) return true;
+    
+    // Check for copy/move constructors
+    // These might appear as "ClassName(ClassName" due to how tree-sitter parses
+    if (functionName.startsWith(className + '(')) return true;
+    
+    return false;
   }
 
   /**
@@ -271,40 +292,39 @@ export class CppAstUtils {
 
     if (node.type !== 'base_class_clause') return inheritance;
 
-    // Parse base class list
+    // tree-sitter-cpp base_class_clause structure:
+    // base_class_clause -> : access_specifier type_identifier [, access_specifier type_identifier]*
+    
+    let currentAccessLevel: 'public' | 'private' | 'protected' = 'private';
+    let isVirtual = false;
+    
     for (let i = 0; i < node.childCount; i++) {
       const child = node.child(i);
       if (!child) continue;
 
-      if (child.type === 'base_class_specifier') {
-        let className = '';
-        let accessLevel: 'public' | 'private' | 'protected' = 'private';
-        let isVirtual = false;
+      const text = this.getNodeText(child, content);
 
-        // Extract components
-        for (let j = 0; j < child.childCount; j++) {
-          const grandChild = child.child(j);
-          if (!grandChild) continue;
-
-          const text = this.getNodeText(grandChild, content);
-
-          if (grandChild.type === 'type_identifier' || grandChild.type === 'qualified_identifier') {
-            className = text;
-          } else if (text === 'public' || text === 'private' || text === 'protected') {
-            accessLevel = text as 'public' | 'private' | 'protected';
-          } else if (text === 'virtual') {
-            isVirtual = true;
-          }
+      if (child.type === 'access_specifier') {
+        // Extract access level (public, private, protected)
+        if (text === 'public' || text === 'private' || text === 'protected') {
+          currentAccessLevel = text as 'public' | 'private' | 'protected';
         }
-
-        if (className) {
-          inheritance.push({
-            className,
-            accessLevel,
-            isVirtual
-          });
-        }
+      } else if (child.type === 'type_identifier' || child.type === 'qualified_identifier') {
+        // Found base class name
+        inheritance.push({
+          className: text,
+          accessLevel: currentAccessLevel,
+          isVirtual: isVirtual
+        });
+        
+        // Reset for next base class (in case of multiple inheritance)
+        isVirtual = false;
+        currentAccessLevel = 'private'; // Default for next class
+      } else if (text === 'virtual') {
+        // Virtual inheritance
+        isVirtual = true;
       }
+      // Skip ':' and ',' tokens
     }
 
     return inheritance;

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import type { Symbol, Relationship } from '../../shared/types/api';
 import { RippleEffectTracker, ImpactPrediction, RippleNode } from '../../analysis/ripple-effect-tracker.js';
 import { ChangeImpactPredictor, ChangeScenario, ImpactVisualization } from '../../analysis/change-impact-predictor.js';
+import { DrizzleDatabase, type DrizzleDb } from '../../database/drizzle-db.js';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -126,14 +127,19 @@ export class AnalyticsService {
   private rippleTracker: RippleEffectTracker;
   private changePredictor: ChangeImpactPredictor;
   private dbPath: string;
+  private drizzleDb: DrizzleDatabase;
 
-  constructor(private db: Database.Database) {
+  constructor(database: Database.Database | DrizzleDb) {
+    // Create DrizzleDatabase wrapper
+    this.drizzleDb = new DrizzleDatabase(database);
+    
     // Get database path
-    this.dbPath = (db as any).name || path.join(os.homedir(), '.module-sentinel', 'development.db');
+    const rawDb = this.drizzleDb.getRawDb();
+    this.dbPath = (rawDb as any).name || path.join(os.homedir(), '.module-sentinel', 'development.db');
     
     // Initialize advanced analyzers
-    this.rippleTracker = new RippleEffectTracker(this.dbPath);
-    this.changePredictor = new ChangeImpactPredictor(this.dbPath);
+    this.rippleTracker = new RippleEffectTracker(this.drizzleDb);
+    this.changePredictor = new ChangeImpactPredictor(this.drizzleDb);
   }
 
   /**
@@ -141,14 +147,14 @@ export class AnalyticsService {
    */
   async analyzeDataFlow(symbolId: string): Promise<DataFlowNode> {
     // Get symbol details
-    const symbol = this.getSymbol(parseInt(symbolId));
+    const symbol = await this.getSymbol(parseInt(symbolId));
     if (!symbol) {
       throw new Error(`Symbol ${symbolId} not found`);
     }
 
     // Get all relationships involving this symbol
-    const incomingRels = this.getIncomingRelationships(parseInt(symbolId));
-    const outgoingRels = this.getOutgoingRelationships(parseInt(symbolId));
+    const incomingRels = await this.getIncomingRelationships(parseInt(symbolId));
+    const outgoingRels = await this.getOutgoingRelationships(parseInt(symbolId));
 
     // Build data flow node
     const node: DataFlowNode = {
@@ -168,7 +174,7 @@ export class AnalyticsService {
    */
   async analyzeImpact(symbolId: string): Promise<ImpactAnalysis> {
     // Fallback to basic analysis if symbol doesn't exist
-    const symbol = this.getSymbol(parseInt(symbolId));
+    const symbol = await this.getSymbol(parseInt(symbolId));
     if (!symbol) {
       return {
         directImpact: [],
@@ -243,7 +249,7 @@ export class AnalyticsService {
     symbolId: string, 
     changeType: 'type' | 'value' | 'signature' | 'dependency' | 'removal' = 'type'
   ): Promise<EnhancedImpactAnalysis> {
-    const symbol = this.getSymbol(parseInt(symbolId));
+    const symbol = await this.getSymbol(parseInt(symbolId));
     if (!symbol) {
       throw new Error(`Symbol ${symbolId} not found`);
     }
@@ -275,7 +281,7 @@ export class AnalyticsService {
    * Create and analyze multiple change scenarios
    */
   async analyzeScenarios(symbolId: string, customScenarios?: Partial<ChangeScenario>[]): Promise<ScenarioAnalysis> {
-    const symbol = this.getSymbol(parseInt(symbolId));
+    const symbol = await this.getSymbol(parseInt(symbolId));
     if (!symbol) {
       throw new Error(`Symbol ${symbolId} not found`);
     }
@@ -382,7 +388,7 @@ export class AnalyticsService {
       visited.add(id);
 
       if (distance > 0) {
-        const impactNode = this.createImpactNode(id, distance);
+        const impactNode = await this.createImpactNode(id, distance);
         
         if (distance === 1) {
           directImpact.push(impactNode);
@@ -396,7 +402,7 @@ export class AnalyticsService {
         rippleWaves.get(distance)!.push(impactNode);
       }
 
-      const dependents = this.getDependentSymbols(id);
+      const dependents = await this.getDependentSymbols(id);
       for (const dep of dependents) {
         if (!visited.has(dep.id)) {
           queue.push({ id: dep.id, distance: distance + 1 });
@@ -447,16 +453,16 @@ export class AnalyticsService {
     const patterns: PatternAnalysis[] = [];
 
     // Detect Singleton pattern
-    patterns.push(...this.detectSingletonPattern());
+    patterns.push(...await this.detectSingletonPattern());
 
     // Detect Factory pattern
-    patterns.push(...this.detectFactoryPattern());
+    patterns.push(...await this.detectFactoryPattern());
 
     // Detect Observer pattern
-    patterns.push(...this.detectObserverPattern());
+    patterns.push(...await this.detectObserverPattern());
 
     // Detect anti-patterns
-    patterns.push(...this.detectAntiPatterns());
+    patterns.push(...await this.detectAntiPatterns());
 
     return patterns;
   }
@@ -470,7 +476,7 @@ export class AnalyticsService {
     const bottlenecks: Bottleneck[] = [];
 
     // Simulate multiple execution paths
-    const simulatedPaths = this.generateExecutionPaths(parseInt(entryPoint), 10);
+    const simulatedPaths = await this.generateExecutionPaths(parseInt(entryPoint), 10);
 
     for (const path of simulatedPaths) {
       // Track hotspots
@@ -493,7 +499,7 @@ export class AnalyticsService {
     // Identify bottlenecks
     for (const [nodeId, hotspot] of hotspots) {
       if (hotspot.callCount > 5) {
-        const deps = this.getDependentSymbols(nodeId);
+        const deps = await this.getDependentSymbols(nodeId);
         if (deps.length > 10) {
           bottlenecks.push({
             symbolId: nodeId,
@@ -516,15 +522,15 @@ export class AnalyticsService {
    * Calculate advanced complexity metrics
    */
   async calculateComplexity(symbolId: string): Promise<ComplexityMetrics> {
-    const symbol = this.getSymbol(parseInt(symbolId));
+    const symbol = await this.getSymbol(parseInt(symbolId));
     if (!symbol) {
       throw new Error(`Symbol ${symbolId} not found`);
     }
 
     const cyclomatic = symbol.complexity || 1;
     const cognitive = this.calculateCognitiveComplexity(symbol);
-    const dataFlow = this.calculateDataFlowComplexity(parseInt(symbolId));
-    const architectural = this.calculateArchitecturalComplexity(parseInt(symbolId));
+    const dataFlow = await this.calculateDataFlowComplexity(parseInt(symbolId));
+    const architectural = await this.calculateArchitecturalComplexity(parseInt(symbolId));
 
     const totalScore = (cyclomatic * 0.25) + (cognitive * 0.25) + 
                       (dataFlow * 0.25) + (architectural * 0.25);
@@ -562,34 +568,89 @@ export class AnalyticsService {
 
   // Helper methods
 
-  private getSymbol(id: number): Symbol | null {
-    const stmt = this.db.prepare(`
-      SELECT * FROM universal_symbols WHERE id = ?
-    `);
-    return stmt.get(id) as Symbol;
+  private async getSymbol(id: number): Promise<Symbol | null> {
+    const symbol = await this.drizzleDb.getSymbol(id);
+    if (!symbol) return null;
+    return {
+      id: symbol.id,
+      name: symbol.name,
+      qualified_name: symbol.qualifiedName || '',
+      kind: symbol.kind,
+      file_path: symbol.filePath,
+      line: symbol.line,
+      column: symbol.column,
+      end_line: symbol.endLine,
+      end_column: symbol.endColumn,
+      return_type: symbol.returnType,
+      signature: symbol.signature,
+      visibility: symbol.visibility,
+      namespace: symbol.namespace,
+      parent_symbol_id: symbol.parentSymbolId,
+      is_exported: symbol.isExported || false,
+      is_async: symbol.isAsync || false,
+      is_abstract: symbol.isAbstract || false,
+      language_features: symbol.languageFeatures,
+      semantic_tags: symbol.semanticTags,
+      confidence: symbol.confidence || 1.0,
+      created_at: symbol.createdAt || new Date().toISOString(),
+      updated_at: symbol.updatedAt,
+      language_id: symbol.languageId || 0,
+      project_id: symbol.projectId || 0
+    } as Symbol;
   }
 
-  private getIncomingRelationships(symbolId: number): Relationship[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM universal_relationships WHERE to_symbol_id = ?
-    `);
-    return stmt.all(symbolId) as Relationship[];
+  private async getIncomingRelationships(symbolId: number): Promise<Relationship[]> {
+    const relationships = await this.drizzleDb.getIncomingRelationships(symbolId);
+    return relationships.map(rel => ({
+      id: rel.id,
+      project_id: rel.projectId || 0,
+      from_symbol_id: rel.fromSymbolId || 0,
+      to_symbol_id: rel.toSymbolId || 0,
+      type: rel.type,
+      confidence: rel.confidence,
+      context_line: rel.contextLine,
+      context_column: rel.contextColumn,
+      context_snippet: rel.contextSnippet,
+      metadata: rel.metadata || undefined,
+      created_at: rel.createdAt || new Date().toISOString()
+    }));
   }
 
-  private getOutgoingRelationships(symbolId: number): Relationship[] {
-    const stmt = this.db.prepare(`
-      SELECT * FROM universal_relationships WHERE from_symbol_id = ?
-    `);
-    return stmt.all(symbolId) as Relationship[];
+  private async getOutgoingRelationships(symbolId: number): Promise<Relationship[]> {
+    const relationships = await this.drizzleDb.getOutgoingRelationships(symbolId);
+    return relationships.map(rel => ({
+      id: rel.id,
+      project_id: rel.projectId || 0,
+      from_symbol_id: rel.fromSymbolId || 0,
+      to_symbol_id: rel.toSymbolId || 0,
+      type: rel.type,
+      confidence: rel.confidence,
+      context_line: rel.contextLine,
+      context_column: rel.contextColumn,
+      context_snippet: rel.contextSnippet,
+      metadata: rel.metadata || undefined,
+      created_at: rel.createdAt || new Date().toISOString()
+    }));
   }
 
-  private getDependentSymbols(symbolId: number): Symbol[] {
-    const stmt = this.db.prepare(`
-      SELECT s.* FROM universal_symbols s
-      JOIN universal_relationships r ON s.id = r.from_symbol_id
-      WHERE r.to_symbol_id = ?
-    `);
-    return stmt.all(symbolId) as Symbol[];
+  private async getDependentSymbols(symbolId: number): Promise<Symbol[]> {
+    const symbols = await this.drizzleDb.getDependentSymbols(symbolId);
+    return symbols.map(symbol => ({
+      id: symbol.id,
+      name: symbol.name,
+      qualified_name: symbol.qualified_name || '',
+      kind: symbol.kind,
+      namespace: symbol.namespace || '',
+      file_path: symbol.file_path,
+      line: symbol.line,
+      column: symbol.column,
+      visibility: symbol.visibility || undefined,
+      signature: symbol.signature || undefined,
+      return_type: symbol.return_type || undefined,
+      is_exported: symbol.is_exported ?? false,
+      language_id: symbol.language_id,
+      project_id: symbol.project_id
+    }));
   }
 
   private inferDataType(symbol: Symbol): string | undefined {
@@ -627,8 +688,8 @@ export class AnalyticsService {
     return [];
   }
 
-  private createImpactNode(symbolId: number, distance: number): ImpactNode {
-    const symbol = this.getSymbol(symbolId);
+  private async createImpactNode(symbolId: number, distance: number): Promise<ImpactNode> {
+    const symbol = await this.getSymbol(symbolId);
     return {
       symbolId,
       symbolName: symbol?.name || 'Unknown',
@@ -650,19 +711,9 @@ export class AnalyticsService {
     return Math.min(100, directScore + indirectScore);
   }
 
-  private detectSingletonPattern(): PatternAnalysis[] {
-    // Look for classes with private constructors and getInstance methods
-    const stmt = this.db.prepare(`
-      SELECT s.* FROM universal_symbols s
-      WHERE s.kind = 'class'
-      AND EXISTS (
-        SELECT 1 FROM universal_symbols m
-        WHERE m.parent_symbol_id = s.id
-        AND m.name LIKE '%getInstance%'
-      )
-    `);
-    
-    const candidates = stmt.all() as Symbol[];
+  private async detectSingletonPattern(): Promise<PatternAnalysis[]> {
+    // Use DrizzleDatabase method
+    const candidates = await this.drizzleDb.findSingletonPatterns();
     
     return candidates.map(symbol => ({
       patternType: 'Singleton',
@@ -672,15 +723,9 @@ export class AnalyticsService {
     }));
   }
 
-  private detectFactoryPattern(): PatternAnalysis[] {
-    // Look for classes/functions with 'create' or 'factory' in the name
-    const stmt = this.db.prepare(`
-      SELECT * FROM universal_symbols
-      WHERE (name LIKE '%Factory%' OR name LIKE '%create%')
-      AND kind IN ('class', 'function')
-    `);
-    
-    const candidates = stmt.all() as Symbol[];
+  private async detectFactoryPattern(): Promise<PatternAnalysis[]> {
+    // Use DrizzleDatabase method
+    const candidates = await this.drizzleDb.findFactoryPatterns();
     
     return candidates.map(symbol => ({
       patternType: 'Factory',
@@ -690,19 +735,9 @@ export class AnalyticsService {
     }));
   }
 
-  private detectObserverPattern(): PatternAnalysis[] {
-    // Look for subscribe/notify patterns
-    const stmt = this.db.prepare(`
-      SELECT DISTINCT s.* FROM universal_symbols s
-      WHERE s.kind = 'class'
-      AND (
-        EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%subscribe%')
-        OR EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%notify%')
-        OR EXISTS (SELECT 1 FROM universal_symbols m WHERE m.parent_symbol_id = s.id AND m.name LIKE '%observer%')
-      )
-    `);
-    
-    const candidates = stmt.all() as Symbol[];
+  private async detectObserverPattern(): Promise<PatternAnalysis[]> {
+    // Use DrizzleDatabase method
+    const candidates = await this.drizzleDb.findObserverPatterns();
     
     return candidates.map(symbol => ({
       patternType: 'Observer',
@@ -712,20 +747,11 @@ export class AnalyticsService {
     }));
   }
 
-  private detectAntiPatterns(): PatternAnalysis[] {
+  private async detectAntiPatterns(): Promise<PatternAnalysis[]> {
     const patterns: PatternAnalysis[] = [];
 
     // God Class - classes with too many methods
-    const godClassStmt = this.db.prepare(`
-      SELECT s.*, COUNT(m.id) as method_count
-      FROM universal_symbols s
-      LEFT JOIN universal_symbols m ON m.parent_symbol_id = s.id AND m.kind = 'function'
-      WHERE s.kind = 'class'
-      GROUP BY s.id
-      HAVING method_count > 20
-    `);
-
-    const godClasses = godClassStmt.all() as any[];
+    const godClasses = await this.drizzleDb.findGodClasses(20);
     
     patterns.push(...godClasses.map(symbol => ({
       patternType: 'God Class Anti-Pattern',
@@ -738,11 +764,11 @@ export class AnalyticsService {
     return patterns;
   }
 
-  private generateExecutionPaths(entryPoint: number, count: number): ExecutionPath[] {
+  private async generateExecutionPaths(entryPoint: number, count: number): Promise<ExecutionPath[]> {
     const paths: ExecutionPath[] = [];
     
     for (let i = 0; i < count; i++) {
-      const path = this.tracePath(entryPoint, new Set(), []);
+      const path = await this.tracePath(entryPoint, new Set(), []);
       if (path.length > 0) {
         paths.push({
           nodes: path,
@@ -755,7 +781,7 @@ export class AnalyticsService {
     return paths;
   }
 
-  private tracePath(current: number, visited: Set<number>, path: number[]): number[] {
+  private async tracePath(current: number, visited: Set<number>, path: number[]): Promise<number[]> {
     if (visited.has(current) || path.length > 20) {
       return path;
     }
@@ -763,14 +789,14 @@ export class AnalyticsService {
     visited.add(current);
     path.push(current);
 
-    const outgoing = this.getOutgoingRelationships(current);
+    const outgoing = await this.getOutgoingRelationships(current);
     if (outgoing.length === 0) {
       return path;
     }
 
     // Randomly pick a path
     const next = outgoing[Math.floor(Math.random() * outgoing.length)];
-    return this.tracePath(next.to_symbol_id, visited, path);
+    return await this.tracePath(next.to_symbol_id, visited, path);
   }
 
   private calculateCognitiveComplexity(symbol: Symbol): number {
@@ -800,16 +826,16 @@ export class AnalyticsService {
     }
   }
 
-  private calculateDataFlowComplexity(symbolId: number): number {
-    const incoming = this.getIncomingRelationships(symbolId);
-    const outgoing = this.getOutgoingRelationships(symbolId);
+  private async calculateDataFlowComplexity(symbolId: number): Promise<number> {
+    const incoming = await this.getIncomingRelationships(symbolId);
+    const outgoing = await this.getOutgoingRelationships(symbolId);
     
     return incoming.length + outgoing.length;
   }
 
-  private calculateArchitecturalComplexity(symbolId: number): number {
-    const dependencies = this.getDependentSymbols(symbolId);
-    const incoming = this.getIncomingRelationships(symbolId);
+  private async calculateArchitecturalComplexity(symbolId: number): Promise<number> {
+    const dependencies = await this.getDependentSymbols(symbolId);
+    const incoming = await this.getIncomingRelationships(symbolId);
     
     // Fan-out and fan-in
     return dependencies.length + incoming.length;
@@ -851,18 +877,9 @@ export class AnalyticsService {
     };
   }
 
-  private calculateTestCoverage(symbolId: string, impactAnalysis: ImpactAnalysis): any {
-    // Query code flow paths for coverage data
-    const coverageStmt = this.db.prepare(`
-      SELECT 
-        COUNT(DISTINCT cfp.id) as total_paths,
-        COUNT(DISTINCT CASE WHEN cfp.coverage > 0 THEN cfp.id END) as covered_paths,
-        AVG(cfp.coverage) as avg_coverage
-      FROM code_flow_paths cfp
-      WHERE cfp.start_symbol_id = ? OR cfp.end_symbol_id = ?
-    `);
-    
-    const coverage = coverageStmt.get(symbolId, symbolId) as any;
+  private async calculateTestCoverage(symbolId: string, impactAnalysis: ImpactAnalysis): Promise<any> {
+    // Query code flow paths for coverage data using DrizzleDatabase
+    const coverage = await this.drizzleDb.getCodeFlowCoverage(symbolId);
     
     // Get affected symbols that lack test coverage
     const affectedSymbols = [
@@ -870,22 +887,10 @@ export class AnalyticsService {
       ...impactAnalysis.indirectImpact
     ];
     
-    const uncoveredStmt = this.db.prepare(`
-      SELECT s.id, s.name, s.qualified_name
-      FROM universal_symbols s
-      WHERE s.id IN (${affectedSymbols.map(() => '?').join(',')})
-      AND NOT EXISTS (
-        SELECT 1 FROM code_flow_paths cfp
-        WHERE (cfp.start_symbol_id = s.id OR cfp.end_symbol_id = s.id)
-        AND cfp.coverage > 0
-      )
-    `);
-    
-    const uncoveredSymbols = affectedSymbols.length > 0 
-      ? uncoveredStmt.all(...affectedSymbols.map(s => s.symbolId)) as any[]
-      : [];
+    const affectedSymbolIds = affectedSymbols.map(s => s.symbolId);
+    const uncoveredSymbols = await this.drizzleDb.findUncoveredSymbols(affectedSymbolIds);
 
-    const percentage = coverage?.avg_coverage || 0;
+    const percentage = coverage?.avgCoverage || 0;
     
     return {
       affected: affectedSymbols.length,
@@ -894,77 +899,43 @@ export class AnalyticsService {
       uncoveredSymbols: uncoveredSymbols.map(s => ({
         id: s.id,
         name: s.name,
-        qualifiedName: s.qualified_name
+        qualifiedName: s.qualifiedName
       }))
     };
   }
 
-  private calculatePerformanceImpact(symbolId: string, impactAnalysis: ImpactAnalysis): any {
-    // Get complexity metrics for the symbol
-    const complexityStmt = this.db.prepare(`
-      SELECT 
-        cyclomatic_complexity,
-        cognitive_complexity,
-        nesting_depth,
-        has_loops,
-        has_recursion
-      FROM cpp_method_complexity
-      WHERE symbol_id = ?
-    `);
-    
-    const complexity = complexityStmt.get(symbolId) as any;
+  private async calculatePerformanceImpact(symbolId: string, impactAnalysis: ImpactAnalysis): Promise<any> {
+    // Get complexity metrics for the symbol using DrizzleDatabase
+    const complexity = await this.drizzleDb.getMethodComplexity(symbolId);
     
     // Get execution time estimates from call chains
-    const executionStmt = this.db.prepare(`
-      SELECT 
-        AVG(estimated_execution_time_ms) as avg_execution_time,
-        MAX(estimated_execution_time_ms) as max_execution_time
-      FROM call_chains
-      WHERE entry_point_id = ?
-    `);
-    
-    const execution = executionStmt.get(symbolId) as any;
+    const execution = await this.drizzleDb.getExecutionTimeEstimates(symbolId);
     
     // Calculate estimated impact
-    const baseLatency = execution?.avg_execution_time || 10;
+    const baseLatency = execution?.avgExecutionTime || 10;
     const complexityFactor = complexity ? 
-      (complexity.cyclomatic_complexity + complexity.cognitive_complexity) / 20 : 1;
+      ((complexity.cyclomaticComplexity || 0) + (complexity.cognitiveComplexity || 0)) / 20 : 1;
     const impactFactor = impactAnalysis.severityScore / 100;
     
     return {
       estimatedLatency: Math.round(baseLatency * complexityFactor * impactFactor),
       memoryDelta: Math.round(complexityFactor * 10), // Rough estimate
       cpuDelta: Math.round(complexityFactor * 5),
-      ioOperations: complexity?.has_loops ? 20 + Math.round(complexityFactor * 10) : 10
+      ioOperations: complexity?.hasLoops ? 20 + Math.round(complexityFactor * 10) : 10
     };
   }
 
-  private calculateBuildImpact(symbolId: string, impactAnalysis: ImpactAnalysis): any {
+  private async calculateBuildImpact(symbolId: string, impactAnalysis: ImpactAnalysis): Promise<any> {
     // Get all affected files
-    const affectedFilesStmt = this.db.prepare(`
-      SELECT DISTINCT s.file_path
-      FROM universal_symbols s
-      WHERE s.id IN (${[...impactAnalysis.directImpact, ...impactAnalysis.indirectImpact]
-        .map(() => '?').join(',') || '?'})
-    `);
-    
     const affectedSymbolIds = [...impactAnalysis.directImpact, ...impactAnalysis.indirectImpact]
       .map(n => n.symbolId);
     
-    const affectedFiles = affectedSymbolIds.length > 0
-      ? affectedFilesStmt.all(...(affectedSymbolIds.length > 0 ? affectedSymbolIds : [symbolId])) as any[]
-      : [];
+    const affectedFiles = await this.drizzleDb.getDistinctFilePaths(
+      affectedSymbolIds.length > 0 ? affectedSymbolIds : [parseInt(symbolId)]
+    );
     
     // Get dependencies
-    const dependencyStmt = this.db.prepare(`
-      SELECT DISTINCT s2.namespace
-      FROM universal_relationships r
-      JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
-      JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
-      WHERE s1.id = ? AND r.type IN ('imports', 'includes')
-    `);
-    
-    const dependencies = dependencyStmt.all(symbolId) as any[];
+    const dependencies = await this.drizzleDb.getImportDependencies(symbolId);
     
     // Estimate build times based on file count and complexity
     const fileCount = affectedFiles.length;
@@ -979,23 +950,17 @@ export class AnalyticsService {
     };
   }
 
-  private calculateTeamImpact(symbolId: string, impactAnalysis: ImpactAnalysis): any {
+  private async calculateTeamImpact(symbolId: string, impactAnalysis: ImpactAnalysis): Promise<any> {
     // Determine teams based on file paths and namespaces
     const affectedSymbols = [
       ...impactAnalysis.directImpact,
       ...impactAnalysis.indirectImpact
     ];
     
-    const namespaceStmt = this.db.prepare(`
-      SELECT DISTINCT namespace
-      FROM universal_symbols
-      WHERE id IN (${affectedSymbols.map(() => '?').join(',') || '?'})
-      AND namespace IS NOT NULL
-    `);
-    
-    const namespaces = affectedSymbols.length > 0
-      ? namespaceStmt.all(...(affectedSymbols.length > 0 ? affectedSymbols.map(s => s.symbolId) : [symbolId])) as any[]
-      : [];
+    const affectedSymbolIds = affectedSymbols.map(s => s.symbolId);
+    const namespaces = await this.drizzleDb.getDistinctNamespaces(
+      affectedSymbolIds.length > 0 ? affectedSymbolIds : [parseInt(symbolId)]
+    );
     
     // Map namespaces to teams (simplified heuristic)
     const teamMap: Record<string, string> = {
@@ -1011,10 +976,12 @@ export class AnalyticsService {
     
     const affectedTeams = new Set<string>();
     namespaces.forEach(ns => {
-      const namespace = ns.namespace.toLowerCase();
-      for (const [key, team] of Object.entries(teamMap)) {
-        if (namespace.includes(key)) {
-          affectedTeams.add(team);
+      if (ns.namespace) {
+        const namespace = ns.namespace.toLowerCase();
+        for (const [key, team] of Object.entries(teamMap)) {
+          if (namespace.includes(key)) {
+            affectedTeams.add(team);
+          }
         }
       }
     });
@@ -1037,17 +1004,8 @@ export class AnalyticsService {
     // Get real complexity metrics
     const complexityMetrics = await this.calculateComplexity(symbolId);
     
-    // Get pattern violations
-    const violationStmt = this.db.prepare(`
-      SELECT COUNT(*) as violation_count
-      FROM detected_patterns
-      WHERE pattern_type LIKE '%Anti-Pattern%'
-      AND id IN (
-        SELECT pattern_id FROM pattern_symbols WHERE symbol_id = ?
-      )
-    `);
-    
-    const violations = violationStmt.get(symbolId) as any;
+    // Get pattern violations using DrizzleDatabase
+    const violationCount = await this.drizzleDb.getAntiPatternViolations(symbolId);
     
     // Calculate stability based on relationships
     const stabilityScore = 100 - Math.min(90, impactAnalysis.severityScore);
@@ -1059,7 +1017,7 @@ export class AnalyticsService {
     const overall = Math.round(
       (impactAnalysis.severityScore * 0.4) +
       (complexityMetrics.totalScore * 0.3) +
-      ((violations?.violation_count || 0) * 10 * 0.2) +
+      (violationCount * 10 * 0.2) +
       ((100 - stabilityScore) * 0.1)
     );
     
@@ -1094,46 +1052,21 @@ export class AnalyticsService {
   }
 
   private async calculateSymbolHealth(symbolId: number): Promise<any> {
-    // Get complexity metrics
-    const complexityStmt = this.db.prepare(`
-      SELECT 
-        cyclomatic_complexity,
-        cognitive_complexity,
-        nesting_depth,
-        line_count,
-        has_loops,
-        has_recursion
-      FROM cpp_method_complexity
-      WHERE symbol_id = ?
-    `);
-    
-    const complexity = complexityStmt.get(symbolId) as any;
+    // Get complexity metrics using DrizzleDatabase
+    const complexity = await this.drizzleDb.getMethodComplexity(symbolId.toString());
     
     // Get test coverage
-    const coverageStmt = this.db.prepare(`
-      SELECT AVG(coverage) as test_coverage
-      FROM code_flow_paths
-      WHERE start_symbol_id = ? OR end_symbol_id = ?
-    `);
-    
-    const coverage = coverageStmt.get(symbolId, symbolId) as any;
+    const coverage = await this.drizzleDb.getSymbolTestCoverage(symbolId.toString());
     
     // Get modification frequency (simplified - would need git integration)
     const modificationFrequency = Math.random() * 10; // Placeholder
     
     // Get bug density from semantic insights
-    const bugStmt = this.db.prepare(`
-      SELECT COUNT(*) as bug_count
-      FROM semantic_insights
-      WHERE insight_type = 'bug' 
-      AND affected_symbols LIKE ?
-    `);
-    
-    const bugs = bugStmt.get(`%${symbolId}%`) as any;
+    const bugCount = await this.drizzleDb.getBugCount(symbolId.toString());
     
     // Calculate health score
-    const testCoverage = (coverage?.test_coverage || 0) * 100;
-    const cyclomaticComplexity = complexity?.cyclomatic_complexity || 10;
+    const testCoverage = (coverage?.testCoverage || 0) * 100;
+    const cyclomaticComplexity = complexity?.cyclomaticComplexity || 10;
     const stability = 100 - (modificationFrequency * 10);
     
     let health: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
@@ -1157,8 +1090,8 @@ export class AnalyticsService {
       stability,
       lastModified: new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000),
       modificationFrequency,
-      bugDensity: bugs?.bug_count || 0,
-      technicalDebt: Math.round((100 - testCoverage) + cyclomaticComplexity + (bugs?.bug_count || 0) * 5)
+      bugDensity: bugCount,
+      technicalDebt: Math.round((100 - testCoverage) + cyclomaticComplexity + bugCount * 5)
     };
   }
 
@@ -1169,29 +1102,21 @@ export class AnalyticsService {
     const impactAnalysis = await this.analyzeEnhancedImpact(symbolId);
     const recommendations: any[] = [];
     
-    // Get semantic insights for the symbol
-    const insightStmt = this.db.prepare(`
-      SELECT *
-      FROM semantic_insights
-      WHERE affected_symbols LIKE ?
-      ORDER BY priority ASC, severity DESC
-      LIMIT 10
-    `);
-    
-    const insights = insightStmt.all(`%${symbolId}%`) as any[];
+    // Get semantic insights for the symbol using DrizzleDatabase
+    const insights = await this.drizzleDb.getSemanticInsights(symbolId, 10);
     
     // Convert insights to recommendations
     insights.forEach((insight, index) => {
       recommendations.push({
         id: insight.id.toString(),
-        type: this.mapInsightTypeToRecommendationType(insight.insight_type),
+        type: this.mapInsightTypeToRecommendationType(insight.insightType),
         priority: this.mapSeverityToPriority(insight.severity),
         title: insight.title || this.generateRecommendationTitle(insight),
         reasoning: insight.reasoning || insight.description,
         estimatedEffort: this.estimateEffortHours(insight),
         riskReduction: Math.round(insight.confidence * 30),
-        suggestedApproach: this.parseSuggestedApproach(insight.suggestions),
-        affectedSymbols: this.parseAffectedSymbols(insight.affected_symbols),
+        suggestedApproach: this.parseSuggestedApproach(insight.reasoning), // Use reasoning as suggestions fallback
+        affectedSymbols: this.parseAffectedSymbols(insight.affectedSymbols),
         prerequisites: []
       });
     });
@@ -1243,17 +1168,17 @@ export class AnalyticsService {
 
   private generateRecommendationTitle(insight: any): string {
     const titles: Record<string, string> = {
-      'refactoring_opportunity': `Refactor ${insight.source_context || 'code'}`,
-      'test_coverage_gap': `Add tests for ${insight.source_context || 'uncovered code'}`,
-      'documentation_needed': `Document ${insight.source_context || 'API'}`,
-      'performance_concern': `Optimize ${insight.source_context || 'performance bottleneck'}`,
-      'security_vulnerability': `Fix security issue in ${insight.source_context || 'code'}`,
-      'architectural_violation': `Fix architectural violation in ${insight.source_context || 'module'}`,
-      'code_duplication': `Remove duplication in ${insight.source_context || 'code'}`,
-      'complexity_warning': `Reduce complexity in ${insight.source_context || 'method'}`
+      'refactoring_opportunity': `Refactor ${insight.sourceContext || 'code'}`,
+      'test_coverage_gap': `Add tests for ${insight.sourceContext || 'uncovered code'}`,
+      'documentation_needed': `Document ${insight.sourceContext || 'API'}`,
+      'performance_concern': `Optimize ${insight.sourceContext || 'performance bottleneck'}`,
+      'security_vulnerability': `Fix security issue in ${insight.sourceContext || 'code'}`,
+      'architectural_violation': `Fix architectural violation in ${insight.sourceContext || 'module'}`,
+      'code_duplication': `Remove duplication in ${insight.sourceContext || 'code'}`,
+      'complexity_warning': `Reduce complexity in ${insight.sourceContext || 'method'}`
     };
     
-    return titles[insight.insight_type] || 'Improve code quality';
+    return titles[insight.insightType] || 'Improve code quality';
   }
 
   private estimateEffortHours(insight: any): number {
@@ -1268,7 +1193,7 @@ export class AnalyticsService {
       'complexity_warning': 6
     };
     
-    return effortMap[insight.insight_type] || 4;
+    return effortMap[insight.insightType] || 4;
   }
 
   private parseSuggestedApproach(suggestions: string | any): string[] {

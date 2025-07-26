@@ -51,7 +51,7 @@ export class CrossLanguageRoutes {
       if (source_language) params.push(source_language);
       if (relationship_type) params.push(relationship_type);
       
-      const symbols = this.dbService.executeQuery(sql, params);
+      const symbols = await this.dbService.executeQuery(sql, params);
       
       const response: ApiResponse = {
         success: true,
@@ -111,7 +111,7 @@ export class CrossLanguageRoutes {
       if (target_language) params.push(target_language);
       params.push(parseInt(String(limit), 10));
       
-      const relationships = this.dbService.executeQuery(sql, params);
+      const relationships = await this.dbService.executeQuery(sql, params);
       
       const response: ApiResponse = {
         success: true,
@@ -173,7 +173,7 @@ export class CrossLanguageRoutes {
           s.name ASC
       `;
       
-      const entryPoints = this.dbService.executeQuery(sql);
+      const entryPoints = await this.dbService.executeQuery(sql);
       
       const response: ApiResponse = {
         success: true,
@@ -213,7 +213,7 @@ export class CrossLanguageRoutes {
         ORDER BY total_cross_language_relationships DESC
       `;
       
-      const languages = this.dbService.executeQuery(sql);
+      const languages = await this.dbService.executeQuery(sql);
       
       const response: ApiResponse = {
         success: true,

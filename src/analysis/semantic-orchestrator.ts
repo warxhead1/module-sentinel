@@ -18,6 +18,7 @@ import { PatternRecognitionEngine, PatternAnalysisInput, PatternAnalysisResult }
 import { LocalCodeEmbeddingEngine, CodeEmbedding } from "./local-code-embedding.js";
 import { SemanticClusteringEngine, SemanticCluster } from "./semantic-clustering-engine.js";
 import { SemanticInsightsGenerator, SemanticInsight } from "./semantic-insights-generator.js";
+import { OptimizedEmbeddingProcessor } from "./optimized-embedding-processor.js";
 
 // Re-export types for backward compatibility
 export {
@@ -85,6 +86,7 @@ export class SemanticOrchestrator {
   private embeddingEngine: LocalCodeEmbeddingEngine;
   private clusteringEngine: SemanticClusteringEngine;
   private insightsGenerator: SemanticInsightsGenerator;
+  private optimizedProcessor: OptimizedEmbeddingProcessor;
   private db?: Database;
 
   constructor(db?: Database, _options: SemanticAnalysisOptions = {}) {
@@ -98,6 +100,12 @@ export class SemanticOrchestrator {
     this.embeddingEngine = new LocalCodeEmbeddingEngine(db!);
     this.clusteringEngine = new SemanticClusteringEngine(db!, this.embeddingEngine);
     this.insightsGenerator = new SemanticInsightsGenerator(db!, this.clusteringEngine, this.embeddingEngine);
+    this.optimizedProcessor = new OptimizedEmbeddingProcessor({
+      batchSize: 100,
+      parallelWorkers: 4,
+      enableCaching: true,
+      dimensions: 256
+    });
   }
 
   /**
@@ -578,19 +586,75 @@ export class SemanticOrchestrator {
       if (options.enableEmbeddingGeneration && symbols.length > 0) {
         this.logger.debug('Generating embeddings for symbols', { symbolCount: symbols.length });
         
-        for (const symbol of symbols) {
-          try {
+        try {
+          // Use batch processing for better performance
+          const embeddingItems = await Promise.all(symbols.map(async symbol => {
             const context = contexts.get(symbol.name);
-            const embedding = await this.embeddingEngine.generateEmbedding(
+            const symbolRelationships = relationships.filter(r => 
+              r.fromName === symbol.name || r.toName === symbol.name
+            );
+            
+            // Extract features for batch processing
+            const features = await this.embeddingEngine.extractFeatures(
               symbol,
               tree,
               content,
               context,
-              relationships.filter(r => r.fromName === symbol.name || r.toName === symbol.name)
+              symbolRelationships
             );
-            embeddings.push(embedding);
-          } catch (error) {
-            errors.push(`Failed to generate embedding for ${symbol.name}: ${error}`);
+            
+            return {
+              id: symbol.name,
+              features
+            };
+          }));
+          
+          // Process in optimized batches
+          const embeddingMap = await this.optimizedProcessor.processBatch(embeddingItems);
+          
+          // Convert back to CodeEmbedding format
+          for (const symbol of symbols) {
+            const embedding = embeddingMap.get(symbol.name);
+            if (embedding) {
+              embeddings.push({
+                symbolId: (symbol as any).id || symbol.name,
+                embedding,
+                dimensions: 256,
+                version: "optimized-v1",
+                metadata: {
+                  symbolType: (symbol as any).type || (symbol as any).symbolType || "unknown",
+                  semanticRole: String(contexts.get(symbol.name)?.semanticRole || "unknown"),
+                  complexity: symbol.complexity || 0,
+                  confidence: symbol.confidence || 1.0,
+                  generatedAt: Date.now(),
+                  algorithm: "optimized-batch",
+                  featureCount: embedding.length
+                }
+              });
+            }
+          }
+          
+          this.logger.info('Batch embedding generation completed', {
+            requested: symbols.length,
+            completed: embeddings.length
+          });
+        } catch (error) {
+          errors.push(`Failed to generate embeddings: ${error}`);
+          // Fall back to individual processing if batch fails
+          for (const symbol of symbols) {
+            try {
+              const context = contexts.get(symbol.name);
+              const embedding = await this.embeddingEngine.generateEmbedding(
+                symbol,
+                tree,
+                content,
+                context,
+                relationships.filter(r => r.fromName === symbol.name || r.toName === symbol.name)
+              );
+              embeddings.push(embedding);
+            } catch (error) {
+              errors.push(`Failed to generate embedding for ${symbol.name}: ${error}`);
+            }
           }
         }
       }
@@ -676,45 +740,99 @@ export class SemanticOrchestrator {
       options
     });
 
+    const startTime = Date.now();
     const allContexts = new Map<string, SemanticContext>();
+    const allEmbeddings: CodeEmbedding[] = [];
+    const allClusters: SemanticCluster[] = [];
+    const allInsights: SemanticInsight[] = [];
+    const allErrors: string[] = [];
     let totalSymbolsAnalyzed = 0;
     
-    // Process each file separately using existing batch processing
+    // Process each file separately using processSymbols to get full results
     for (const file of fileData) {
-      const fileResults = await this.extractSemanticContextBatch(
-        file.symbols,
-        file.ast,
-        file.sourceCode,
-        file.relationships,
-        {
-          ...options,
-          filePath: file.filePath,
-          debugMode: options.debugMode
+      try {
+        const fileResult = await this.processSymbols(
+          file.symbols,
+          file.relationships,
+          file.ast,
+          file.sourceCode,
+          file.filePath,
+          options
+        );
+        
+        // Merge contexts with file-prefixed keys
+        for (const [symbolKey, context] of fileResult.contexts) {
+          const uniqueKey = `${file.filePath}:${symbolKey}`;
+          allContexts.set(uniqueKey, context);
         }
-      );
-      
-      // Merge results into single map with file-prefixed keys
-      for (const [symbolKey, context] of fileResults) {
-        const uniqueKey = `${file.filePath}:${symbolKey}`;
-        allContexts.set(uniqueKey, context);
-        totalSymbolsAnalyzed++;
+        
+        // Collect embeddings
+        allEmbeddings.push(...fileResult.embeddings);
+        
+        // Collect clusters (if any were generated per-file)
+        allClusters.push(...fileResult.clusters);
+        
+        // Collect insights (if any were generated per-file)
+        allInsights.push(...fileResult.insights);
+        
+        // Collect errors
+        allErrors.push(...fileResult.stats.errors);
+        
+        totalSymbolsAnalyzed += fileResult.stats.symbolsAnalyzed;
+      } catch (error) {
+        this.logger.error('Failed to process file', error, { filePath: file.filePath });
+        allErrors.push(`Failed to process ${file.filePath}: ${error}`);
       }
     }
     
-    // Return properly structured result
+    // If clustering is enabled and we have embeddings from multiple files,
+    // we can do a final clustering across all files
+    if (options.enableClustering && allEmbeddings.length > 3) {
+      try {
+        const crossFileClusters = await this.clusteringEngine.clusterSymbols(
+          allEmbeddings, 
+          allContexts
+        );
+        allClusters.push(...crossFileClusters);
+      } catch (error) {
+        allErrors.push(`Cross-file clustering failed: ${error}`);
+      }
+    }
+    
+    // If insight generation is enabled and we have clusters,
+    // generate insights across all files
+    if (options.enableInsightGeneration && (allClusters.length > 0 || allContexts.size > 0)) {
+      try {
+        // Convert file data to symbols array for insight generation
+        const allSymbols = fileData.flatMap(f => f.symbols);
+        const crossFileInsights = await this.insightsGenerator.generateInsights(
+          allClusters,
+          allEmbeddings,
+          allContexts,
+          allSymbols
+        );
+        allInsights.push(...crossFileInsights);
+      } catch (error) {
+        allErrors.push(`Cross-file insight generation failed: ${error}`);
+      }
+    }
+    
+    const processingTime = Date.now() - startTime;
+    
+    // Return properly structured result with actual data
     return {
       contexts: allContexts,
-      embeddings: [], // TODO: Extract embeddings if needed
-      clusters: [], // TODO: Extract clusters if needed  
-      insights: [], // TODO: Extract insights if needed
+      embeddings: allEmbeddings,
+      clusters: allClusters,
+      insights: allInsights,
       stats: {
         symbolsAnalyzed: totalSymbolsAnalyzed,
         contextsExtracted: allContexts.size,
-        embeddingsGenerated: 0,
-        clustersCreated: 0,
-        insightsGenerated: 0,
-        processingTimeMs: 0, // TODO: Calculate actual time
-        errors: [] // No errors for now, could be populated with actual errors if needed
+        embeddingsGenerated: allEmbeddings.length,
+        clustersCreated: allClusters.length,
+        insightsGenerated: allInsights.length,
+        processingTimeMs: processingTime,
+        errors: allErrors
       }
     };
   }

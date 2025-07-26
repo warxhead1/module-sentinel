@@ -162,7 +162,7 @@ export abstract class OptimizedTreeSitterBaseParser {
     let tree: Parser.Tree | undefined;
     let parseMethod: "tree-sitter" | "pattern-fallback" | "pattern-supplement" =
       "tree-sitter";
-    let parseErrors: string[] = [];
+    const parseErrors: string[] = [];
 
     // Always try tree-sitter first (it's faster and more accurate)
     try {
@@ -299,6 +299,10 @@ export abstract class OptimizedTreeSitterBaseParser {
       }
     }
 
+    // Clean up the tree to free memory
+    // Note: tree-sitter trees are garbage collected automatically
+    tree = undefined;
+
     // Cache the result
     this.setCachedParse(filePath, result);
 
@@ -347,6 +351,11 @@ export abstract class OptimizedTreeSitterBaseParser {
    * Get cached parse result if available
    */
   protected getCachedParse(filePath: string): any | null {
+    // Disable cache during indexing to save memory
+    if (this.options.cacheStrategy === 'minimal' || process.env.NODE_ENV === 'test') {
+      return null;
+    }
+    
     const cached = OptimizedTreeSitterBaseParser.parseCache.get(filePath);
     if (cached && Date.now() - cached.timestamp < this.getCacheTTL()) {
       return cached;

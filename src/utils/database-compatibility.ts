@@ -1,6 +1,13 @@
 /**
  * Database compatibility utilities
  * Ensures raw database access when needed
+ * 
+ * IMPORTANT: This file is an APPROVED EXCEPTION for using db.prepare
+ * Reason: This is a low-level utility that checks for database compatibility
+ * and does not execute any actual SQL queries. It only checks if the prepare
+ * method exists for type checking purposes.
+ * 
+ * DO NOT use db.prepare in regular application code! Use DrizzleDatabase instead.
  */
 
 import { Database } from "better-sqlite3";

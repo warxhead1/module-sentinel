@@ -378,7 +378,7 @@ export class JavaLanguageParser extends OptimizedTreeSitterBaseParser {
   
   private getQualifiedName(node: Parser.SyntaxNode, content: string): string {
     let current = node;
-    let parts = [this.getNodeText(node, content)];
+    const parts = [this.getNodeText(node, content)];
     while (current.parent) {
       current = current.parent;
       if (current.type === 'class_declaration' || current.type === 'interface_declaration' || current.type === 'method_declaration') {

@@ -5,7 +5,7 @@
  * Provides backward compatibility while eliminating code duplication.
  */
 
-import { CodeMetricsAnalyzer, MetricsInput, ComplexityMetrics as CoreComplexityMetrics } from '../../analysis/code-metrics-analyzer.js';
+// Browser-compatible complexity analyzer - removed server-side dependencies
 
 // Dashboard-specific interface for backward compatibility
 export interface ComplexityMetrics {
@@ -38,56 +38,147 @@ export interface ComplexityInput {
 }
 
 export class ComplexityAnalyzer {
-  private coreAnalyzer: CodeMetricsAnalyzer;
-
   constructor() {
-    this.coreAnalyzer = new CodeMetricsAnalyzer();
+    // Browser-compatible implementation
   }
 
   /**
    * Analyze complexity metrics for given control flow
-   * Now uses the consolidated CodeMetricsAnalyzer
+   * Browser-compatible implementation
    */
   analyze(input: ComplexityInput): ComplexityMetrics {
-    // Prepare input for the consolidated analyzer
-    const metricsInput: MetricsInput = {
-      nodes: input.nodes,
-      edges: input.edges,
-      blocks: input.blocks,
-      symbol: input.symbol,
-      source: input.code,
-      language: 'typescript' // Dashboard typically analyzes TypeScript/JavaScript
+    // Calculate metrics directly in browser
+    const cyclomaticComplexity = this.calculateCyclomaticComplexity(input);
+    const cognitiveComplexity = this.calculateCognitiveComplexity(input);
+    const nestingDepth = this.calculateNestingDepth(input);
+    const paramCount = this.calculateParamCount(input);
+    const localVariables = this.estimateLocalVariables(input);
+    const returnPoints = this.countReturnPoints(input);
+    const halsteadMetrics = this.calculateHalsteadMetrics(input);
+    const maintainabilityIndex = this.calculateMaintainabilityIndex({
+      cyclomaticComplexity,
+      halsteadMetrics,
+      linesOfCode: input.nodes.length
+    });
+
+    return {
+      cyclomaticComplexity,
+      cognitiveComplexity,
+      nestingDepth,
+      paramCount,
+      localVariables,
+      returnPoints,
+      halsteadMetrics,
+      maintainabilityIndex
     };
-
-    // Use consolidated analyzer
-    const coreMetrics = this.coreAnalyzer.analyzeComplexity(metricsInput);
-
-    // Transform to dashboard-compatible format
-    return this.transformToDashboardFormat(coreMetrics, input);
   }
 
   /**
-   * Transform core metrics to dashboard-compatible format
+   * Calculate cyclomatic complexity
    */
-  private transformToDashboardFormat(coreMetrics: CoreComplexityMetrics, input: ComplexityInput): ComplexityMetrics {
+  private calculateCyclomaticComplexity(input: ComplexityInput): number {
+    // M = E - N + 2P (where P = 1 for connected components)
+    const edges = input.edges.length;
+    const nodes = input.nodes.length;
+    return Math.max(1, edges - nodes + 2);
+  }
+
+  /**
+   * Calculate cognitive complexity
+   */
+  private calculateCognitiveComplexity(input: ComplexityInput): number {
+    let complexity = 0;
+    let nestingLevel = 0;
+
+    input.blocks.forEach(block => {
+      if (block.block_type === 'condition' || block.block_type === 'conditional') {
+        complexity += 1 + nestingLevel;
+      } else if (block.block_type === 'loop') {
+        complexity += 1 + nestingLevel;
+        nestingLevel++;
+      }
+    });
+
+    return complexity;
+  }
+
+  /**
+   * Calculate nesting depth
+   */
+  private calculateNestingDepth(input: ComplexityInput): number {
+    let maxDepth = 0;
+    let currentDepth = 0;
+
+    input.blocks.forEach(block => {
+      if (block.block_type === 'loop' || block.block_type === 'condition') {
+        currentDepth++;
+        maxDepth = Math.max(maxDepth, currentDepth);
+      }
+    });
+
+    return maxDepth;
+  }
+
+  /**
+   * Calculate parameter count
+   */
+  private calculateParamCount(input: ComplexityInput): number {
+    if (input.symbol && input.symbol.signature) {
+      const paramMatch = input.symbol.signature.match(/\(([^)]*)\)/);
+      if (paramMatch && paramMatch[1]) {
+        const params = paramMatch[1].split(',').filter((p: string) => p.trim());
+        return params.length;
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Calculate Halstead metrics
+   */
+  private calculateHalsteadMetrics(input: ComplexityInput): HalsteadMetrics {
+    // Simplified Halstead calculation for browser
+    const operators = input.edges.length;
+    const operands = input.nodes.length;
+    const uniqueOperators = Math.ceil(operators * 0.7);
+    const uniqueOperands = Math.ceil(operands * 0.6);
+
+    const vocabulary = uniqueOperators + uniqueOperands;
+    const length = operators + operands;
+    const volume = length * Math.log2(vocabulary);
+    const difficulty = (uniqueOperators / 2) * (operands / uniqueOperands);
+    const effort = volume * difficulty;
+    const time = effort / 18;
+    const bugs = volume / 3000;
+
     return {
-      cyclomaticComplexity: coreMetrics.cyclomaticComplexity,
-      cognitiveComplexity: coreMetrics.cognitiveComplexity,
-      nestingDepth: coreMetrics.nestingDepth,
-      paramCount: coreMetrics.parameterCount,
-      localVariables: coreMetrics.localVariables || this.estimateLocalVariables(input),
-      returnPoints: coreMetrics.returnPoints || this.countReturnPoints(input),
-      halsteadMetrics: {
-        vocabulary: coreMetrics.halstead.vocabulary,
-        length: coreMetrics.halstead.length,
-        volume: Math.round(coreMetrics.halstead.volume),
-        difficulty: Math.round(coreMetrics.halstead.difficulty * 10) / 10,
-        effort: Math.round(coreMetrics.halstead.effort),
-        time: Math.round(coreMetrics.halstead.timeToImplement),
-        bugs: Math.round(coreMetrics.halstead.bugs * 100) / 100
-      },
-      maintainabilityIndex: Math.round(coreMetrics.maintainabilityIndex)
+      vocabulary,
+      length,
+      volume,
+      difficulty,
+      effort,
+      time,
+      bugs
     };
+  }
+
+  /**
+   * Calculate maintainability index
+   */
+  private calculateMaintainabilityIndex(metrics: {
+    cyclomaticComplexity: number;
+    halsteadMetrics: HalsteadMetrics;
+    linesOfCode: number;
+  }): number {
+    const { cyclomaticComplexity, halsteadMetrics, linesOfCode } = metrics;
+    
+    // Simplified maintainability index calculation
+    const mi = 171 - 
+      5.2 * Math.log(halsteadMetrics.volume) -
+      0.23 * cyclomaticComplexity -
+      16.2 * Math.log(linesOfCode);
+
+    return Math.max(0, Math.min(100, mi));
   }
 
   // Legacy methods for backward compatibility - simplified since core logic is in consolidated analyzer

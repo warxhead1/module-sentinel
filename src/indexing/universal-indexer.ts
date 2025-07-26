@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import * as fs from "fs/promises";
 import * as path from "path";
 import { EventEmitter } from "events";
+import { Worker } from "worker_threads";
 
 // Import schema
 import {
@@ -36,6 +37,7 @@ import { IndexerSymbolResolver } from "./indexer-symbol-resolver.js";
 import { IndexerFileDiscovery } from "./indexer-file-discovery.js";
 import { IndexerSemanticProcessor } from "./indexer-semantic-processor.js";
 import { IndexerDatabaseManager } from "./indexer-database-manager.js";
+import { IndexerLogger } from "../utils/indexer-logger.js";
 
 export interface IndexOptions {
   projectPath: string;
@@ -51,6 +53,7 @@ export interface IndexOptions {
   enablePatternDetection?: boolean;
   maxFiles?: number;
   progressCallback?: (progress: IndexProgress) => void;
+  useWorkerThreads?: boolean; // New option for worker threads
 }
 
 export interface IndexProgress {
@@ -102,6 +105,7 @@ export class UniversalIndexer extends EventEmitter {
   private fileDiscovery: IndexerFileDiscovery;
   private semanticProcessor: IndexerSemanticProcessor;
   private databaseManager: IndexerDatabaseManager;
+  private logger: IndexerLogger;
 
   constructor(db: Database, options: IndexOptions) {
     super();
@@ -131,10 +135,11 @@ export class UniversalIndexer extends EventEmitter {
       parallelism: options.parallelism || 4,
       debugMode: options.debugMode || false,
       forceReindex: options.forceReindex || false,
-      enableSemanticAnalysis: options.enableSemanticAnalysis ?? (process.env.NODE_ENV === 'test' ? false : true),
+      enableSemanticAnalysis: options.enableSemanticAnalysis ?? true, // Enabled by default
       enablePatternDetection: options.enablePatternDetection ?? true,
       maxFiles: options.maxFiles || 0,
       progressCallback: options.progressCallback || (() => {}),
+      useWorkerThreads: options.useWorkerThreads ?? false, // Default to false for backward compatibility
     };
 
     this.progress = {
@@ -161,6 +166,15 @@ export class UniversalIndexer extends EventEmitter {
     this.fileDiscovery = new IndexerFileDiscovery(this.rawDb, this.parsers);
     this.semanticProcessor = new IndexerSemanticProcessor(this.rawDb, this.semanticOrchestrator);
     this.databaseManager = new IndexerDatabaseManager(this.rawDb);
+    
+    // Initialize logger
+    this.logger = new IndexerLogger(true);
+    this.logger.info('Universal Indexer initialized', {
+      projectPath: this.options.projectPath,
+      languages: this.options.languages,
+      parallelism: this.options.parallelism,
+      enableSemanticAnalysis: this.options.enableSemanticAnalysis
+    });
   }
 
   /**
@@ -328,10 +342,21 @@ export class UniversalIndexer extends EventEmitter {
 
       // Phase 2: File discovery
       this.updateProgress("discovery");
+      this.logger.info('Starting file discovery', { 
+        projectPath: this.options.projectPath,
+        excludePatterns: this.options.excludePatterns 
+      });
+      
       const files = await this.fileDiscovery.discoverFiles(this.options);
       this.progress.totalFiles = files.length;
+      
+      this.logger.info('File discovery completed', { 
+        totalFiles: files.length,
+        firstFiles: files.slice(0, 5).map(f => path.basename(f))
+      });
 
       if (files.length === 0) {
+        this.logger.warn('No files found to index');
         return this.createResult(
           projectId,
           startTime,
@@ -412,6 +437,19 @@ export class UniversalIndexer extends EventEmitter {
     projectId: number,
     languageMap: Map<string, number>
   ): Promise<Array<ParseResult & { filePath: string }>> {
+    // Check memory pressure and adjust parallelism
+    const { checkMemory } = await import("../utils/memory-monitor.js");
+    const memStats = checkMemory();
+    let effectiveParallelism = this.options.parallelism;
+    
+    if (memStats.percentUsed > 80) {
+      effectiveParallelism = Math.max(1, Math.floor(this.options.parallelism / 2));
+      this.logger.warn('Reducing parallelism due to memory pressure', {
+        originalParallelism: this.options.parallelism,
+        effectiveParallelism,
+        memoryPercent: memStats.percentUsed.toFixed(2)
+      });
+    }
     // SCALE 2: Incremental parsing - filter files that need reparsing
     const filesToParse = await this.fileDiscovery.filterChangedFiles(files, projectId);
 
@@ -422,16 +460,42 @@ export class UniversalIndexer extends EventEmitter {
     }
 
     const results: Array<ParseResult & { filePath: string }> = [];
-    const chunks = this.chunkArray(
-      filesToParse,
-      Math.ceil(filesToParse.length / this.options.parallelism)
-    );
+    
+    // Calculate optimal chunk size (aim for smaller chunks to avoid blocking)
+    const optimalChunkSize = Math.max(1, Math.ceil(filesToParse.length / (effectiveParallelism * 2)));
+    const chunks = this.chunkArray(filesToParse, optimalChunkSize);
+    
+    this.logger.info('Chunking strategy', {
+      totalFiles: filesToParse.length,
+      parallelism: effectiveParallelism,
+      chunkSize: optimalChunkSize,
+      numberOfChunks: chunks.length,
+      chunksizes: chunks.map(c => c.length),
+      memoryPercent: memStats.percentUsed.toFixed(2)
+    });
 
-    // Process chunks in parallel
-    const promises = chunks.map((chunk) =>
-      this.parseFileChunk(chunk, projectId, languageMap)
-    );
-    const chunkResults = await Promise.all(promises);
+    // Process chunks with limited concurrency based on memory pressure
+    const maxConcurrentChunks = memStats.percentUsed > 80 ? 2 : effectiveParallelism;
+    const chunkResults: Array<ParseResult & { filePath: string }>[] = [];
+    
+    // Process chunks in batches to limit concurrency
+    for (let i = 0; i < chunks.length; i += maxConcurrentChunks) {
+      const batch = chunks.slice(i, i + maxConcurrentChunks);
+      const batchPromises = batch.map((chunk, index) =>
+        this.parseFileChunk(chunk, projectId, languageMap)
+          .catch(error => {
+            this.logger.error(`Chunk ${i + index} failed`, error, { chunkSize: chunk.length });
+            return []; // Return empty array on chunk failure to continue with other chunks
+          })
+      );
+      const batchResults = await Promise.all(batchPromises);
+      chunkResults.push(...batchResults);
+      
+      // Add small delay between batches to prevent CPU overload
+      if (i + maxConcurrentChunks < chunks.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
 
     // Flatten results
     for (const chunkResult of chunkResults) {
@@ -449,26 +513,104 @@ export class UniversalIndexer extends EventEmitter {
     projectId: number,
     languageMap: Map<string, number>
   ): Promise<Array<ParseResult & { filePath: string }>> {
-    // Process files within the chunk in parallel for maximum concurrency
-    const parsePromises = files.map(async (file) => {
+    const results: Array<ParseResult & { filePath: string }> = [];
+    
+    this.logger.info(`Starting chunk with ${files.length} files`, {
+      firstFile: files[0] ? path.basename(files[0]) : 'none',
+      lastFile: files[files.length - 1] ? path.basename(files[files.length - 1]) : 'none'
+    });
+    
+    // Process files sequentially with event loop yielding
+    for (const file of files) {
       try {
+        // Yield to event loop periodically to prevent blocking
+        await new Promise(resolve => setImmediate(resolve));
+        
+        this.logger.info(`Parsing file ${this.progress.processedFiles + 1}/${this.progress.totalFiles}`, {
+          file: path.basename(file),
+          fullPath: file
+        });
+        
         const result = await this.parseFile(file, projectId, languageMap);
         this.progress.processedFiles++;
         this.updateProgress("parsing", file);
-        return { ...result, filePath: file };
+        
+        if (result) {
+          results.push({ ...result, filePath: file });
+          this.logger.info(`File parsed successfully`, {
+            file: path.basename(file),
+            symbols: result.symbols.length,
+            relationships: result.relationships.length
+          });
+        } else {
+          this.logger.warn(`File parsing returned no result`, { file });
+        }
       } catch (error) {
         this.errors.push(`Failed to parse ${file}: ${error}`);
         this.progress.errors++;
-        return null;
+        this.logger.error(`Failed to parse file`, error, { file });
       }
+    }
+    
+    this.logger.info(`Chunk completed`, {
+      filesProcessed: results.length,
+      errors: this.errors.length
     });
 
-    const results = await Promise.all(parsePromises);
+    return results;
+  }
 
-    // Filter out failed parses (null results)
-    return results.filter(
-      (result): result is ParseResult & { filePath: string } => result !== null
-    );
+  /**
+   * Parse a file using worker thread
+   */
+  private async parseFileWithWorker(
+    filePath: string,
+    content: string,
+    language: string,
+    projectId: number,
+    languageId: number
+  ): Promise<ParseResult> {
+    return new Promise((resolve, reject) => {
+      const workerPath = path.join(__dirname, 'workers', 'indexing-worker.js');
+      const worker = new Worker(workerPath);
+
+      // Set timeout for worker
+      const timeout = setTimeout(() => {
+        worker.terminate();
+        reject(new Error(`Worker timeout parsing ${filePath}`));
+      }, 30000); // 30 second timeout per file
+
+      worker.on('message', (result: any) => {
+        clearTimeout(timeout);
+        worker.terminate();
+        
+        if (result.success) {
+          resolve(result.result);
+        } else {
+          reject(new Error(result.error));
+        }
+      });
+
+      worker.on('error', (error) => {
+        clearTimeout(timeout);
+        worker.terminate();
+        reject(error);
+      });
+
+      // Send parse request to worker
+      worker.postMessage({
+        type: 'parse',
+        filePath,
+        content,
+        language,
+        projectId,
+        languageId,
+        options: {
+          debugMode: this.options.debugMode,
+          enablePatternDetection: this.options.enablePatternDetection,
+        }
+      });
+    });
   }
 
   /**
@@ -525,8 +667,19 @@ export class UniversalIndexer extends EventEmitter {
     const fileStats = await fs.stat(filePath);
     const startParse = Date.now();
 
-    // Parse file
-    const result = await parser.parseFile(filePath, content);
+    // Parse file - use worker thread if enabled
+    let result: ParseResult;
+    if (this.options.useWorkerThreads) {
+      try {
+        result = await this.parseFileWithWorker(filePath, content, language, projectId, languageId);
+      } catch (workerError) {
+        this.debug(`Worker failed for ${filePath}, falling back to main thread: ${workerError}`);
+        // Fallback to main thread parsing
+        result = await parser.parseFile(filePath, content);
+      }
+    } else {
+      result = await parser.parseFile(filePath, content);
+    }
 
     // Update file index with results
     await this.db
@@ -642,6 +795,12 @@ export class UniversalIndexer extends EventEmitter {
     // Clear semantic orchestrator caches
     if (this.semanticOrchestrator) {
       this.semanticOrchestrator.clearCaches();
+    }
+    
+    // Close logger
+    if (this.logger) {
+      this.logger.info('Indexer shutting down');
+      this.logger.close();
     }
   }
 }

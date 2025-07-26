@@ -7,6 +7,7 @@
 
 import { EventEmitter } from "events";
 import Database from "better-sqlite3";
+import { DrizzleDatabase, type DrizzleDb } from "../database/drizzle-db.js";
 import {
   UniversalSymbol,
   UniversalRelationship as _UniversalRelationship,
@@ -151,12 +152,19 @@ export enum DependencyType {
  * API linkage detector class
  */
 export class ApiLinkageDetector extends EventEmitter {
-  private db: Database.Database;
+  private drizzleDb: DrizzleDatabase;
   private detectors: Map<string, ApiDetector> = new Map();
 
-  constructor(dbPath: string) {
+  constructor(dbOrPath: string | Database.Database | DrizzleDb) {
     super();
-    this.db = new Database(dbPath);
+    if (typeof dbOrPath === "string") {
+      const db = new Database(dbOrPath);
+      this.drizzleDb = new DrizzleDatabase(db);
+    } else if ('select' in dbOrPath && 'insert' in dbOrPath) {
+      this.drizzleDb = new DrizzleDatabase(dbOrPath);
+    } else {
+      this.drizzleDb = new DrizzleDatabase(dbOrPath);
+    }
     this.initializeDatabase();
     this.registerBuiltinDetectors();
   }
@@ -165,9 +173,7 @@ export class ApiLinkageDetector extends EventEmitter {
    * Initialize database tables
    */
   private initializeDatabase(): void {
-    this.db.exec(`
- 
-    `);
+    // Database tables are now managed by Drizzle migrations
   }
 
   /**
@@ -213,73 +219,41 @@ export class ApiLinkageDetector extends EventEmitter {
    * Store API binding in database
    */
   async storeApiBinding(binding: ApiBinding): Promise<number> {
-    const insertBinding = this.db.prepare(`
-      INSERT OR REPLACE INTO api_bindings (
-        project_id, source_symbol_id, target_symbol_id, source_language, target_language,
-        binding_type, protocol, endpoint, type_mapping, serialization_format,
-        schema_definition, confidence, detector_name, detection_reason, metadata
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    const result = insertBinding.run(
-      binding.projectId,
-      binding.sourceSymbolId || null,
-      binding.targetSymbolId || null,
-      binding.sourceLanguage,
-      binding.targetLanguage,
-      binding.bindingType,
-      binding.protocol || null,
-      binding.endpoint || null,
-      JSON.stringify(binding.typeMapping),
-      binding.serializationFormat || null,
-      binding.schemaDefinition || null,
-      binding.confidence,
-      binding.detectorName,
-      binding.detectionReason || "",
-      binding.metadata ? JSON.stringify(binding.metadata) : null
-    );
-
-    return result.lastInsertRowid as number;
+    return await this.drizzleDb.insertApiBinding({
+      projectId: binding.projectId,
+      sourceSymbolId: binding.sourceSymbolId || null,
+      targetSymbolId: binding.targetSymbolId || null,
+      sourceLanguage: binding.sourceLanguage,
+      targetLanguage: binding.targetLanguage,
+      bindingType: binding.bindingType,
+      protocol: binding.protocol || null,
+      endpoint: binding.endpoint || null,
+      typeMapping: binding.typeMapping,
+      serializationFormat: binding.serializationFormat || null,
+      schemaDefinition: binding.schemaDefinition || null,
+      confidence: binding.confidence,
+      detectorName: binding.detectorName,
+      detectionReason: binding.detectionReason || "",
+      metadata: binding.metadata || null
+    });
   }
 
   /**
    * Get API bindings for a project
    */
-  getApiBindings(
+  async getApiBindings(
     projectId: number,
     bindingType?: ApiBindingType
-  ): ApiBinding[] {
-    let query = `
-      SELECT * FROM api_bindings 
-      WHERE project_id = ?
-    `;
-    const params: any[] = [projectId];
-
-    if (bindingType) {
-      query += ` AND binding_type = ?`;
-      params.push(bindingType);
-    }
-
-    query += ` ORDER BY created_at DESC`;
-
-    const rows = this.db.prepare(query).all(...params);
+  ): Promise<ApiBinding[]> {
+    const rows = await this.drizzleDb.getApiBindings(projectId, bindingType);
     return rows.map((row) => this.dbRowToApiBinding(row));
   }
 
   /**
    * Get cross-language dependencies
    */
-  getCrossLanguageDependencies(projectId: number): CrossLanguageDependency[] {
-    const rows = this.db
-      .prepare(
-        `
-      SELECT * FROM cross_language_deps 
-      WHERE project_id = ?
-      ORDER BY created_at DESC
-    `
-      )
-      .all(projectId);
-
+  async getCrossLanguageDependencies(projectId: number): Promise<CrossLanguageDependency[]> {
+    const rows = await this.drizzleDb.getCrossLanguageDependencies(projectId);
     return rows.map((row) => this.dbRowToCrossLanguageDependency(row));
   }
 
@@ -440,7 +414,7 @@ export class ApiLinkageDetector extends EventEmitter {
    * Close database connection
    */
   close(): void {
-    this.db.close();
+    // DrizzleDatabase manages its own connection
   }
 }
 

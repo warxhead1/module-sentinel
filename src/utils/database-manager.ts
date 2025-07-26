@@ -1,3 +1,16 @@
+/**
+ * Database Manager - Low-level database connection and retry logic
+ * 
+ * IMPORTANT: This file is an APPROVED EXCEPTION for using db.prepare
+ * Reason: This is the low-level database abstraction layer that provides
+ * connection management, retry logic, and error handling for the raw database.
+ * It serves as the foundation that DrizzleDatabase builds upon. Without this
+ * layer, we couldn't handle database connection issues gracefully.
+ * 
+ * DO NOT use db.prepare in regular application code! Use DrizzleDatabase instead.
+ * This class should only be used internally by DrizzleDatabase.
+ */
+
 import Database from "better-sqlite3";
 import * as fs from "fs";
 

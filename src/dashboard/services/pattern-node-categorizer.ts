@@ -7,7 +7,6 @@
  */
 
 import { GraphNode } from '../../shared/types/api.js';
-import { CodeMetricsAnalyzer } from '../../analysis/code-metrics-analyzer.js';
 
 export interface PatternClassification {
   primaryPattern: {
@@ -46,11 +45,9 @@ export interface PatternDefinition {
 
 export class PatternNodeCategorizer {
   private patternDefinitions: Map<string, PatternDefinition>;
-  private metricsAnalyzer: CodeMetricsAnalyzer;
   
   constructor() {
     this.patternDefinitions = new Map();
-    this.metricsAnalyzer = new CodeMetricsAnalyzer();
     this.initializePatternDefinitions();
   }
 

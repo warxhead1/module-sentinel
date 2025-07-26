@@ -3,6 +3,58 @@
  * Provides consistent logging with levels, context, and optional assertions
  */
 
+// Detect if we're in browser environment
+const isBrowser = typeof window !== 'undefined' && typeof process === 'undefined';
+
+// Only import fs and path in Node.js environment
+let fs: any;
+let _path: any;
+if (!isBrowser) {
+  fs = require('fs');
+  _path = require('path');
+}
+
+// Detect MCP mode - when running as MCP server, we must NOT write to stdout/stderr
+const isMCPMode = !isBrowser && typeof process !== 'undefined' && process.env?.MCP_MODE === 'true';
+const logFilePath = '/tmp/module-sentinel-mcp-debug.log';
+
+// Create log file if in MCP mode
+if (isMCPMode && fs) {
+  try {
+    fs.writeFileSync(logFilePath, `[${new Date().toISOString()}] MCP Mode logger initialized\n`);
+  } catch {
+    // Can't log errors in MCP mode!
+  }
+}
+
+// MCP-safe console wrappers
+const safeConsole = {
+  log: (...args: any[]) => {
+    if (isBrowser || !isMCPMode) {
+      console.log(...args);
+    } else if (fs) {
+      const message = args.join(' ') + '\n';
+      fs.appendFileSync(logFilePath, message);
+    }
+  },
+  error: (...args: any[]) => {
+    if (isBrowser || !isMCPMode) {
+      console.error(...args);
+    } else if (fs) {
+      const message = args.join(' ') + '\n';
+      fs.appendFileSync(logFilePath, message);
+    }
+  },
+  warn: (...args: any[]) => {
+    if (isBrowser || !isMCPMode) {
+      console.warn(...args);
+    } else if (fs) {
+      const message = args.join(' ') + '\n';
+      fs.appendFileSync(logFilePath, message);
+    }
+  }
+};
+
 export enum LogLevel {
   DEBUG = 0,
   INFO = 1,
@@ -99,43 +151,43 @@ class ErrorAggregator {
   flush() {
     if (this.errorGroups.size === 0) return;
 
-    console.error('\n' + '='.repeat(80));
-    console.error('🚨 ERROR SUMMARY (Last 2 seconds)');
-    console.error('='.repeat(80));
+    safeConsole.error('\n' + '='.repeat(80));
+    safeConsole.error('🚨 ERROR SUMMARY (Last 2 seconds)');
+    safeConsole.error('='.repeat(80));
 
     // Sort by count (most frequent first)
     const sortedGroups = Array.from(this.errorGroups.entries())
       .sort(([,a], [,b]) => b.count - a.count);
 
     for (const [_, group] of sortedGroups) {
-      console.error(`\n📍 ${group.type}: ${group.message}`);
-      console.error(`   Count: ${group.count} | Duration: ${group.lastSeen - group.firstSeen}ms`);
+      safeConsole.error(`\n📍 ${group.type}: ${group.message}`);
+      safeConsole.error(`   Count: ${group.count} | Duration: ${group.lastSeen - group.firstSeen}ms`);
       
       // Show affected components/operations
       const components = [...new Set(group.contexts.map(c => c.component).filter(Boolean))];
       const operations = [...new Set(group.contexts.map(c => c.operation).filter(Boolean))];
       
       if (components.length > 0) {
-        console.error(`   Components: ${components.join(', ')}`);
+        safeConsole.error(`   Components: ${components.join(', ')}`);
       }
       if (operations.length > 0) {
-        console.error(`   Operations: ${operations.join(', ')}`);
+        safeConsole.error(`   Operations: ${operations.join(', ')}`);
       }
 
       // Show sample errors for detailed debugging
       if (group.samples.length > 0) {
-        console.error(`   Sample errors:`);
+        safeConsole.error(`   Sample errors:`);
         group.samples.forEach((sample, i) => {
-          console.error(`     ${i + 1}. ${JSON.stringify(sample.context, null, 2)}`);
+          safeConsole.error(`     ${i + 1}. ${JSON.stringify(sample.context, null, 2)}`);
           if (sample.error instanceof Error && sample.error.stack) {
             const stackLines = sample.error.stack.split('\n').slice(0, 3);
-            console.error(`        Stack: ${stackLines.join(' → ')}`);
+            safeConsole.error(`        Stack: ${stackLines.join(' → ')}`);
           }
         });
       }
     }
 
-    console.error('='.repeat(80) + '\n');
+    safeConsole.error('='.repeat(80) + '\n');
 
     // Clear groups and timer
     this.errorGroups.clear();
@@ -283,21 +335,21 @@ export class Logger {
   debug(message: string, contextOrError?: LogContext | Error | unknown, context?: LogContext): void {
     if (this.level <= LogLevel.DEBUG) {
       const { finalContext } = this.parseParameters(contextOrError, context);
-      console.log(this.formatMessage('DEBUG', message, finalContext));
+      safeConsole.log(this.formatMessage('DEBUG', message, finalContext));
     }
   }
 
   info(message: string, contextOrError?: LogContext | Error | unknown, context?: LogContext): void {
     if (this.level <= LogLevel.INFO) {
       const { finalContext } = this.parseParameters(contextOrError, context);
-      console.log(this.formatMessage('INFO', message, finalContext));
+      safeConsole.log(this.formatMessage('INFO', message, finalContext));
     }
   }
 
   warn(message: string, contextOrError?: LogContext | Error | unknown, context?: LogContext): void {
     if (this.level <= LogLevel.WARN) {
       const { finalContext } = this.parseParameters(contextOrError, context);
-      console.warn(this.formatMessage('WARN', message, finalContext));
+      safeConsole.warn(this.formatMessage('WARN', message, finalContext));
     }
   }
 
@@ -312,7 +364,7 @@ export class Logger {
       
       // Still log individual errors for immediate visibility (but less verbose)
       const shortMessage = `${message}${error instanceof Error ? ` (${error.constructor.name}: ${error.message})` : ''}`;
-      console.error(`[${new Date().toISOString()}] [ERROR] [${this.componentName}] ${shortMessage}`);
+      safeConsole.error(`[${new Date().toISOString()}] [ERROR] [${this.componentName}] ${shortMessage}`);
     }
   }
 
@@ -325,7 +377,7 @@ export class Logger {
     }
     
     // Fatal errors always show full details immediately
-    console.error(this.formatMessage('FATAL', message, { ...fullContext, error: error }));
+    safeConsole.error(this.formatMessage('FATAL', message, { ...fullContext, error: error }));
   }
 
   /**

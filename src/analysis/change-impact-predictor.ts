@@ -6,7 +6,7 @@
  * ripple effect tracker to provide interactive impact analysis.
  */
 
-import Database from "better-sqlite3";
+import { DrizzleDatabase } from "../database/drizzle-db.js";
 import {
   RippleEffectTracker,
   ImpactPrediction,
@@ -84,13 +84,13 @@ export interface ComparisonAnalysis {
 }
 
 export class ChangeImpactPredictor {
-  private db: Database.Database;
+  private drizzleDb: DrizzleDatabase;
   private rippleTracker: RippleEffectTracker;
   private predictionCache = new Map<string, ImpactPrediction>();
 
-  constructor(dbPath: string) {
-    this.db = new Database(dbPath);
-    this.rippleTracker = new RippleEffectTracker(dbPath);
+  constructor(drizzleDb: DrizzleDatabase) {
+    this.drizzleDb = drizzleDb;
+    this.rippleTracker = new RippleEffectTracker(drizzleDb);
   }
 
   /**
@@ -281,19 +281,20 @@ export class ChangeImpactPredictor {
   }
 
   private async getSymbolDetails(symbolName: string): Promise<any> {
-    return this.db
-      .prepare(
-        `
-      SELECT 
-        id, name, qualified_name, file_path, kind as type,
-        pipeline_stage, semantic_tags, confidence
-      FROM universal_symbols
-      WHERE qualified_name = ? OR name = ?
-      ORDER BY confidence DESC
-      LIMIT 1
-    `
-      )
-      .get(symbolName, symbolName);
+    const symbol = await this.drizzleDb.getSymbolDetailsForImpact(symbolName);
+    if (symbol) {
+      return {
+        id: symbol.id,
+        name: symbol.name,
+        qualified_name: symbol.qualifiedName,
+        file_path: symbol.filePath,
+        type: symbol.kind,
+        pipeline_stage: "analysis", // Universal symbols don't have pipeline_stage
+        semantic_tags: symbol.semanticTags,
+        confidence: symbol.confidence
+      };
+    }
+    return null;
   }
 
   private async generateVisualizationData(
@@ -1358,6 +1359,6 @@ export class ChangeImpactPredictor {
 
   close(): void {
     this.rippleTracker.close();
-    this.db.close();
+    this.drizzleDb.close();
   }
 }

@@ -52,7 +52,7 @@ export class SemanticInsightsService {
    */
   async getInsights(filters: any = {}): Promise<any[]> {
     try {
-      let query = this.drizzleDb
+      const query = this.drizzleDb
         .select({
           id: semanticInsights.id,
           type: semanticInsights.insightType,
@@ -159,7 +159,7 @@ export class SemanticInsightsService {
    */
   async getClusters(filters: any = {}): Promise<any[]> {
     try {
-      let query = this.drizzleDb
+      const query = this.drizzleDb
         .select({
           id: semanticClusters.id,
           name: semanticClusters.clusterName,

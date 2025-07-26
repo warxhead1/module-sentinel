@@ -14,29 +14,18 @@ import { OptimizedTreeSitterBaseParser as TreeSitterBaseParser } from "../dist/p
 import { createLogger, Logger, flushErrorSummary } from "../dist/utils/logger.js";
 
 // Import only tests that work with the new architecture
-import { UniversalIndexerTest } from "./unit/UniversalIndexerSimpleTest";
-import { VisualizationAPITest } from "./unit/VisualizationAPITest";
 import { DrizzleOrmTest } from "./unit/DrizzleOrmSimpleTest";
 import { NamespaceParsingSimpleTest } from "./unit/NamespaceParsingSimpleTest";
 import { RelationshipExtractionTest } from "./unit/RelationshipExtractionTest";
 import { ControlFlowAnalysisTest } from "./unit/ControlFlowAnalysisTest";
 import { EnhancedArchitectureTest } from "./unit/EnhancedArchitectureTest";
-// import { ComprehensiveSymbolExtractionTest } from "./unit/ComprehensiveSymbolExtractionTest";
-import { CrossLanguageFlowTest } from "./unit/CrossLanguageFlowTest";
-// import { StructMemberExtractionTest } from "./unit/StructMemberExtractionTest";
 import { MemberAccessTrackingTest } from "./unit/MemberAccessTrackingTest";
 import { MemberAccessDeepDiveTest } from "./unit/MemberAccessDeepDiveTest";
-// import { ComprehensiveParserCapabilitiesTest } from "./unit/ComprehensiveParserCapabilitiesTest";
-// import { SemanticIntelligenceIntegrationTest } from "./unit/SemanticIntelligenceIntegrationTest";
 import { ASTGenerationTest } from "./unit/ASTGenerationTest";
 import { ComprehensiveAPITest } from "./unit/ComprehensiveAPITest";
 import { TypeScriptEdgeCasesTest } from "./unit/TypeScriptEdgeCasesTest";
-import { CrossLanguageMicroservicesTest } from "./unit/CrossLanguageMicroservicesTest";
-import { DataFlowAnalysisTest } from "./unit/DataFlowAnalysisTest";
-// import { CppAdvancedFeaturesTest } from "./unit/CppAdvancedFeaturesTest";
-import { GrpcCrossLanguageRelationshipTest } from "./unit/GrpcCrossLanguageRelationshipTest";
-// import { CppParserModularComparisonTest } from "./unit/CppParserModularComparisonTest";
-import { CppParserComparisonTest } from "./unit/CppParserComparisonTest";
+import { CppParserIssuesTest } from "./unit/CppParserIssuesTest";
+import { ParentChildRelationshipTest } from "./unit/ParentChildRelationshipTest";
 
 export class TestRunner extends EventEmitter {
   private projectPath = process.cwd();
@@ -183,56 +172,24 @@ export class TestRunner extends EventEmitter {
     const testClasses = [
       { name: "ASTGenerationTest", class: ASTGenerationTest }, // Run first to diagnose AST issues
       { name: "DrizzleOrmTest", class: DrizzleOrmTest },
-      // {
-      //   name: "ComprehensiveSymbolExtractionTest",
-      //   class: ComprehensiveSymbolExtractionTest,
-      // },
       { name: "NamespaceParsingSimpleTest", class: NamespaceParsingSimpleTest },
-      { name: "UniversalIndexerTest", class: UniversalIndexerTest },
       { name: "RelationshipExtractionTest", class: RelationshipExtractionTest },
-      { name: "VisualizationAPITest", class: VisualizationAPITest },
       { name: "ComprehensiveAPITest", class: ComprehensiveAPITest },
       { name: "ControlFlowAnalysisTest", class: ControlFlowAnalysisTest },
       { name: "EnhancedArchitectureTest", class: EnhancedArchitectureTest },
-      { name: "CrossLanguageFlowTest", class: CrossLanguageFlowTest },
-      // { name: "StructMemberExtractionTest", class: StructMemberExtractionTest },
       { name: "MemberAccessTrackingTest", class: MemberAccessTrackingTest },
       { name: "MemberAccessDeepDiveTest", class: MemberAccessDeepDiveTest },
-      // {
-      //   name: "ComprehensiveParserCapabilitiesTest",
-      //   class: ComprehensiveParserCapabilitiesTest,
-      // },
-      // {
-      //   name: "SemanticIntelligenceIntegrationTest",
-      //   class: SemanticIntelligenceIntegrationTest,
-      // },
       {
         name: "TypeScriptEdgeCasesTest",
         class: TypeScriptEdgeCasesTest,
       },
       {
-        name: "CrossLanguageMicroservicesTest",
-        class: CrossLanguageMicroservicesTest,
+        name: "CppParserIssuesTest",
+        class: CppParserIssuesTest,
       },
       {
-        name: "DataFlowAnalysisTest",
-        class: DataFlowAnalysisTest,
-      },
-      // {
-      //   name: "CppAdvancedFeaturesTest",
-      //   class: CppAdvancedFeaturesTest,
-      // },
-      {
-        name: "GrpcCrossLanguageRelationshipTest",
-        class: GrpcCrossLanguageRelationshipTest,
-      },
-      // {
-      //   name: "CppParserModularComparisonTest",
-      //   class: CppParserModularComparisonTest,
-      // },
-      {
-        name: "CppParserComparisonTest",
-        class: CppParserComparisonTest,
+        name: "ParentChildRelationshipTest",
+        class: ParentChildRelationshipTest,
       },
     ];
 

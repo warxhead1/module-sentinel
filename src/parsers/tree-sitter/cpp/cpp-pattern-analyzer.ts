@@ -91,9 +91,9 @@ export class CppPatternAnalyzer {
 
       // Track parsing state
       let currentNamespace: string | undefined;
-      let namespaceStack: string[] = [];
+      const namespaceStack: string[] = [];
       let currentClass: string | undefined;
-      let classStack: string[] = [];
+      const classStack: string[] = [];
       let braceDepth = 0;
       let lineNumber = 0;
 
@@ -740,7 +740,7 @@ export class CppPatternAnalyzer {
 
   private preprocessContent(content: string): string {
     // Remove comments but preserve line structure
-    let processed = content
+    const processed = content
       .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
       .replace(/\/\/.*$/gm, ''); // Remove line comments
 

@@ -304,6 +304,5 @@ INSERT OR IGNORE INTO languages (name, display_name, parser_class, extensions, i
   ('javascript', 'JavaScript', 'JavaScriptLanguageParser', '["js", "jsx", "mjs"]', 1, 70);
 
 -- Insert default project if needed
-INSERT OR IGNORE INTO projects (id, name, display_name, root_path) VALUES
-  (1, 'test-project', 'Test Project', '/test/complex-files');
+-- (Removed hardcoded test project - projects should be added dynamically)
 

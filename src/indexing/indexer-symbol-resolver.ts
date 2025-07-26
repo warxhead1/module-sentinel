@@ -666,14 +666,12 @@ export class IndexerSymbolResolver {
           signature: symbol.signature,
           returnType: symbol.returnType,
           visibility: symbol.visibility,
-          complexity: symbol.complexity || 1,
           semanticTags: symbol.semanticTags || [],
-          isDefinition: symbol.isDefinition || false,
           isExported: symbol.isExported || false,
           isAsync: symbol.isAsync || false,
           isAbstract: false, // Not part of SymbolInfo type
           namespace: symbol.namespace,
-          parentScope: symbol.parentScope,
+          parentSymbolId: null, // Will be resolved in a second pass
           confidence: symbol.confidence || 1.0,
           languageFeatures: symbol.languageFeatures || null,
         }));
@@ -751,6 +749,9 @@ export class IndexerSymbolResolver {
 
     // Process control flow data using batch utilities
     await this.processControlFlowData(projectId, parseResults, errors);
+
+    // Resolve parent-child relationships after all symbols are stored
+    await this.resolveParentSymbolRelationships(projectId, parseResults);
 
     this.logger.debug(`Symbol storage complete`, {
       totalSymbols,
@@ -865,6 +866,146 @@ export class IndexerSymbolResolver {
         projectId,
       });
       errors.push(`Failed to process control flow data: ${error}`);
+    }
+  }
+
+  /**
+   * Resolve parent-child symbol relationships after all symbols are stored
+   * This is a second pass to handle forward references and ensure all parents exist
+   */
+  private async resolveParentSymbolRelationships(
+    projectId: number,
+    parseResults: Array<ParseResult & { filePath: string }>
+  ): Promise<void> {
+    const complete = this.logger.operation("resolveParentSymbolRelationships", {
+      projectId,
+    });
+
+    try {
+      // Collect all symbols that have parentScope set
+      const symbolsWithParents: Array<{
+        symbol: SymbolInfo;
+        filePath: string;
+      }> = [];
+
+      for (const result of parseResults) {
+        if (!result.symbols) continue;
+        
+        for (const symbol of result.symbols) {
+          if (symbol.parentScope) {
+            symbolsWithParents.push({
+              symbol,
+              filePath: result.filePath
+            });
+          }
+        }
+      }
+
+      if (symbolsWithParents.length === 0) {
+        this.logger.debug("No parent-child relationships to resolve");
+        complete();
+        return;
+      }
+
+      this.logger.debug(`Resolving ${symbolsWithParents.length} parent-child relationships`);
+
+      // Build a mapping of qualified names to symbol IDs for this project
+      const symbolMapping = await this.db
+        .select({
+          id: universalSymbols.id,
+          qualifiedName: universalSymbols.qualifiedName,
+          name: universalSymbols.name,
+          filePath: universalSymbols.filePath,
+        })
+        .from(universalSymbols)
+        .where(eq(universalSymbols.projectId, projectId));
+
+      // Create lookup maps
+      const qualifiedNameToId = new Map<string, number>();
+      const nameToIds = new Map<string, number[]>();
+
+      for (const sym of symbolMapping) {
+        // Map by qualified name
+        if (sym.qualifiedName) {
+          qualifiedNameToId.set(sym.qualifiedName, sym.id);
+        }
+        
+        // Map by name (can have multiple symbols with same name)
+        if (!nameToIds.has(sym.name)) {
+          nameToIds.set(sym.name, []);
+        }
+        nameToIds.get(sym.name)!.push(sym.id);
+      }
+
+      // Resolve parent relationships
+      const updates: Array<{ childId: number; parentId: number }> = [];
+
+      for (const { symbol, filePath } of symbolsWithParents) {
+        // Find the child symbol ID
+        const childId = qualifiedNameToId.get(symbol.qualifiedName);
+        if (!childId) {
+          this.logger.debug(`Could not find child symbol ID for: ${symbol.qualifiedName}`);
+          continue;
+        }
+
+        // Find the parent symbol ID
+        let parentId: number | undefined;
+        
+        // First try exact qualified name match
+        parentId = qualifiedNameToId.get(symbol.parentScope!);
+        
+        // If not found, try by name in the same file
+        if (!parentId) {
+          const parentCandidates = nameToIds.get(symbol.parentScope!) || [];
+          if (parentCandidates.length === 1) {
+            parentId = parentCandidates[0];
+          } else if (parentCandidates.length > 1) {
+            // Multiple candidates - try to find one in the same file
+            const sameFileParent = symbolMapping.find(
+              s => parentCandidates.includes(s.id) && s.filePath === filePath
+            );
+            if (sameFileParent) {
+              parentId = sameFileParent.id;
+            }
+          }
+        }
+
+        if (parentId) {
+          updates.push({ childId, parentId });
+          this.logger.debug(`Resolved parent relationship: ${symbol.qualifiedName} -> ${symbol.parentScope}`);
+        } else {
+          this.logger.debug(`Could not resolve parent for ${symbol.qualifiedName}: ${symbol.parentScope}`);
+        }
+      }
+
+      // Batch update parent relationships
+      if (updates.length > 0) {
+        this.logger.debug(`Updating ${updates.length} parent-child relationships`);
+        
+        // Use raw SQL for efficient batch update
+        const updateStmt = this.rawDb.prepare(`
+          UPDATE universal_symbols 
+          SET parent_symbol_id = ? 
+          WHERE id = ?
+        `);
+
+        const updateMany = this.rawDb.transaction((updates: Array<{ childId: number; parentId: number }>) => {
+          for (const { childId, parentId } of updates) {
+            updateStmt.run(parentId, childId);
+          }
+        });
+
+        updateMany(updates);
+        
+        this.logger.info(`Successfully resolved ${updates.length} parent-child relationships`);
+      }
+
+      complete();
+    } catch (error) {
+      this.logger.error("Failed to resolve parent relationships", error, {
+        projectId,
+      });
+      // Don't throw - this is a best-effort operation
     }
   }
 }

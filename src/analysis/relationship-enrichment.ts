@@ -5,13 +5,13 @@
 
 import type _Parser from "tree-sitter";
 import { Database as _Database } from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { eq, and, or, inArray as _inArray, sql, isNull as _isNull } from "drizzle-orm";
+import { drizzle as _drizzle } from "drizzle-orm/better-sqlite3";
+import { eq as _eq, and as _and, or as _or, inArray as _inArray, sql as _sql, isNull as _isNull } from "drizzle-orm";
 
 // Import schema
 import {
-  universalSymbols,
-  universalRelationships,
+  universalSymbols as _universalSymbols,
+  universalRelationships as _universalRelationships,
   detectedPatterns as _detectedPatterns,
   projectLanguages as _projectLanguages,
 } from "../database/drizzle/schema.js";
@@ -102,24 +102,18 @@ export const relationshipEnrichmentStrategies: EnrichmentStrategy[] = [
 ];
 
 /**
- * Example implementation for resolving symbol references
+ * Example implementation for resolving symbol references using DrizzleDatabase
  */
-export async function resolveSymbolReferences(db: any): Promise<number> {
+export async function resolveSymbolReferences(drizzleDb: any): Promise<number> {
   // First, create an index of all symbols by qualified name
   const symbolIndex = new Map<string, number>();
 
-  const symbols = db
-    .prepare(
-      `
-    SELECT id, qualified_name, name, signature, file_path
-    FROM universal_symbols
-    WHERE qualified_name IS NOT NULL
-  `
-    )
-    .all();
+  const symbols = await drizzleDb.getSymbolsForIndexing();
 
   symbols.forEach((sym: any) => {
-    symbolIndex.set(sym.qualified_name, sym.id);
+    if (sym.qualifiedName) {
+      symbolIndex.set(sym.qualifiedName, sym.id);
+    }
     // Also index by simple name for fallback
     if (!symbolIndex.has(sym.name)) {
       symbolIndex.set(sym.name, sym.id);
@@ -127,27 +121,14 @@ export async function resolveSymbolReferences(db: any): Promise<number> {
   });
 
   // Update relationships with resolved IDs
-  const unresolvedRels = db
-    .prepare(
-      `
-    SELECT id, to_name, from_symbol_id
-    FROM universal_relationships
-    WHERE to_symbol_id IS NULL AND to_name IS NOT NULL
-  `
-    )
-    .all();
+  const unresolvedRels = await drizzleDb.getUnresolvedRelationships();
 
   let resolved = 0;
-  const updateStmt = db.prepare(`
-    UPDATE universal_relationships 
-    SET to_symbol_id = ? 
-    WHERE id = ?
-  `);
 
   for (const rel of unresolvedRels) {
-    const toId = symbolIndex.get(rel.to_name);
+    const toId = symbolIndex.get(rel.toName);
     if (toId) {
-      updateStmt.run(toId, rel.id);
+      await drizzleDb.updateRelationshipToSymbolId(rel.id, toId);
       resolved++;
     }
   }
@@ -156,142 +137,69 @@ export async function resolveSymbolReferences(db: any): Promise<number> {
 }
 
 /**
- * Build execution call chains from resolved relationships
+ * Build execution call chains from resolved relationships using DrizzleDatabase
  */
-export async function buildCallChains(db: any): Promise<void> {
+export async function buildCallChains(drizzleDb: any): Promise<void> {
   // Find entry points (functions not called by others)
-  const entryPoints = db
-    .prepare(
-      `
-    SELECT DISTINCT s.id, s.qualified_name
-    FROM universal_symbols s
-    WHERE s.kind IN ('function', 'method')
-      AND s.id NOT IN (
-        SELECT DISTINCT to_symbol_id 
-        FROM universal_relationships 
-        WHERE type = 'calls' 
-          AND to_symbol_id IS NOT NULL
-      )
-  `
-    )
-    .all();
+  const entryPoints = await drizzleDb.findFunctionEntryPoints();
 
   // For each entry point, trace call chains
-  const insertChain = db.prepare(`
-    INSERT INTO call_chains (entry_point_id, max_depth, total_nodes)
-    VALUES (?, ?, ?)
-  `);
-
-  const insertStep = db.prepare(`
-    INSERT INTO call_chain_steps (chain_id, step_number, symbol_id, caller_id)
-    VALUES (?, ?, ?, ?)
-  `);
-
   for (const entry of entryPoints) {
-    const chain = traceCallChain(db, entry.id, 10);
+    const chain = await traceCallChain(drizzleDb, entry.id, 10);
     if (chain.length > 1) {
-      const result = insertChain.run(entry.id, chain.length, chain.length);
-      const chainId = result.lastInsertRowid;
+      const chainId = await drizzleDb.insertCallChain(entry.id, chain.length, chain.length);
 
-      chain.forEach((step, index) => {
-        insertStep.run(chainId, index, step.symbolId, step.callerId || null);
-      });
+      for (let index = 0; index < chain.length; index++) {
+        const step = chain[index];
+        await drizzleDb.insertCallChainStep(chainId, index, step.symbolId, step.callerId || null);
+      }
     }
   }
 }
 
-function traceCallChain(db: any, startId: number, maxDepth: number): any[] {
+async function traceCallChain(drizzleDb: any, startId: number, maxDepth: number): Promise<any[]> {
   const chain: any[] = [];
   const visited = new Set<number>();
 
-  function trace(symbolId: number, depth: number, callerId: number | null) {
+  async function trace(symbolId: number, depth: number, callerId: number | null): Promise<void> {
     if (visited.has(symbolId) || depth > maxDepth) return;
 
     visited.add(symbolId);
     chain.push({ symbolId, callerId, depth });
 
     // Get all functions this symbol calls
-    const calls = db
-      .prepare(
-        `
-      SELECT DISTINCT to_symbol_id
-      FROM universal_relationships
-      WHERE from_symbol_id = ?
-        AND type = 'calls'
-        AND to_symbol_id IS NOT NULL
-    `
-      )
-      .all(symbolId);
+    const calls = await drizzleDb.getFunctionsCalled(symbolId);
 
     for (const call of calls) {
-      trace(call.to_symbol_id, depth + 1, symbolId);
+      await trace(call.toSymbolId, depth + 1, symbolId);
     }
   }
 
-  trace(startId, 0, null);
+  await trace(startId, 0, null);
   return chain;
 }
 
 /**
- * Extract GPU dispatch relationships
+ * Extract GPU dispatch relationships using DrizzleDatabase
  */
-export async function extractGPUDispatches(db: any): Promise<void> {
+export async function extractGPUDispatches(drizzleDb: any): Promise<void> {
   // Find GPU compute functions
-  const gpuFunctions = db
-    .prepare(
-      `
-    SELECT id, qualified_name, signature
-    FROM universal_symbols
-    WHERE uses_gpu_compute = 1
-      OR execution_mode = 'gpu'
-      OR signature LIKE '%kernel%'
-      OR signature LIKE '%dispatch%'
-      OR signature LIKE '%compute%'
-  `
-    )
-    .all();
+  const gpuFunctions = await drizzleDb.findGPUFunctions();
 
   // For each GPU function, find who calls it (CPU->GPU boundary)
-  const insertRel = db.prepare(`
-    INSERT INTO universal_relationships 
-    (from_symbol_id, to_symbol_id, type, from_name, to_name)
-    VALUES (?, ?, 'dispatches_to_gpu', ?, ?)
-  `);
-
   for (const gpuFunc of gpuFunctions) {
-    const callers = db
-      .prepare(
-        `
-      SELECT DISTINCT from_symbol_id, from_name
-      FROM universal_relationships
-      WHERE to_symbol_id = ?
-        AND type = 'calls'
-    `
-      )
-      .all(gpuFunc.id);
+    const callers = await drizzleDb.getCallersOfSymbol(gpuFunc.id);
 
     for (const caller of callers) {
       // Check if caller is CPU-side
-      const callerInfo = db
-        .prepare(
-          `
-        SELECT execution_mode, uses_gpu_compute
-        FROM universal_symbols
-        WHERE id = ?
-      `
-        )
-        .get(caller.from_symbol_id);
+      const callerInfo = await drizzleDb.getSymbolExecutionInfo(caller.fromSymbolId);
 
-      if (
-        !callerInfo?.uses_gpu_compute &&
-        callerInfo?.execution_mode !== "gpu"
-      ) {
+      if (!callerInfo?.usesGpuCompute) {
         // This is a CPU->GPU dispatch
-        insertRel.run(
-          caller.from_symbol_id,
+        await drizzleDb.insertGPUDispatchRelationship(
+          caller.fromSymbolId,
           gpuFunc.id,
-          caller.from_name,
-          gpuFunc.qualified_name
+          `CPU->GPU dispatch to ${gpuFunc.qualifiedName}`
         );
       }
     }
@@ -299,36 +207,24 @@ export async function extractGPUDispatches(db: any): Promise<void> {
 }
 
 /**
- * Infer data flow relationships based on function signatures and call relationships.
+ * Infer data flow relationships based on function signatures and call relationships using DrizzleDatabase.
  * This is a simplified heuristic based on type matching.
  */
 export async function inferDataFlow(
-  db: ReturnType<typeof drizzle>,
+  drizzleDb: any,
   projectId: number
 ): Promise<number> {
   console.log("Inferring data flow relationships...");
   let inferredCount = 0;
 
   // Get all function/method symbols with return types and parameters
-  const functionsWithSignatures = await db
-    .select()
-    .from(universalSymbols)
-    .where(
-      and(
-        eq(universalSymbols.projectId, projectId),
-        or(
-          eq(universalSymbols.kind, "function"),
-          eq(universalSymbols.kind, "method")
-        ),
-        sql`${universalSymbols.signature} IS NOT NULL`
-      )
-    );
+  const functionsWithSignatures = await drizzleDb.getFunctionsWithSignatures(projectId);
 
   const signatureMap = new Map<
     number,
     { returnType: string | null; paramTypes: string[] }
   >();
-  functionsWithSignatures.forEach((func) => {
+  functionsWithSignatures.forEach((func: any) => {
     const returnTypeMatch = func.signature?.match(/^(.*?)\s+\w+\s*\(.*\)/);
     const returnType = returnTypeMatch ? returnTypeMatch[1].trim() : null;
 
@@ -346,17 +242,7 @@ export async function inferDataFlow(
   });
 
   // Get all existing call relationships
-  const callRelationships = await db
-    .select()
-    .from(universalRelationships)
-    .where(
-      and(
-        eq(universalRelationships.projectId, projectId),
-        eq(universalRelationships.type, "calls")
-      )
-    );
-
-  const insertRelationship = db.insert(universalRelationships).values;
+  const callRelationships = await drizzleDb.getCallRelationships(projectId);
 
   for (const callRel of callRelationships) {
     // Skip if either ID is null
@@ -372,7 +258,7 @@ export async function inferDataFlow(
         calleeSignature.paramTypes.length > 0 &&
         callerSignature.returnType === calleeSignature.paramTypes[0]
       ) {
-        await insertRelationship({
+        await drizzleDb.insertDataFlowRelationship({
           projectId,
           fromSymbolId: callRel.fromSymbolId,
           toSymbolId: callRel.toSymbolId,
@@ -392,7 +278,7 @@ export async function inferDataFlow(
         // This is a very weak heuristic without knowing *which* parameters are passed
         // and how they map. A more robust solution requires AST of the call site.
         // For now, we'll just note that data *might* flow.
-        await insertRelationship({
+        await drizzleDb.insertDataFlowRelationship({
           projectId,
           fromSymbolId: callRel.fromSymbolId,
           toSymbolId: callRel.toSymbolId,
@@ -409,74 +295,43 @@ export async function inferDataFlow(
 }
 
 /**
- * Discover virtual override relationships.
+ * Discover virtual override relationships using DrizzleDatabase.
  */
 export async function discoverVirtualOverrides(
-  db: ReturnType<typeof drizzle>,
+  drizzleDb: any,
   projectId: number
 ): Promise<number> {
   console.log("Discovering virtual override relationships...");
   let inferredCount = 0;
 
   // Get all classes/structs
-  const classes = await db
-    .select()
-    .from(universalSymbols)
-    .where(
-      and(
-        eq(universalSymbols.projectId, projectId),
-        or(
-          eq(universalSymbols.kind, "class"),
-          eq(universalSymbols.kind, "struct")
-        )
-      )
-    );
+  const classes = await drizzleDb.getClassesAndStructs(projectId);
 
-  const classMethods = await db
-    .select()
-    .from(universalSymbols)
-    .where(
-      and(
-        eq(universalSymbols.projectId, projectId),
-        or(eq(universalSymbols.kind, "method")),
-        sql`${universalSymbols.parentSymbolId} IS NOT NULL` // Ensure it's a method of a class/struct
-      )
-    );
-
-  const insertRelationship = db.insert(universalRelationships).values;
+  const classMethods = await drizzleDb.getClassMethods(projectId);
 
   for (const childClass of classes) {
     // Find inheritance relationships for this class
-    const inheritedFrom = await db
-      .select()
-      .from(universalRelationships)
-      .where(
-        and(
-          eq(universalRelationships.projectId, projectId),
-          eq(universalRelationships.fromSymbolId, childClass.id),
-          eq(universalRelationships.type, "inherits")
-        )
-      );
+    const inheritedFrom = await drizzleDb.getInheritanceRelationships(projectId, childClass.id);
 
     for (const inheritanceRel of inheritedFrom) {
       const parentClassId = inheritanceRel.toSymbolId;
       const parentClassMethods = classMethods.filter(
-        (m) => m.parentSymbolId === parentClassId
+        (m: any) => m.parentSymbolId === parentClassId
       );
       const childClassMethods = classMethods.filter(
-        (m) => m.parentSymbolId === childClass.id
+        (m: any) => m.parentSymbolId === childClass.id
       );
 
       for (const parentMethod of parentClassMethods) {
         // Simple heuristic: method name and signature match
         const overridingMethod = childClassMethods.find(
-          (childMethod) =>
+          (childMethod: any) =>
             childMethod.name === parentMethod.name &&
             childMethod.signature === parentMethod.signature
         );
 
         if (overridingMethod) {
-          await insertRelationship({
+          await drizzleDb.insertDataFlowRelationship({
             projectId,
             fromSymbolId: overridingMethod.id,
             toSymbolId: parentMethod.id,

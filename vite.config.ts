@@ -18,25 +18,8 @@ export default defineConfig({
     port: 6969,
     host: true,
     strictPort: false,
-    hmr: {
-      port: 6971,
-      host: 'localhost', 
-      protocol: 'ws',
-      clientPort: 6971,
-      overlay: false
-    },
-    watch: {
-      // Exclude database and build files from watching
-      ignored: [
-        '**/node_modules/**',
-        '**/.test-db/**',
-        '**/dist/**',
-        '**/dashboard/dist/**',
-        '**/*.db',
-        '**/*.db-shm',
-        '**/*.db-wal'
-      ]
-    }
+    hmr: false, // Disable hot module replacement completely
+    watch: false // Disable file watching completely
   },
   resolve: {
     alias: {

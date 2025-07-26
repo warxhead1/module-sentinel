@@ -132,9 +132,6 @@ const result = await this.db
   .from(universalSymbols)
   .where(eq(universalSymbols.projectId, projectId))
   .limit(100);
-
-// Use raw SQL only for complex operations with parameters
-db.prepare("DELETE FROM table WHERE id = ?").run(id);
 ```
 
 ### API Response Pattern

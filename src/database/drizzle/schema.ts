@@ -423,8 +423,12 @@ export const apiBindings = sqliteTable('api_bindings', {
   projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   
   // Source and target symbols
-  sourceSymbolId: integer('source_symbol_id').references(() => universalSymbols.id, { onDelete: 'cascade' }),
-  targetSymbolId: integer('target_symbol_id').references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  sourceSymbolId: text('source_symbol_id'),
+  targetSymbolId: text('target_symbol_id'),
+  
+  // Language information
+  sourceLanguage: text('source_language').notNull(),
+  targetLanguage: text('target_language').notNull(),
   
   // Binding details
   bindingType: text('binding_type').notNull(), // 'ffi', 'rest', 'grpc', 'websocket'
@@ -432,21 +436,27 @@ export const apiBindings = sqliteTable('api_bindings', {
   endpoint: text('endpoint'),
   
   // Type mapping
-  typeMapping: text('type_mapping', { mode: 'json' }).$type<Record<string, any>>(),
+  typeMapping: text('type_mapping').notNull(),
   
   // Serialization info
   serializationFormat: text('serialization_format'), // 'json', 'protobuf', 'msgpack'
   schemaDefinition: text('schema_definition'),
   
+  // Detection metadata
+  confidence: real('confidence').notNull().default(1.0),
+  detectorName: text('detector_name').notNull(),
+  detectionReason: text('detection_reason'),
+  
   // Metadata
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
-  confidence: real('confidence').default(1.0),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`)
+  metadata: text('metadata'),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`)
 }, (table) => ({
   projectIdx: index('idx_api_bindings_project').on(table.projectId),
   sourceIdx: index('idx_api_bindings_source').on(table.sourceSymbolId),
   targetIdx: index('idx_api_bindings_target').on(table.targetSymbolId),
-  typeIdx: index('idx_api_bindings_type').on(table.bindingType)
+  typeIdx: index('idx_api_bindings_type').on(table.bindingType),
+  languagesIdx: index('idx_api_bindings_languages').on(table.sourceLanguage, table.targetLanguage)
 }));
 
 // Cross-language binding features from migration 003
@@ -484,24 +494,23 @@ export const crossLanguageDeps = sqliteTable('cross_language_deps', {
   projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   
   // Source and target languages
-  fromLanguageId: integer('from_language_id').references(() => languages.id),
-  toLanguageId: integer('to_language_id').references(() => languages.id),
+  fromLanguage: text('from_language').notNull(),
+  toLanguage: text('to_language').notNull(),
   
   // Dependency details
   dependencyType: text('dependency_type').notNull(), // 'build', 'runtime', 'interface'
-  dependencyPath: text('dependency_path'),
+  dependencyPath: text('dependency_path').notNull(),
   
   // Symbols involved
-  fromSymbolId: integer('from_symbol_id').references(() => universalSymbols.id),
-  toSymbolId: integer('to_symbol_id').references(() => universalSymbols.id),
+  fromSymbolId: text('from_symbol_id'),
+  toSymbolId: text('to_symbol_id'),
   
   // Metadata
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
+  metadata: text('metadata'),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`)
 }, (table) => ({
-  projectIdx: index('idx_cross_language_deps_project').on(table.projectId),
-  fromLangIdx: index('idx_cross_language_deps_from_lang').on(table.fromLanguageId),
-  toLangIdx: index('idx_cross_language_deps_to_lang').on(table.toLanguageId)
+  projectIdx: index('idx_cross_deps_project').on(table.projectId),
+  languagesIdx: index('idx_cross_deps_languages').on(table.fromLanguage, table.toLanguage)
 }));
 
 // Language-specific patterns from migration 003

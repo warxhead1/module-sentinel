@@ -605,7 +605,7 @@ export class PythonLanguageParser extends OptimizedTreeSitterBaseParser {
 
   private getQualifiedName(node: Parser.SyntaxNode, content: string): string {
     let current = node;
-    let parts = [this.getNodeText(node, content)];
+    const parts = [this.getNodeText(node, content)];
     while (current.parent) {
       current = current.parent;
       if (current.type === 'class_definition' || current.type === 'function_definition') {

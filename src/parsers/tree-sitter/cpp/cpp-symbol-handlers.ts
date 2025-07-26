@@ -10,6 +10,7 @@ import { Logger, createLogger } from "../../../utils/logger.js";
 import { MemoryMonitor, getGlobalMemoryMonitor } from "../../../utils/memory-monitor.js";
 import { SymbolInfo } from "../parser-types.js";
 import { CppAstUtils } from "./cpp-ast-utils.js";
+import { CppFieldExtractor } from "./cpp-field-extractor.js";
 import { 
   CppVisitorContext, 
   CppSymbolMetadata, 
@@ -21,11 +22,13 @@ export class CppSymbolHandlers {
   private logger: Logger;
   private memoryMonitor: MemoryMonitor;
   private astUtils: CppAstUtils;
+  private fieldExtractor: CppFieldExtractor;
 
   constructor() {
     this.logger = createLogger('CppSymbolHandlers');
     this.memoryMonitor = getGlobalMemoryMonitor();
     this.astUtils = new CppAstUtils();
+    this.fieldExtractor = new CppFieldExtractor();
   }
 
   /**
@@ -62,7 +65,15 @@ export class CppSymbolHandlers {
       }
 
       // Extract inheritance information
-      const baseClassClause = node.childForFieldName("base_class_clause");
+      // Note: base_class_clause is not a named field, find it in children
+      let baseClassClause: Parser.SyntaxNode | null = null;
+      for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child && child.type === "base_class_clause") {
+          baseClassClause = child;
+          break;
+        }
+      }
       const inheritance = baseClassClause ? 
         this.astUtils.extractInheritanceInfo(baseClassClause, context.content) : [];
 
@@ -108,10 +119,37 @@ export class CppSymbolHandlers {
       context.currentClassScope = qualifiedName;
       context.accessLevels.set(qualifiedName, defaultAccessLevel);
 
+      // Extract fields from the class/struct body - CRITICAL PERFORMANCE FIX
+      const fieldResult = this.fieldExtractor.extractFields(
+        node,
+        name,
+        qualifiedName,
+        context,
+        isClass
+      );
+
+      // Add extracted fields to the context
+      for (const field of fieldResult.fields) {
+        context.symbols.set(field.qualifiedName, field);
+        context.stats.symbolsExtracted++;
+      }
+
+      // Update metadata with member count
+      if (fieldResult.fields.length > 0) {
+        metadata.members = fieldResult.fields.map(f => ({
+          name: f.name,
+          type: f.returnType || "unknown",
+          line: f.line,
+          accessLevel: (f.visibility || CppAccessLevel.PRIVATE) as "public" | "private" | "protected"
+        }));
+      }
+
       this.logger.debug('Created class/struct symbol', { 
         symbol: symbol.qualifiedName,
         templateParams: templateParameters.length,
-        baseClasses: inheritance.length
+        baseClasses: inheritance.length,
+        fieldsExtracted: fieldResult.fields.length,
+        fieldExtractionTime: fieldResult.stats.traversalTime
       });
 
       return symbol;
@@ -167,13 +205,33 @@ export class CppSymbolHandlers {
         parentScope = context.resolutionContext.currentNamespace;
       }
 
-      const qualifiedName = parentScope ? `${parentScope}::${functionName}` : functionName;
-
-      // Detect special function types
+      // Detect special function types (moved up to use in qualified name)
       const isConstructor = isMethod && parentScope ? 
         this.astUtils.isConstructor(functionName, parentScope) : false;
       const isDestructor = isMethod && parentScope ? 
         this.astUtils.isDestructor(functionName, parentScope) : false;
+        
+      // Build qualified name - make it unique for different constructor signatures
+      let qualifiedName = parentScope ? `${parentScope}::${functionName}` : functionName;
+      
+      // For constructors, append parameter info to make them unique
+      if (isConstructor && nameNode.type === "function_declarator") {
+        const parametersNode = nameNode.childForFieldName("parameters");
+        if (parametersNode) {
+          const paramText = this.astUtils.getNodeText(parametersNode, context.content);
+          // Create a simple signature suffix
+          if (paramText === "()") {
+            qualifiedName += "_default";
+          } else if (paramText.includes("&&")) {
+            qualifiedName += "_move";
+          } else if (paramText.includes("&") && paramText.includes("const")) {
+            qualifiedName += "_copy";
+          } else {
+            // Hash the parameters for other cases
+            qualifiedName += "_" + this.simpleHash(paramText);
+          }
+        }
+      }
       
       // Detect function characteristics
       const isVirtual = modifiers.includes("virtual");
@@ -185,6 +243,11 @@ export class CppSymbolHandlers {
       const isExplicit = modifiers.includes("explicit");
       const isStatic = modifiers.includes("static");
       const isConst = this.isConstMethod(node, context.content);
+      
+      // Check for deleted/defaulted functions
+      const functionText = this.astUtils.getNodeText(node, context.content);
+      const isDeleted = functionText.includes("= delete");
+      const isDefaulted = functionText.includes("= default");
       const isNoexcept = this.isNoexceptMethod(node, context.content);
 
       // Detect template function
@@ -211,6 +274,8 @@ export class CppSymbolHandlers {
       }
       if (isConst) signature += " const";
       if (isNoexcept) signature += " noexcept";
+      if (isDeleted) signature += " = delete";
+      if (isDefaulted) signature += " = default";
 
       // Determine symbol kind
       let symbolKind = CppSymbolKind.FUNCTION;
@@ -225,6 +290,8 @@ export class CppSymbolHandlers {
         isPureVirtual,
         isOverride,
         isFinal,
+        isDeleted,
+        isDefaulted,
         isConstexpr,
         isInline,
         isExplicit,
@@ -340,10 +407,10 @@ export class CppSymbolHandlers {
     const checkpoint = this.memoryMonitor.createCheckpoint('handleVariable');
     
     try {
-      let name = "";
-      let variableType = "";
-      let isField = false;
-      let accessLevel: CppAccessLevel = CppAccessLevel.PUBLIC;
+      const name = "";
+      const variableType = "";
+      const isField = false;
+      const accessLevel: CppAccessLevel = CppAccessLevel.PUBLIC;
 
       if (node.type === "field_declaration") {
         return this.handleFieldDeclaration(node, context);
@@ -365,8 +432,26 @@ export class CppSymbolHandlers {
 
   /**
    * Handle field declarations (class/struct members)
+   * NOTE: This is now optimized - fields are extracted in bulk by handleClass
+   * This method is kept for standalone field processing outside of class context
    */
   private handleFieldDeclaration(node: Parser.SyntaxNode, context: CppVisitorContext): SymbolInfo | null {
+    // Skip if we're inside a class/struct that's being processed by handleClass
+    // This prevents O(n²) duplicate processing
+    let parent = node.parent;
+    while (parent) {
+      if (parent.type === "field_declaration_list") {
+        // This field will be handled by the bulk extractor in handleClass
+        return null;
+      }
+      if (parent.type === "translation_unit" || parent.type === "namespace_definition") {
+        // We've reached a top-level scope, safe to process
+        break;
+      }
+      parent = parent.parent;
+    }
+
+    // For standalone fields (rare in C++), use the original logic
     const declarator = node.childForFieldName("declarator");
     if (!declarator) return null;
 
@@ -374,29 +459,14 @@ export class CppSymbolHandlers {
     const typeNode = node.childForFieldName("type");
     const variableType = typeNode ? this.astUtils.getNodeText(typeNode, context.content) : "unknown";
 
-    // Find parent class/struct
-    let parentScope: string | undefined;
-    let parent = node.parent;
-    while (parent) {
-      if (parent.type === "class_specifier" || parent.type === "struct_specifier") {
-        const nameNode = parent.childForFieldName("name");
-        if (nameNode) {
-          const parentName = this.astUtils.getNodeText(nameNode, context.content);
-          parentScope = this.astUtils.buildParentScope(parentName, context, parent);
-          break;
-        }
-      }
-      parent = parent.parent;
-    }
-
-    const qualifiedName = parentScope ? `${parentScope}::${name}` : name;
-    const accessLevel = this.astUtils.getAccessLevel(node);
-
-    // Extract modifiers
-    const isStatic = node.text.includes("static");
-    const isConst = node.text.includes("const");
-    const isMutable = node.text.includes("mutable");
-    const isVolatile = node.text.includes("volatile");
+    const qualifiedName = this.astUtils.buildQualifiedName(name, context);
+    
+    // Extract modifiers efficiently
+    const nodeText = this.astUtils.getNodeText(node, context.content);
+    const isStatic = nodeText.includes("static");
+    const isConst = nodeText.includes("const");
+    const isMutable = nodeText.includes("mutable");
+    const isVolatile = nodeText.includes("volatile");
 
     const metadata: CppSymbolMetadata = {
       isConst,
@@ -408,17 +478,16 @@ export class CppSymbolHandlers {
     const symbol: SymbolInfo = {
       name,
       qualifiedName,
-      kind: CppSymbolKind.FIELD,
+      kind: CppSymbolKind.VARIABLE, // Standalone fields are really global variables
       filePath: context.filePath,
       line: node.startPosition.row + 1,
       column: node.startPosition.column + 1,
       endLine: node.endPosition.row + 1,
       endColumn: node.endPosition.column + 1,
       returnType: variableType,
-      visibility: accessLevel,
       semanticTags: [
-        "field",
-        "member",
+        "variable",
+        "global",
         ...(isStatic ? ["static"] : []),
         ...(isConst ? ["const"] : []),
         ...(isMutable ? ["mutable"] : [])
@@ -429,14 +498,12 @@ export class CppSymbolHandlers {
       isExported: context.insideExportBlock,
       isAsync: false,
       namespace: context.resolutionContext.currentNamespace,
-      parentScope,
       languageFeatures: metadata,
     };
 
-    this.logger.debug('Created field symbol', { 
-      field: qualifiedName, 
-      type: variableType, 
-      access: accessLevel 
+    this.logger.debug('Created standalone variable symbol', { 
+      variable: qualifiedName, 
+      type: variableType
     });
 
     return symbol;
@@ -805,7 +872,7 @@ export class CppSymbolHandlers {
   /**
    * Extract function name from complex declarator structures
    */
-  private extractFunctionNameFromDeclarator(declaratorNode: Parser.SyntaxNode, context: CppVisitorContext): string {
+  extractFunctionNameFromDeclarator(declaratorNode: Parser.SyntaxNode, context: CppVisitorContext): string {
     if (!declaratorNode) return "";
 
     switch (declaratorNode.type) {
@@ -894,5 +961,18 @@ export class CppSymbolHandlers {
     }
 
     return false;
+  }
+  
+  /**
+   * Simple hash function for parameter text
+   */
+  private simpleHash(text: string): string {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      const char = text.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16);
   }
 }

@@ -120,17 +120,39 @@ export class CppRelationshipHandlers {
       // Find the derived class
       const classNode = node.parent;
       if (!classNode || (classNode.type !== "class_specifier" && classNode.type !== "struct_specifier")) {
+        this.logger.warn('base_class_clause parent is not a class', { parentType: classNode?.type });
         return relationships;
       }
 
-      const classNameNode = classNode.childForFieldName("name");
-      if (!classNameNode) return relationships;
+      // Get class name - use field lookup first, then fallback to children iteration
+      let classNameNode = classNode.childForFieldName("name");
+      if (!classNameNode) {
+        // Fallback: find type_identifier child
+        for (let i = 0; i < classNode.childCount; i++) {
+          const child = classNode.child(i);
+          if (child && child.type === "type_identifier") {
+            classNameNode = child;
+            break;
+          }
+        }
+      }
+      
+      if (!classNameNode) {
+        this.logger.warn('Could not find class name node');
+        return relationships;
+      }
 
       const derivedClass = this.astUtils.getNodeText(classNameNode, context.content);
       const derivedQualifiedName = this.astUtils.buildStructQualifiedName(derivedClass, classNode, context);
 
-      // Extract inheritance information
+      // Extract inheritance information using corrected logic
       const inheritanceInfo = this.astUtils.extractInheritanceInfo(node, context.content);
+      
+      this.logger.debug('Processing inheritance', {
+        derivedClass,
+        baseClauseText: this.astUtils.getNodeText(node, context.content),
+        inheritanceCount: inheritanceInfo.length
+      });
       
       for (const inheritance of inheritanceInfo) {
         const metadata: CppRelationshipMetadata = {
@@ -161,6 +183,11 @@ export class CppRelationshipHandlers {
         });
       }
 
+      this.logger.info('Inheritance detection completed', {
+        derivedClass,
+        relationshipsFound: relationships.length
+      });
+
       return relationships;
 
     } catch (error) {
@@ -189,11 +216,10 @@ export class CppRelationshipHandlers {
 
       const includePath = this.astUtils.getNodeText(pathNode, context.content);
       const isSystemInclude = includePath.startsWith('<') && includePath.endsWith('>');
-      const cleanPath = includePath.replace(/^[<"]|[>"]$/g, '');
 
       const relationship: RelationshipInfo = {
         fromName: context.filePath,
-        toName: cleanPath,
+        toName: includePath,
         relationshipType: CppRelationshipKind.INCLUDES,
         confidence: 1.0,
         lineNumber: node.startPosition.row + 1,
@@ -210,7 +236,7 @@ export class CppRelationshipHandlers {
 
       this.logger.debug('Created include relationship', {
         from: context.filePath,
-        to: cleanPath,
+        to: includePath,
         system: isSystemInclude
       });
 

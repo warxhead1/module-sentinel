@@ -1,6 +1,3 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 # Only lint staged files to keep pre-commit fast
 echo "🔍 Running pre-commit lint check on staged files..."
 npx lint-staged

@@ -747,7 +747,7 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
     let braceDepth = 0;
     let classBraceDepth = -1; // -1 means not in a class
     let interfaceBraceDepth = -1; // -1 means not in an interface
-    let classStack: { name: string; depth: number }[] = []; // Support nested classes
+    const classStack: { name: string; depth: number }[] = []; // Support nested classes
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -1305,7 +1305,7 @@ export class TypeScriptLanguageParser extends OptimizedTreeSitterBaseParser {
 
   private getQualifiedName(node: Parser.SyntaxNode, content: string): string {
     let current = node;
-    let parts = [this.getNodeText(node, content)];
+    const parts = [this.getNodeText(node, content)];
     while (current.parent) {
       current = current.parent;
       if (current.type === 'class_declaration' || current.type === 'interface_declaration' || current.type === 'function_declaration' || current.type === 'method_definition') {
