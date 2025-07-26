@@ -5,24 +5,16 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { 
   CallToolRequestSchema,
   ListToolsRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
   Tool 
 } from '@modelcontextprotocol/sdk/types.js';
-import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as dotenv from 'dotenv';
 import * as os from 'os';
 
-// Import our new components
-import { UniversalIndexer } from './indexing/universal-indexer.js';
-import { Priority1Tools } from './tools/priority-1-tools.js';
-import { SecureConfigManager } from './utils/secure-config.js';
-import { DatabaseConfig } from './config/database-config.js';
-import { DrizzleDatabase } from './database/drizzle-db.js';
-import { DatabaseService } from './api/services/database.service.js';
-// Parser registry not needed for current implementation
+// Import our Rust bridge
+import { ModuleSentinelBridge, quickSearch, quickAnalyze, checkRustBindings } from './rust-bridge/module-sentinel-bridge';
+import { createLogger } from './utils/logger';
 
 /**
  * Simple process lock manager to prevent multiple instances
@@ -54,8 +46,9 @@ class ProcessLockManager {
             process.kill(existingPid, 0);
             // Force kill if still running
             process.kill(existingPid, 'SIGKILL');
+            await new Promise(resolve => setTimeout(resolve, 1000));
           } catch {
-            // Process already terminated
+            // Process terminated successfully
           }
         } catch {
           // Process doesn't exist, remove stale lock file
@@ -63,15 +56,13 @@ class ProcessLockManager {
         }
       }
       
-      // Create new lock file with current PID
+      // Create new lock file
       await fs.writeFile(ProcessLockManager.LOCK_FILE, process.pid.toString());
-      // Lock acquired with current PID
       
-      // Clean up lock file on exit
-      const cleanup = async () => {
+      // Set up cleanup on exit
+      const cleanup = () => {
         try {
-          await fs.unlink(ProcessLockManager.LOCK_FILE);
-          // Lock released
+          require('fs').unlinkSync(ProcessLockManager.LOCK_FILE);
         } catch {
           // Ignore cleanup errors
         }
@@ -84,7 +75,7 @@ class ProcessLockManager {
       process.on('SIGUSR2', cleanup);
       
       return true;
-    } catch (error) {
+    } catch {
       // Failed to acquire lock - silent in MCP mode
       return false;
     }
@@ -93,51 +84,23 @@ class ProcessLockManager {
 
 export class ModuleSentinelMCPServer {
   private server: Server;
-  private db: Database.Database;
-  private dbPath: string;
-  private universalIndexer?: UniversalIndexer;
-  private priority1Tools: Priority1Tools;
-  private drizzleDb: DrizzleDatabase;
-  private dbService: DatabaseService;
-  // MCP server doesn't need visualization API - dashboard runs separately
+  private projectPath: string;
+  private rustBridge: ModuleSentinelBridge | null = null;
+  private logger = createLogger('MCPServer');
 
-  constructor(options?: { skipAutoIndex?: boolean }) {
-    const skipAutoIndex = options?.skipAutoIndex ?? false;
-    
+  constructor() {
     // Load environment variables
     dotenv.config();
     
     // Acquire process lock to prevent multiple instances
     ProcessLockManager.acquireLock().catch(() => {});
     
-    // Get configuration
-    const secureConfig = SecureConfigManager.getConfig();
-    const projectPath = secureConfig.projectPath || 
-                        process.env.MODULE_SENTINEL_PROJECT_PATH || 
-                        '/home/warxh/planet_procgen';
+    // Get configuration from environment
+    this.projectPath = process.env.MODULE_SENTINEL_PROJECT_PATH || 
+                       process.cwd();
     
-    // Get database path from centralized config
-    const dbConfig = DatabaseConfig.getInstance();
-    this.dbPath = dbConfig.getDbPath();
-
-    // Initialize database
-    this.db = new Database(this.dbPath);
-    
-    // Initialize Drizzle wrapper and database service
-    this.drizzleDb = new DrizzleDatabase(this.db);
-    this.dbService = new DatabaseService(this.db);
-    
-    // No console output in MCP mode - all communication via stdio
-    
-    // Universal indexer will be created when needed with proper options
-    
-    // Initialize tools with raw database for embedding support
-    this.priority1Tools = new Priority1Tools(this.drizzleDb.getDrizzle(), this.db);
-    
-    // MCP server doesn't need to start dashboard - it runs separately on port 6969
-    
-    // Skip auto-indexing for MCP server to avoid blocking stdio
-    // Users can manually trigger indexing via rebuild_index tool
+    // Initialize Rust bridge
+    this.rustBridge = new ModuleSentinelBridge(this.projectPath);
     
     // Initialize MCP server
     this.server = new Server(
@@ -146,21 +109,15 @@ export class ModuleSentinelMCPServer {
         version: '3.0.0',
         capabilities: {
           tools: {
-            // List all available tools
             list: true
-          },
-          resources: {
-            read: true
           }
         }
       },
       {
         capabilities: {
           tools: {
-            // Client can call tools
             call: true
-          },
-          resources: {}
+          }
         }
       }
     );
@@ -168,148 +125,78 @@ export class ModuleSentinelMCPServer {
     this.setupHandlers();
   }
 
-  private async startBackgroundServices(projectPath: string): Promise<void> {
-    console.error('[MCP Server] Starting background services...');
-    
-    try {
-      // The dashboard runs separately on port 6969 - MCP server doesn't need to start it
-      console.error('[MCP Server] Dashboard runs independently on port 6969');
-      
-      // Start indexing in background (can take time)
-      console.error('[MCP Server] About to start initial indexing in background...');
-      this.performInitialIndex(projectPath)
-        .then(() => {
-          console.error('[MCP Server] Initial indexing completed successfully');
-        })
-        .catch((error) => {
-          console.error('[MCP Server] Initial indexing failed:', error);
-        });
-      
-      console.error('[MCP Server] Background services startup completed (indexing continues in background)');
-    } catch (error) {
-      console.error('[MCP Server] Error in startBackgroundServices:', error);
-    }
-  }
-
-  private async performInitialIndex(projectPath: string): Promise<void> {
-    console.error('[MCP Server] Starting initial indexing...');
-    
-    try {
-      // Get configuration from secure config manager
-      const secureConfig = SecureConfigManager.getConfig();
-      const projectName = secureConfig.projectName || 'module-sentinel';
-      const languages = secureConfig.languages || ['typescript', 'javascript', 'cpp', 'python'];
-      const debugMode = secureConfig.debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
-      
-      console.error(`[MCP Server] Project: ${projectName}, Path: ${projectPath}`);
-      console.error(`[MCP Server] Languages: ${languages.join(', ')}`);
-      
-      // Create indexer with dynamic options from config
-      this.universalIndexer = new UniversalIndexer(this.db, {
-        projectPath,
-        projectName,
-        languages,
-        debugMode,
-        useWorkerThreads: true // Enable worker threads for MCP server
-      });
-      
-      // Index the project
-      const result = await this.universalIndexer.indexProject();
-      
-      console.error(`[MCP Server] Indexed ${result.filesIndexed} files, found ${result.symbolsFound} symbols`);
-      
-      // Log database health using our API service
-      const stats = await this.dbService.getStats();
-      
-      console.error('[MCP Server] Database stats:', {
-        symbols: stats.symbolCount,
-        files: stats.symbolCount, // Approximation since we don't track file count separately
-        projects: 1 // Single project for now
-      });
-      
-    } catch (error) {
-      console.error('[MCP Server] Initial indexing failed:', error);
-    }
-  }
-
-
-
   private setupHandlers(): void {
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools: Tool[] = [
-        {
-          name: 'find_implementations',
-          description: 'Find implementations of a specific functionality',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              functionality: { type: 'string', description: 'Description of the functionality' },
-              keywords: { 
-                type: 'array', 
-                items: { type: 'string' },
-                description: 'Keywords to search for'
+      return {
+        tools: [
+          {
+            name: 'search_symbols',
+            description: 'Search for symbols in the codebase using Rust-powered analysis',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string', description: 'Search query' },
+                kind: { type: 'string', description: 'Symbol kind filter (optional)' },
+                language: { type: 'string', description: 'Language filter (optional)' },
+                limit: { type: 'number', description: 'Maximum results (default: 20)' },
+                include_private: { type: 'boolean', description: 'Include private symbols (default: true)' }
               },
-              returnType: { type: 'string', description: 'Expected return type (optional)' }
-            },
-            required: ['functionality', 'keywords']
-          }
-        },
-        {
-          name: 'find_similar_code',
-          description: 'Find similar code patterns',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              pattern: { type: 'string', description: 'Code pattern to search for' },
-              context: { type: 'string', description: 'Context or module to search within' },
-              threshold: { 
-                type: 'number', 
-                description: 'Similarity threshold (0-1)', 
-                default: 0.7 
-              }
-            },
-            required: ['pattern', 'context']
-          }
-        },
-        {
-          name: 'rebuild_index',
-          description: 'Rebuild the code index',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { 
-                type: 'string', 
-                description: 'Path to project (optional, uses default if not provided)' 
-              },
-              force: { 
-                type: 'boolean', 
-                description: 'Force full rebuild', 
-                default: false 
+              required: ['query']
+            }
+          },
+          {
+            name: 'index_project',
+            description: 'Index the project for analysis using Rust tree-sitter parsers',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                force: { type: 'boolean', description: 'Force re-indexing' },
+                languages: { 
+                  type: 'array', 
+                  items: { type: 'string' },
+                  description: 'Languages to index (Rust, TypeScript, Python, etc.)'
+                },
+                include_tests: { type: 'boolean', description: 'Include test files (default: true)' },
+                max_file_size: { type: 'number', description: 'Maximum file size in bytes (default: 1MB)' }
               }
             }
-          }
-        },
-        {
-          name: 'search_symbols',
-          description: 'Search for symbols by name or pattern',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string', description: 'Search query' },
-              kind: { 
-                type: 'string', 
-                description: 'Symbol kind filter (class, function, etc)',
-                enum: ['class', 'function', 'method', 'namespace', 'module', 'all']
+          },
+          {
+            name: 'analyze_patterns',
+            description: 'Analyze code patterns and design patterns in the project',
+            inputSchema: {
+              type: 'object',
+              properties: {},
+              additionalProperties: false
+            }
+          },
+          {
+            name: 'calculate_similarity',
+            description: 'Calculate similarity between two symbols',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                symbol1_id: { type: 'string', description: 'First symbol ID' },
+                symbol2_id: { type: 'string', description: 'Second symbol ID' }
               },
-              limit: { type: 'number', default: 20 }
-            },
-            required: ['query']
+              required: ['symbol1_id', 'symbol2_id']
+            }
+          },
+          {
+            name: 'parse_file',
+            description: 'Parse a single file and extract symbols',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                file_path: { type: 'string', description: 'Path to the file to parse' },
+                language: { type: 'string', description: 'Programming language of the file' }
+              },
+              required: ['file_path', 'language']
+            }
           }
-        }
-      ];
-
-      return { tools };
+        ] as Tool[]
+      };
     });
 
     // Handle tool calls
@@ -317,171 +204,338 @@ export class ModuleSentinelMCPServer {
       const { name, arguments: args } = request.params;
 
       try {
+        // Ensure Rust bridge is initialized
+        await this.ensureRustBridge();
+
         switch (name) {
-          case 'find_implementations':
-            return this.handleFindImplementations(args);
-            
-          case 'find_similar_code':
-            return this.handleFindSimilarCode(args);
-            
-          case 'rebuild_index':
-            return this.handleRebuildIndex(args);
-            
           case 'search_symbols':
-            return this.handleSearchSymbols(args);
-            
+            return await this.handleSearchSymbols(args);
+
+          case 'index_project':
+            return await this.handleIndexProject(args);
+
+          case 'analyze_patterns':
+            return await this.handleAnalyzePatterns();
+
+          case 'calculate_similarity':
+            return await this.handleCalculateSimilarity(args);
+
+          case 'parse_file':
+            return await this.handleParseFile(args);
+
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
-      } catch (error: any) {
+      } catch (error) {
         return {
-          content: [{
-            type: 'text',
-            text: `Error: ${error.message}`
-          }]
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }
+          ],
+          isError: true
         };
       }
     });
-
-    // Handle resource listing
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      return { resources: [] };
-    });
-
-    // Handle resource reading
-    this.server.setRequestHandler(ReadResourceRequestSchema, async () => {
-      throw new Error('No readable resources available');
-    });
   }
 
-  private async handleFindImplementations(args: any) {
-    const results = await this.priority1Tools.findImplementations({
-      functionality: args.functionality,
-      keywords: args.keywords,
-      returnType: args.returnType
-    });
+  /**
+   * Ensure the Rust bridge is initialized
+   */
+  private async ensureRustBridge(): Promise<void> {
+    if (!this.rustBridge) {
+      throw new Error('Rust bridge not available');
+    }
 
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(results, null, 2)
-      }]
-    };
+    try {
+      const bridgeInfo = this.rustBridge.getProjectInfo();
+      if (!bridgeInfo.initialized) {
+        this.logger.info('Initializing Rust bridge...');
+        await this.rustBridge.initialize();
+      }
+    } catch (error) {
+      this.logger.error('Failed to initialize Rust bridge', error);
+      
+      // Fall back to quick functions if bridge initialization fails
+      const rustAvailable = await checkRustBindings();
+      if (!rustAvailable) {
+        throw new Error('Rust NAPI bindings not available. Run "npm run build:rust" to compile the Rust bindings.');
+      }
+      throw error;
+    }
   }
 
-  private async handleFindSimilarCode(args: any) {
-    const results = await this.priority1Tools.findSimilarCode({
-      pattern: args.pattern,
-      context: args.context,
-      threshold: args.threshold || 0.7
-    });
-
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(results, null, 2)
-      }]
-    };
-  }
-
-  private async handleRebuildIndex(args: any) {
-    const secureConfig = SecureConfigManager.getConfig();
-    const projectPath = args.projectPath || 
-                       secureConfig.projectPath || 
-                       process.env.MODULE_SENTINEL_PROJECT_PATH || 
-                       '/workspace';
-
-    const projectName = secureConfig.projectName || 'module-sentinel';
-    const languages = secureConfig.languages || ['typescript', 'javascript', 'cpp', 'python'];
-    const debugMode = secureConfig.debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
-
-    console.error(`[MCP Server] Rebuilding index for: ${projectPath}`);
-    console.error(`[MCP Server] Project: ${projectName}, Languages: ${languages.join(', ')}`);
-    
-    // Create new indexer for rebuild
-    this.universalIndexer = new UniversalIndexer(this.db, {
-      projectPath,
-      projectName,
-      languages,
-      forceReindex: args.force,
-      debugMode,
-      useWorkerThreads: true // Enable worker threads for MCP server
-    });
-    
-    // Re-index
-    const result = await this.universalIndexer.indexProject();
-
-    return {
-      content: [{
-        type: 'text',
-        text: `Index rebuilt successfully. Indexed ${result.filesIndexed} files, found ${result.symbolsFound} symbols.`
-      }]
-    };
-  }
-
+  /**
+   * Handle symbol search requests
+   */
   private async handleSearchSymbols(args: any) {
-    const query = args.query;
-    const kind = args.kind || 'all';
-    const limit = args.limit || 20;
-    
-    // Use our existing database service instead of raw SQL
-    const results = await this.dbService.searchSymbols(query, {
-      kind: kind === 'all' ? undefined : kind,
-      limit
-    });
-    
-    // Transform to match expected format
-    const formattedResults = results.map(symbol => ({
-      name: symbol.name,
-      qualified_name: symbol.qualified_name,
-      kind: symbol.kind,
-      file_path: symbol.file_path,
-      line: symbol.line,
-      signature: symbol.signature
-    }));
-    
-    return {
-      content: [{
-        type: 'text',
-        text: JSON.stringify(formattedResults, null, 2)
-      }]
+    const query = args?.query || '';
+    const options = {
+      kind: args?.kind,
+      language: args?.language,
+      limit: args?.limit || 20,
+      include_private: args?.include_private ?? true,
+      fuzzy_match: false
     };
+
+    try {
+      const results = await this.rustBridge!.searchSymbols(query, options);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Found ${results.length} symbols matching "${query}":\n\n` +
+                  results.map((symbol, i) => 
+                    `${i + 1}. **${symbol.name}** (${symbol.language})\n` +
+                    `   - File: ${symbol.file_path}:${symbol.start_line}\n` +
+                    `   - Signature: \`${symbol.signature}\`\n` +
+                    `   - Confidence: ${(symbol.confidence_score || 0) * 100}%`
+                  ).join('\n\n')
+          }
+        ]
+      };
+    } catch (error) {
+      // Fallback to quick search
+      this.logger.error('Bridge search failed, trying quick search', error);
+      const results = await quickSearch(this.projectPath, query, options.limit);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Found ${results.length} symbols (quick search fallback):\n\n` +
+                  results.map((symbol, i) => 
+                    `${i + 1}. **${symbol.name}**\n` +
+                    `   - File: ${symbol.file_path}:${symbol.start_line}`
+                  ).join('\n\n')
+          }
+        ]
+      };
+    }
   }
 
+  /**
+   * Handle project indexing requests
+   */
+  private async handleIndexProject(args: any) {
+    const options = {
+      force: args?.force || false,
+      languages: args?.languages,
+      include_tests: args?.include_tests ?? true,
+      max_file_size: args?.max_file_size || 1024 * 1024,
+      exclude_patterns: undefined
+    };
+
+    try {
+      const result = await this.rustBridge!.indexProject(options);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `✅ Project indexing completed successfully!\n\n` +
+                  `**Project Info:**\n` +
+                  `- Project ID: ${result.id}\n` +
+                  `- Name: ${result.name}\n` +
+                  `- Path: ${result.path}\n` +
+                  `- Symbols found: ${result.symbol_count}\n` +
+                  `- Last indexed: ${result.last_indexed || 'now'}`
+          }
+        ]
+      };
+    } catch (error) {
+      this.logger.error('Project indexing failed', error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Project indexing failed: ${error instanceof Error ? error.message : 'Unknown error'}\n\n` +
+                  `Please ensure:\n` +
+                  `1. The project path exists: ${this.projectPath}\n` +
+                  `2. You have read permissions\n` +
+                  `3. Rust bindings are compiled: run "npm run build:rust"`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Handle pattern analysis requests
+   */
+  private async handleAnalyzePatterns() {
+    try {
+      const result = await this.rustBridge!.analyzePatterns();
+      
+      const patternSummary = result.patterns.length > 0 
+        ? result.patterns.map(pattern => 
+            `**${pattern.category}** (${(pattern.confidence * 100).toFixed(1)}% confidence)\n` +
+            `- Found in ${pattern.symbols.length} symbols\n` +
+            `- Evidence: ${pattern.evidence.join(', ')}`
+          ).join('\n\n')
+        : 'No significant patterns detected.';
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `🔍 **Pattern Analysis Results**\n\n` +
+                  `**Summary:**\n` +
+                  `- Symbols analyzed: ${result.insights.total_symbols_analyzed}\n` +
+                  `- Patterns detected: ${result.insights.patterns_detected}\n` +
+                  `- Code reuse: ${result.insights.code_reuse_percentage.toFixed(1)}%\n\n` +
+                  `**Detected Patterns:**\n${patternSummary}\n\n` +
+                  `**Recommendations:**\n` +
+                  result.insights.recommendations.map(rec => `• ${rec}`).join('\n')
+          }
+        ]
+      };
+    } catch (error) {
+      // Fallback to quick analysis
+      this.logger.error('Bridge pattern analysis failed, trying quick analysis', error);
+      try {
+        const result = await quickAnalyze(this.projectPath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `🔍 **Quick Pattern Analysis**\n\n` +
+                    `${result.insights.recommendations.join('\n')}`
+            }
+          ]
+        };
+      } catch (fallbackError) {
+        this.logger.error('Quick analysis also failed', fallbackError);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `❌ Pattern analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+            }
+          ],
+          isError: true
+        };
+      }
+    }
+  }
+
+  /**
+   * Handle similarity calculation requests
+   */
+  private async handleCalculateSimilarity(args: any) {
+    const symbol1Id = args?.symbol1_id;
+    const symbol2Id = args?.symbol2_id;
+
+    if (!symbol1Id || !symbol2Id) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '❌ Both symbol1_id and symbol2_id are required'
+          }
+        ],
+        isError: true
+      };
+    }
+
+    try {
+      const result = await this.rustBridge!.calculateSimilarity(symbol1Id, symbol2Id);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `📊 **Similarity Analysis**\n\n` +
+                  `**Overall Similarity: ${(result.overall_score * 100).toFixed(1)}%**\n\n` +
+                  `**Breakdown:**\n` +
+                  `- Name similarity: ${(result.name_similarity * 100).toFixed(1)}%\n` +
+                  `- Signature similarity: ${(result.signature_similarity * 100).toFixed(1)}%\n` +
+                  `- Structural similarity: ${(result.structural_similarity * 100).toFixed(1)}%\n` +
+                  `- Context similarity: ${(result.context_similarity * 100).toFixed(1)}%`
+          }
+        ]
+      };
+    } catch (error) {
+      this.logger.error('Similarity calculation failed', error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ Similarity calculation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
+
+  /**
+   * Handle file parsing requests
+   */
+  private async handleParseFile(args: any) {
+    const filePath = args?.file_path;
+    const language = args?.language;
+
+    if (!filePath || !language) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '❌ Both file_path and language are required'
+          }
+        ],
+        isError: true
+      };
+    }
+
+    try {
+      const result = await this.rustBridge!.parseFile(filePath, language);
+      
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `📄 **File Parse Results**\n\n` +
+                  `**File:** ${filePath}\n` +
+                  `**Language:** ${language}\n` +
+                  `**Parse Method:** ${result.parse_method}\n` +
+                  `**Confidence:** ${(result.confidence * 100).toFixed(1)}%\n` +
+                  `**Symbols Found:** ${result.symbols.length}\n\n` +
+                  (result.errors.length > 0 ? 
+                    `**Errors:**\n${result.errors.map(err => `• ${err}`).join('\n')}\n\n` : '') +
+                  `**Symbols:**\n` +
+                  result.symbols.map((symbol, i) => 
+                    `${i + 1}. **${symbol.name}** (line ${symbol.start_line})\n` +
+                    `   \`${symbol.signature}\``
+                  ).join('\n')
+          }
+        ]
+      };
+    } catch (error) {
+      this.logger.error('File parsing failed', error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `❌ File parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+          }
+        ],
+        isError: true
+      };
+    }
+  }
 
   async run(): Promise<void> {
-    console.error('[MCP Server] Starting Module Sentinel MCP Server v3.0...');
-    
-    // Background services already started in constructor, just connect MCP protocol
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('[MCP Server] MCP Server protocol connected');
-  }
-
-  async stop(): Promise<void> {
-    console.error('[MCP Server] Shutting down...');
-    
-    // Dashboard runs separately, no need to stop it here
-    
-    this.db.close();
-    console.error('[MCP Server] Shutdown complete');
   }
 }
 
-// Main entry point
+// Start MCP server if run directly
 if (require.main === module) {
   const server = new ModuleSentinelMCPServer();
-  
   server.run().catch(console.error);
-  
-  // Handle graceful shutdown
-  process.on('SIGINT', async () => {
-    await server.stop();
-    process.exit(0);
-  });
-  
-  process.on('SIGTERM', async () => {
-    await server.stop();
-    process.exit(0);
-  });
 }

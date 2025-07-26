@@ -1,8 +1,18 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "outDir": "./dist-test",
-    "rootDir": "."
+    "module": "commonjs",
+    "types": ["jest", "node"],
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.test.ts",
+    "jest.setup.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

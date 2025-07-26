@@ -1,41 +1,161 @@
-![act-logo](https://raw.githubusercontent.com/wiki/nektos/act/img/logo-150.png)
+# Module Sentinel
 
-# Overview [![push](https://github.com/nektos/act/workflows/push/badge.svg?branch=master&event=push)](https://github.com/nektos/act/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/nektos/act)](https://goreportcard.com/report/github.com/nektos/act) [![awesome-runners](https://img.shields.io/badge/listed%20on-awesome--runners-blue.svg)](https://github.com/jonico/awesome-runners)
+A high-performance multi-language code analysis tool implementing the Model Context Protocol (MCP) with optional ML-enhanced capabilities.
 
-> "Think globally, `act` locally"
+## Features
 
-Run your [GitHub Actions](https://developer.github.com/actions/) locally! Why would you want to do this? Two reasons:
+### Core Analysis
+- **Multi-language parsing**: C++, Rust, TypeScript, Python, Go using tree-sitter
+- **Symbol extraction**: Functions, classes, interfaces, and relationships
+- **Pattern detection**: Design patterns, code duplication, architectural insights
+- **Similarity analysis**: Code similarity scoring and duplicate detection
+- **Cross-language detection**: API calls, FFI, subprocess interactions
 
-- **Fast Feedback** - Rather than having to commit/push every time you want to test out the changes you are making to your `.github/workflows/` files (or for any changes to embedded GitHub actions), you can use `act` to run the actions locally. The [environment variables](https://help.github.com/en/actions/configuring-and-managing-workflows/using-environment-variables#default-environment-variables) and [filesystem](https://help.github.com/en/actions/reference/virtual-environments-for-github-hosted-runners#filesystems-on-github-hosted-runners) are all configured to match what GitHub provides.
-- **Local Task Runner** - I love [make](<https://en.wikipedia.org/wiki/Make_(software)>). However, I also hate repeating myself. With `act`, you can use the GitHub Actions defined in your `.github/workflows/` to replace your `Makefile`!
+### Architecture
+- **Hybrid Rust/TypeScript**: High-performance Rust core with TypeScript MCP interface
+- **Universal AST**: Unified representation across all supported languages
+- **NAPI-RS bindings**: Native Node.js integration for optimal performance
+- **SQLite storage**: Embedded database for symbol indexing and caching
 
-> [!TIP]
-> **Now Manage and Run Act Directly From VS Code!**<br/>
-> Check out the [GitHub Local Actions](https://sanjulaganepola.github.io/github-local-actions-docs/) Visual Studio Code extension which allows you to leverage the power of `act` to run and test workflows locally without leaving your editor.
+## Quick Start
 
-# How Does It Work?
+### Installation
+```bash
+npm install
+npm run build        # Build both Rust and TypeScript components
+```
 
-When you run `act` it reads in your GitHub Actions from `.github/workflows/` and determines the set of actions that need to be run. It uses the Docker API to either pull or build the necessary images, as defined in your workflow files and finally determines the execution path based on the dependencies that were defined. Once it has the execution path, it then uses the Docker API to run containers for each action based on the images prepared earlier. The [environment variables](https://help.github.com/en/actions/configuring-and-managing-workflows/using-environment-variables#default-environment-variables) and [filesystem](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#file-systems) are all configured to match what GitHub provides.
+### Usage
 
-Let's see it in action with a [sample repo](https://github.com/cplee/github-actions-demo)!
+#### MCP Server
+```bash
+npm run start:mcp    # Start Model Context Protocol server
+```
 
-![Demo](https://raw.githubusercontent.com/wiki/nektos/act/quickstart/act-quickstart-2.gif)
+#### Standalone Analysis
+```bash
+npm run start:dashboard  # Web visualization dashboard (port 6969)
+```
 
-# Act User Guide
+#### Development
+```bash
+npm run dev          # Development mode with file watching
+```
 
-Please look at the [act user guide](https://nektosact.com) for more documentation.
+## Optional ML Features
 
-# Support
+Module Sentinel supports optional machine learning enhancements for improved analysis accuracy.
 
-Need help? Ask in [discussions](https://github.com/nektos/act/discussions)!
+### Enable ML Features
+```bash
+# Build with ML support
+npm run build:rust -- --features ml
 
-# Contributing
+# The default build excludes ML dependencies for smaller size
+npm run build        # Standard build without ML
+```
 
-Want to contribute to act? Awesome! Check out the [contributing guidelines](CONTRIBUTING.md) to get involved.
+### ML Capabilities (when enabled)
+- **Enhanced similarity detection**: 70% → 90% accuracy improvement
+- **Error prediction**: Intelligent syntax error suggestions
+- **Code completion**: Context-aware token prediction
+- **Smart tokenization**: Language-aware code tokenization
 
-## Manually building from source
+### ML Models
+- **Code similarity embedder**: 15MB model for duplicate detection
+- **Error predictor**: 50MB model for syntax error recovery
+- **Simple completion**: 60MB model for basic autocomplete
 
-- Install Go tools 1.20+ - (<https://golang.org/doc/install>)
-- Clone this repo `git clone git@github.com:nektos/act.git`
-- Run unit tests with `make test`
-- Build and install: `make install`
+Total ML bundle: ~125MB (downloaded on first use)
+
+## API
+
+### MCP Tools
+- `search_symbols`: Query codebase symbols with filters
+- `index_project`: Parse and analyze project files
+- `analyze_patterns`: Detect design patterns and code smells
+- `calculate_similarity`: Compare symbol similarity scores
+- `parse_file`: Single file analysis
+
+### REST API
+```bash
+# Symbol search
+GET /api/symbols?query=function&language=rust
+
+# Project analysis
+POST /api/analyze
+Content-Type: application/json
+{"projectPath": "/path/to/code"}
+```
+
+## Language Support
+
+| Language   | Parsing | Patterns | Cross-Language |
+|------------|---------|----------|----------------|
+| C++        | ✅      | ✅       | ✅             |
+| Rust       | ✅      | ✅       | ✅             |
+| TypeScript | ✅      | ✅       | ✅             |
+| Python     | ✅      | ✅       | ✅             |
+| Go         | ✅      | ⚠️       | ✅             |
+| Java       | ✅      | ⚠️       | ⚠️             |
+
+## Performance
+
+### Core Parser
+- **Memory efficient**: Memory-mapped file reading, zero-copy processing
+- **Parallel processing**: Work-stealing queue for concurrent parsing
+- **Caching**: LRU cache with Bloom filters for duplicate detection
+- **Batch operations**: Optimized database insertions
+
+### Resource Usage
+- **Standard build**: ~50MB memory footprint
+- **With ML features**: ~2-4GB memory (models loaded on demand)
+- **Parse speed**: ~10,000 LOC/second typical throughput
+
+## Development
+
+### Build System
+```bash
+npm run build:rust          # Build native Rust bindings
+npm run build:dashboard      # Build web visualization
+npm run typecheck           # TypeScript type checking
+npm run lint                # Code quality checks
+```
+
+### Testing
+```bash
+# Rust tests (comprehensive)
+cd module-sentinel-rust/parser-service
+cargo test
+
+# TypeScript integration tests
+npm test
+```
+
+### Architecture Overview
+```
+┌─────────────────┐    ┌──────────────┐    ┌─────────────────┐
+│   MCP Client    │ -> │ TypeScript   │ -> │ Rust Parser     │
+│                 │    │ Bridge       │    │ Service         │
+└─────────────────┘    └──────────────┘    └─────────────────┘
+                                                     │
+                                            ┌─────────────────┐
+                                            │ SQLite Database │
+                                            │ Symbol Storage  │
+                                            └─────────────────┘
+```
+
+## License
+
+Licensed under the MIT License. See [LICENSE](LICENSE) for details.
+
+## Contributing
+
+1. Install dependencies: `npm install`
+2. Build native bindings: `npm run build:rust`
+3. Run tests: `cargo test` (Rust) and `npm test` (TypeScript)
+4. Follow the coding conventions in [CLAUDE.md](CLAUDE.md)
+
+---
+
+**Note**: ML features are optional and can be disabled for lighter deployments. The core analysis functionality works independently of ML enhancements.

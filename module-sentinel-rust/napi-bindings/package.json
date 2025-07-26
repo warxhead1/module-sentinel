@@ -1,0 +1,24 @@
+{
+  "name": "module-sentinel-rust",
+  "version": "0.1.0",
+  "description": "Rust NAPI bindings for Module Sentinel",
+  "main": "index.js",
+  "napi": {
+    "binaryName": "module-sentinel-rust",
+    "targets": [
+      "x86_64-unknown-linux-gnu"
+    ]
+  },
+  "scripts": {
+    "artifacts": "napi artifacts",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "prepublishOnly": "napi prepublish -t npm",
+    "test": "ava",
+    "universal": "napi universal",
+    "version": "napi version"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.16.0"
+  }
+}
