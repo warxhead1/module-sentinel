@@ -223,7 +223,13 @@ impl UnifiedParsingService {
             }
             
             match self.parse_file(file_path).await {
-                Ok(result) => {
+                Ok(mut result) => {
+                    // Update symbols with correct project_id and language_id before storing
+                    for symbol in &mut result.symbols {
+                        symbol.project_id = project_id.unwrap_or(0);
+                        symbol.language_id = self.get_or_create_language_id(&self.detect_language(file_path)?).await?;
+                    }
+                    
                     // Store symbols in database  
                     for symbol in &result.symbols {
                         let _stored = self.project_db.store_universal_symbol(symbol).await?;
@@ -381,7 +387,7 @@ impl UnifiedParsingService {
             file_path, tree.root_node().kind(), tree.root_node().has_error());
         
         // Extract symbols
-        let symbols = self.extract_symbols_basic(&tree, content, file_path, language)?;
+        let symbols = self.extract_symbols_basic(&tree, content, file_path, language).await?;
         
         debug!("Extracted {} symbols from {:?}", symbols.len(), file_path);
         
@@ -478,11 +484,11 @@ impl UnifiedParsingService {
         _ml_components: &MLComponents,
     ) -> Result<Vec<UniversalSymbol>> {
         // Use existing symbol extraction logic but with ML enhancements
-        self.extract_symbols_basic(tree, content, file_path, language)
+        self.extract_symbols_basic(tree, content, file_path, language).await
     }
 
     /// Extract symbols using basic tree-sitter traversal
-    fn extract_symbols_basic(
+    async fn extract_symbols_basic(
         &self,
         tree: &Tree,
         content: &str,
@@ -493,7 +499,7 @@ impl UnifiedParsingService {
         let mut cursor = tree.walk();
         
         // Get the language_id for the foreign key - we'll need to ensure languages are populated
-        let language_id = self.get_or_create_language_id(language)?;
+        let language_id = self.get_or_create_language_id(language).await?;
         
         match language {
             ParserLanguage::Rust => self.extract_rust_symbols(&mut cursor, content, file_path, language_id, &mut symbols),
@@ -621,8 +627,24 @@ impl UnifiedParsingService {
         }
     }
 
+    /// Get or create language ID for foreign key relationships
+    async fn get_or_create_language_id(&self, language: &ParserLanguage) -> Result<i32> {
+        // For now, return a simple mapping - in production this would query/create in DB
+        let language_id = match language {
+            ParserLanguage::Rust => 1,
+            ParserLanguage::Python => 2,
+            ParserLanguage::TypeScript => 3,
+            ParserLanguage::JavaScript => 4,
+            ParserLanguage::Cpp => 5,
+            ParserLanguage::Go => 6,
+            ParserLanguage::Java => 7,
+            ParserLanguage::CSharp => 8,
+        };
+        Ok(language_id)
+    }
+
     // Symbol extraction methods (from existing parsing_service.rs)
-    fn extract_rust_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
+    fn extract_rust_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
         let node = cursor.node();
         
         match node.kind() {
@@ -648,9 +670,9 @@ impl UnifiedParsingService {
                 if cursor.goto_first_child() {
                     loop {
                         if cursor.node().kind() == "function_item" {
-                            self.extract_rust_symbols(cursor, content, file_path, symbols);
+                            self.extract_rust_symbols(cursor, content, file_path, language_id, symbols);
                         } else {
-                            self.extract_rust_symbols(cursor, content, file_path, symbols);
+                            self.extract_rust_symbols(cursor, content, file_path, language_id, symbols);
                         }
                         if !cursor.goto_next_sibling() {
                             break;
@@ -699,7 +721,7 @@ impl UnifiedParsingService {
         // Recursively process children
         if cursor.goto_first_child() {
             loop {
-                self.extract_rust_symbols(cursor, content, file_path, symbols);
+                self.extract_rust_symbols(cursor, content, file_path, language_id, symbols);
                 if !cursor.goto_next_sibling() {
                     break;
                 }
@@ -708,7 +730,7 @@ impl UnifiedParsingService {
         }
     }
 
-    fn extract_python_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
+    fn extract_python_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
         let node = cursor.node();
         
         match node.kind() {
@@ -753,7 +775,7 @@ impl UnifiedParsingService {
         // Recursively process children
         if cursor.goto_first_child() {
             loop {
-                self.extract_python_symbols(cursor, content, file_path, symbols);
+                self.extract_python_symbols(cursor, content, file_path, language_id, symbols);
                 if !cursor.goto_next_sibling() {
                     break;
                 }
@@ -762,7 +784,7 @@ impl UnifiedParsingService {
         }
     }
 
-    fn extract_typescript_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
+    fn extract_typescript_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
         let node = cursor.node();
         
         match node.kind() {
@@ -807,7 +829,7 @@ impl UnifiedParsingService {
         // Recursively process children
         if cursor.goto_first_child() {
             loop {
-                self.extract_typescript_symbols(cursor, content, file_path, symbols);
+                self.extract_typescript_symbols(cursor, content, file_path, language_id, symbols);
                 if !cursor.goto_next_sibling() {
                     break;
                 }
@@ -816,7 +838,7 @@ impl UnifiedParsingService {
         }
     }
 
-    fn extract_cpp_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
+    fn extract_cpp_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
         let node = cursor.node();
         
         match node.kind() {
@@ -946,7 +968,7 @@ impl UnifiedParsingService {
         // Recursively process children
         if cursor.goto_first_child() {
             loop {
-                self.extract_cpp_symbols(cursor, content, file_path, symbols);
+                self.extract_cpp_symbols(cursor, content, file_path, language_id, symbols);
                 if !cursor.goto_next_sibling() {
                     break;
                 }
@@ -955,19 +977,19 @@ impl UnifiedParsingService {
         }
     }
 
-    fn extract_go_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
-        self.extract_basic_symbols(cursor, content, file_path, symbols, &ParserLanguage::Go);
+    fn extract_go_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
+        self.extract_basic_symbols(cursor, content, file_path, language_id, symbols, &ParserLanguage::Go);
     }
 
-    fn extract_java_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
-        self.extract_basic_symbols(cursor, content, file_path, symbols, &ParserLanguage::Java);
+    fn extract_java_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
+        self.extract_basic_symbols(cursor, content, file_path, language_id, symbols, &ParserLanguage::Java);
     }
 
-    fn extract_csharp_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>) {
-        self.extract_basic_symbols(cursor, content, file_path, symbols, &ParserLanguage::CSharp);
+    fn extract_csharp_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
+        self.extract_basic_symbols(cursor, content, file_path, language_id, symbols, &ParserLanguage::CSharp);
     }
 
-    fn extract_basic_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, symbols: &mut Vec<UniversalSymbol>, _language: &ParserLanguage) {
+    fn extract_basic_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>, _language: &ParserLanguage) {
         let node = cursor.node();
         
         // Generic symbol extraction for unsupported languages
@@ -990,7 +1012,7 @@ impl UnifiedParsingService {
         // Recursively process children
         if cursor.goto_first_child() {
             loop {
-                self.extract_basic_symbols(cursor, content, file_path, symbols, _language);
+                self.extract_basic_symbols(cursor, content, file_path, language_id, symbols, _language);
                 if !cursor.goto_next_sibling() {
                     break;
                 }

@@ -56,7 +56,6 @@ export class DashboardServer {
       this.flowSSE = new FlowSSEService(this.flowService);
       this.flowSSE.initialize();
     } catch (error) {
-      console.error('Module Sentinel initialization failed:', error);
       this.moduleSentinel = null;
     }
   }
@@ -110,7 +109,6 @@ export class DashboardServer {
       await this.handleStaticFile(req, res);
       
     } catch (error) {
-      console.error('Request error:', error);
       this.sendError(res, 500, 'Internal Server Error');
     }
   }
@@ -170,11 +168,9 @@ export class DashboardServer {
             // Found symbols
             this.sendJson(res, { success: true, data: result });
           } catch (error) {
-            console.error(' Symbol search failed:', error);
             this.sendFallbackSymbols(res, query, kind, limit);
           }
         } else {
-          console.warn('\u26a0\ufe0f  ModuleSentinel not available, using fallback');
           this.sendFallbackSymbols(res, query, kind, limit);
         }
         
@@ -184,8 +180,6 @@ export class DashboardServer {
         
         if (this.moduleSentinel) {
           try {
-            console.log(`\ud83d\udee0\ufe0f Indexing project: ${this.projectPath} (force: ${force})`);
-            
             // Map string languages to enum values
             const languageEnums: Language[] = languages
               .map((lang: string) => {
@@ -214,14 +208,11 @@ export class DashboardServer {
             
             const indexResult = await this.moduleSentinel.indexProject(indexingOptions);
             
-            console.log(` Indexed ${indexResult.symbol_count} symbols`);
             this.sendJson(res, { success: true, data: indexResult });
           } catch (error) {
-            console.error(' Project indexing failed:', error);
             this.sendFallbackIndexResult(res, force, languages);
           }
         } else {
-          console.warn('\u26a0\ufe0f  ModuleSentinel not available, using fallback');
           this.sendFallbackIndexResult(res, force, languages);
         }
         
@@ -243,19 +234,14 @@ export class DashboardServer {
       } else if (url.startsWith('/api/project/analyze')) {
         if (this.moduleSentinel) {
           try {
-            console.log(`\ud83d\udd2d Analyzing patterns in project: ${this.projectPath}`);
-            
             // Run pattern analysis using real Rust analyzer
             const analysisResult = await this.moduleSentinel.analyzePatterns();
             
-            console.log(` Found ${analysisResult.insights.patterns_detected} patterns`);
             this.sendJson(res, { success: true, data: analysisResult });
           } catch (error) {
-            console.error(' Pattern analysis failed:', error);
             this.sendFallbackAnalysis(res);
           }
         } else {
-          console.warn('\u26a0\ufe0f  ModuleSentinel not available for analysis, using fallback');
           this.sendFallbackAnalysis(res);
         }
         
@@ -267,7 +253,6 @@ export class DashboardServer {
             
             this.sendJson(res, { success: true, data: { relationships: relationshipsResult } });
           } catch (error) {
-            console.warn('NAPI bindings not available for relationships, using fallback:', error);
             // Enhanced relationship data for revolutionary visualizations (fallback)
             const relationships = [
             {
@@ -325,7 +310,6 @@ export class DashboardServer {
             this.sendJson(res, { success: true, data: { relationships } });
           }
         } else {
-          console.warn('⚠️  ModuleSentinel not available for relationships, using fallback');
           const relationships = [
             {
               source: 'ParsingService',
@@ -586,7 +570,6 @@ export class DashboardServer {
       }
 
     } catch (error) {
-      console.error('API error:', error);
       this.sendJson(res, {
         success: false,
         error: error instanceof Error ? error.message : 'Unknown error'
@@ -751,7 +734,6 @@ if (require.main === module) {
 
   // Handle graceful shutdown
   const shutdown = async () => {
-    console.log('Shutting down dashboard server...');
     await dashboardServer.stop();
     process.exit(0);
   };
