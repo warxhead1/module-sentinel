@@ -8,7 +8,7 @@ import { eq } from "drizzle-orm";
 import { createLogger } from "../../src/utils/logger.js";
 import { DatabaseInitializer } from "../../src/database/database-initializer.js";
 import { CppLanguageParser } from "../../src/parsers/adapters/cpp-language-parser.js";
-import { universalSymbols } from "../../src/database/drizzle/schema.js";
+import { universalSymbols, projects, languages } from "../../src/database/drizzle/schema.js";
 
 export class ParentChildRelationshipTest {
   private logger = createLogger("ParentChildRelationshipTest");
@@ -22,8 +22,27 @@ export class ParentChildRelationshipTest {
     this.drizzleDb = drizzle(this.db);
     
     // Initialize schema
-    const initializer = new DatabaseInitializer(this.db);
-    await initializer.initialize();
+    const initializer = DatabaseInitializer.getInstance();
+    this.db.close(); // Close the initial database
+    this.db = await initializer.initializeDatabase(":memory:");
+    this.drizzleDb = drizzle(this.db);
+    
+    // Create test project and language
+    await this.drizzleDb.insert(projects).values({
+      name: "test-project",
+      rootPath: "/test",
+      displayName: "Test Project",
+      createdAt: new Date().toISOString(),
+      lastIndexed: new Date().toISOString()
+    });
+    
+    await this.drizzleDb.insert(languages).values({
+      name: "cpp",
+      displayName: "C++",
+      extensions: [".cpp", ".cc", ".cxx", ".hpp", ".h"],
+      parserClass: "CppLanguageParser",
+      active: true
+    }).onConflictDoNothing();
     
     // Create parser
     this.parser = new CppLanguageParser(this.db, {
@@ -34,9 +53,7 @@ export class ParentChildRelationshipTest {
   }
 
   async teardown(): Promise<void> {
-    if (this.parser) {
-      await this.parser.cleanup();
-    }
+    // Parser cleanup not needed
     if (this.db) {
       this.db.close();
     }
@@ -71,7 +88,7 @@ public:
 `;
 
       // Parse the code
-      const result = await this.parser!.parseFile("test.cpp", testCode);
+      const result = await this.parser!.parse("test.cpp", testCode);
       this.logger.info(`Parsed ${result.symbols.length} symbols`);
       
       // Store symbols in database using IndexerSymbolResolver logic

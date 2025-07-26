@@ -1,9 +1,76 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Module Sentinel Test Suite" tests="2" passed="2" failures="0" skipped="0" time="91.338">
-  <testsuite name="Module Sentinel" tests="2" passed="2" failures="0" skipped="0" time="91.338">
-    <testcase classname="MemberAccessTrackingTest" name="member_access_tracking" time="5">
+<testsuites name="Module Sentinel Test Suite" tests="35" passed="34" failures="0" skipped="1" time="87.702">
+  <testsuite name="Module Sentinel" tests="35" passed="34" failures="0" skipped="1" time="87.702">
+    <testcase classname="ASTGenerationTest" name="ASTGenerationTest" time="undefined">
     </testcase>
-    <testcase classname="MemberAccessDeepDiveTest" name="member_access_deep_dive" time="115">
+    <testcase classname="DrizzleOrmTest" name="testProjectOperations" time="6">
+    </testcase>
+    <testcase classname="DrizzleOrmTest" name="testLanguageOperations" time="5">
+    </testcase>
+    <testcase classname="DrizzleOrmTest" name="testSymbolOperations" time="7">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="namespace_stack_management" time="0">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="export_namespace_recognition" time="0">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="multi_level_namespace_parsing" time="1">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="scope_boundary_tracking" time="0">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="qualified_name_building" time="0">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="namespace_extraction" time="0">
+    </testcase>
+    <testcase classname="NamespaceParsingSimpleTest" name="real_file_namespace_parsing" time="3">
+    </testcase>
+    <testcase classname="RelationshipExtractionTest" name="pattern_based_inheritance_extraction" time="7">
+    </testcase>
+    <testcase classname="RelationshipExtractionTest" name="pattern_based_function_call_extraction" time="8">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testProjectsEndpoint" time="12">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testLanguagesEndpoint" time="9">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testStatsEndpoint" time="3">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testNamespacesEndpoint" time="2">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testModulesEndpoint" time="39">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testRelationshipsEndpoint" time="5">
+    </testcase>
+    <testcase classname="ComprehensiveAPITest" name="testSymbolsEndpoint" time="4">
+    </testcase>
+    <testcase classname="ControlFlowAnalysisTest" name="testSerializeToStringControlFlow" time="0">
+      <skipped/>
+    </testcase>
+    <testcase classname="MemberAccessTrackingTest" name="member_access_tracking" time="3">
+    </testcase>
+    <testcase classname="MemberAccessDeepDiveTest" name="member_access_deep_dive" time="108">
+    </testcase>
+    <testcase classname="TypeScriptEdgeCasesTest" name="Arrow Functions in Object Literals" time="6">
+    </testcase>
+    <testcase classname="TypeScriptEdgeCasesTest" name="Template Literal Types" time="1">
+    </testcase>
+    <testcase classname="TypeScriptEdgeCasesTest" name="Dynamic Imports" time="3">
+    </testcase>
+    <testcase classname="TypeScriptEdgeCasesTest" name="Complex Destructuring" time="1">
+    </testcase>
+    <testcase classname="TypeScriptEdgeCasesTest" name="Full Edge Cases File" time="15">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Basic Inheritance Detection" time="7">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Override Method Detection" time="4">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Control Flow Block Detection" time="19">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Lambda Expression Detection" time="3">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Template Specialization Detection" time="4">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Include Directive Detection" time="1">
+    </testcase>
+    <testcase classname="CppParserIssuesTest" name="Function Complexity and Metrics" time="17">
     </testcase>
   </testsuite>
 </testsuites>

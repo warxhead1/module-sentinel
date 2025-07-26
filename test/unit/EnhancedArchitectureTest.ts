@@ -5,9 +5,9 @@
 
 import Database from 'better-sqlite3';
 import { TestResult } from '../helpers/JUnitReporter';
-// import { CppUniversalParser } from '../../dist/parsers/languages/cpp-universal-parser.js';
-// import { UniversalPatternEngine } from '../../dist/parsers/universal-pattern-engine.js';
-// import { CrossLanguageAnalyzer } from '../../dist/parsers/cross-language-analyzer.js';
+import { CppLanguageParser } from '../../src/parsers/adapters/cpp-language-parser.js';
+import { UniversalPatternEngine } from '../../src/parsers/universal-pattern-engine.js';
+import { CrossLanguageAnalyzer } from '../../src/parsers/cross-language-analyzer.js';
 
 export class EnhancedArchitectureTest {
   private db: Database.Database;
@@ -67,14 +67,18 @@ namespace PlanetGen::Rendering {
 }
 `;
 
-      const parser = new CppUniversalParser();
+      const parser = new CppLanguageParser(this.db, {
+        debugMode: true,
+        enableSemanticAnalysis: false
+      });
       
-      // Initialize with database (crucial for macro expansion)
-      parser.initializeWithDatabase(this.db, 1, 1);
+      // Initialize parser
+      await parser.initialize();
       
       // Parse the content
-      const symbols = await parser.parseSymbols('/tmp/test-enhanced.ixx', testContent);
-      const relationships = await parser.parseRelationships('/tmp/test-enhanced.ixx', symbols);
+      const result = await parser.parseFile('/tmp/test-enhanced.ixx', testContent);
+      const symbols = result.symbols;
+      const relationships = result.relationships;
       
       // Validate sophisticated features are preserved
       if (symbols.length === 0) {

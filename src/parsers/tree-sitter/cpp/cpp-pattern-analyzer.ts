@@ -322,7 +322,7 @@ export class CppPatternAnalyzer {
         const [fullMatch, returnType, name] = match;
         
         // Skip LOG calls and control flow keywords
-        if (name.startsWith('LOG_') || ['if', 'while', 'for', 'switch'].includes(name)) {
+        if (!name || name.startsWith('LOG_') || ['if', 'while', 'for', 'switch'].includes(name)) {
           continue;
         }
 
