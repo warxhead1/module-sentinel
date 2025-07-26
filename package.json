@@ -50,7 +50,7 @@
   "dependencies": {
     "@esbuild-kit/core-utils": "^3.3.2",
     "@esbuild-kit/esm-loader": "^2.6.5",
-    "@modelcontextprotocol/sdk": "^1.0.1",
+    "@modelcontextprotocol/sdk": "^1.17.0",
     "better-sqlite3": "^11.10.0",
     "bloom-filters": "^3.0.4",
     "d3": "^7.9.0",
