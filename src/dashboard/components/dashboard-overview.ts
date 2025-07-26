@@ -1,6 +1,10 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import { dataService } from '../services/data.service.js';
 import { stateService } from '../services/state.service.js';
+import { iconRegistry } from '../utils/icon-registry.js';
+import { tooltipManager, TooltipManager } from '../utils/tooltip-manager.js';
+import { MicroChartRenderer } from '../utils/micro-chart-renderer.js';
+import type { MetricData, QuickAction, InsightCard } from '../types/dashboard.types.js';
 
 /**
  * Dashboard overview component
@@ -9,6 +13,9 @@ export class DashboardOverview extends DashboardComponent {
   private stats: any = null;
   private namespaceData: any[] = [];
   private unsubscribers: Array<() => void> = [];
+  private metricsHistory: Map<string, number[]> = new Map();
+  private insights: InsightCard[] = [];
+  private graphPreviewData: any = null;
 
   connectedCallback() {
     // Subscribe to state changes for project/language counts
@@ -93,6 +100,9 @@ export class DashboardOverview extends DashboardComponent {
           .slice(0, 10);
       }
       
+      // Load additional enhanced data
+      await this.loadInsights();
+      
       this._loading = false;
       this.render();
     } catch (error) {
@@ -175,11 +185,267 @@ export class DashboardOverview extends DashboardComponent {
         
         .metrics-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
           gap: 24px;
           margin-bottom: 40px;
         }
         
+        /* Enhanced metric card styles */
+        .metric-card.enhanced {
+          background: rgba(35, 35, 65, 0.9);
+          border-radius: var(--border-radius);
+          padding: 20px;
+          border: 1px solid rgba(147, 112, 219, 0.3);
+          backdrop-filter: blur(20px);
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          position: relative;
+          overflow: hidden;
+          cursor: pointer;
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+        
+        .metric-card.enhanced::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: 2px;
+          background: linear-gradient(90deg, 
+            transparent, 
+            var(--primary-accent), 
+            transparent);
+          opacity: 0;
+          transition: var(--transition-smooth);
+        }
+        
+        .metric-card.enhanced:hover {
+          transform: translateY(-6px) scale(1.02);
+          background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(186, 85, 211, 0.5);
+          box-shadow: 0 12px 48px rgba(186, 85, 211, 0.3), 0 0 80px rgba(186, 85, 211, 0.1);
+        }
+        
+        .metric-card.enhanced:hover::before {
+          opacity: 1;
+        }
+        
+        .metric-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .metric-icon {
+          font-size: 24px;
+        }
+        
+        .quick-actions {
+          display: flex;
+          gap: 8px;
+        }
+        
+        .quick-action-btn {
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-secondary);
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 14px;
+          backdrop-filter: blur(10px);
+        }
+        
+        .quick-action-btn:hover {
+          background: rgba(186, 85, 211, 0.2);
+          border-color: rgba(186, 85, 211, 0.5);
+          color: var(--primary-accent);
+          transform: scale(1.1);
+        }
+        
+        .metric-value-container {
+          display: flex;
+          align-items: baseline;
+          gap: 12px;
+          justify-content: center;
+        }
+        
+        .metric-value {
+          font-size: 2.5rem;
+          font-weight: 700;
+          line-height: 1;
+        }
+        
+        .metric-trend {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          font-size: 0.875rem;
+          font-weight: 600;
+        }
+        
+        .trend-icon {
+          font-size: 16px;
+        }
+        
+        .metric-label {
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+          font-weight: 500;
+          text-align: center;
+        }
+        
+        .metric-sparkline {
+          height: 40px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 8px 0;
+        }
+        
+        .metric-footer {
+          text-align: center;
+          margin-top: auto;
+        }
+        
+        .metric-details-hint {
+          font-size: 0.75rem;
+          color: var(--text-muted);
+          opacity: 0;
+          transition: opacity 0.2s ease;
+        }
+        
+        .metric-card.enhanced:hover .metric-details-hint {
+          opacity: 1;
+        }
+        
+        /* Insight carousel styles */
+        .insight-carousel {
+          background: rgba(35, 35, 65, 0.9);
+          border-radius: var(--border-radius);
+          padding: 24px;
+          border: 1px solid rgba(147, 112, 219, 0.3);
+          backdrop-filter: blur(20px);
+          margin-bottom: 32px;
+        }
+        
+        .carousel-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 16px;
+        }
+        
+        .carousel-header h3 {
+          margin: 0;
+          font-size: 1.25rem;
+          color: var(--primary-accent);
+        }
+        
+        .carousel-controls {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+        
+        .carousel-prev, .carousel-next {
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          border: 1px solid var(--card-border);
+          background: rgba(255, 255, 255, 0.05);
+          color: var(--text-primary);
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 18px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        
+        .carousel-prev:hover, .carousel-next:hover {
+          background: rgba(186, 85, 211, 0.2);
+          border-color: rgba(186, 85, 211, 0.5);
+        }
+        
+        .carousel-indicator {
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+        }
+        
+        .carousel-content {
+          position: relative;
+          height: 120px;
+          overflow: hidden;
+        }
+        
+        .insight-card {
+          position: absolute;
+          width: 100%;
+          display: none;
+          grid-template-columns: auto 1fr auto;
+          gap: 16px;
+          align-items: center;
+          padding: 16px;
+          background: rgba(255, 255, 255, 0.02);
+          border-radius: 8px;
+          border: 1px solid transparent;
+          transition: all 0.3s ease;
+        }
+        
+        .insight-card.active {
+          display: grid;
+        }
+        
+        .insight-severity {
+          font-size: 24px;
+        }
+        
+        .insight-body h4 {
+          margin: 0 0 8px 0;
+          font-size: 1rem;
+          color: var(--text-primary);
+        }
+        
+        .insight-body p {
+          margin: 0 0 12px 0;
+          font-size: 0.875rem;
+          color: var(--text-secondary);
+        }
+        
+        .insight-action {
+          background: rgba(186, 85, 211, 0.2);
+          border: 1px solid rgba(186, 85, 211, 0.5);
+          color: var(--primary-accent);
+          padding: 6px 16px;
+          border-radius: 20px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          font-size: 0.875rem;
+          font-weight: 500;
+        }
+        
+        .insight-action:hover {
+          background: rgba(186, 85, 211, 0.3);
+          transform: translateX(4px);
+        }
+        
+        .insight-metrics {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          font-size: 0.75rem;
+          color: var(--text-muted);
+        }
+        
+        /* Keep existing metric card style for fallback */
         .metric-card {
           background: rgba(35, 35, 65, 0.9);
           border-radius: var(--border-radius);
@@ -190,32 +456,6 @@ export class DashboardOverview extends DashboardComponent {
           position: relative;
           overflow: hidden;
           text-align: center;
-        }
-        
-        .metric-card::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: 1px;
-          background: linear-gradient(90deg, 
-            transparent, 
-            var(--primary-accent), 
-            transparent);
-          opacity: 0;
-          transition: var(--transition-smooth);
-        }
-        
-        .metric-card:hover {
-          transform: translateY(-4px);
-          background: rgba(255, 255, 255, 0.06);
-          border-color: rgba(100, 255, 218, 0.2);
-          box-shadow: var(--shadow-medium), 0 0 40px rgba(100, 255, 218, 0.1);
-        }
-        
-        .metric-card:hover::before {
-          opacity: 1;
         }
         
         .dashboard-grid {
@@ -424,23 +664,10 @@ export class DashboardOverview extends DashboardComponent {
         <p class="subtitle">Real-time architectural metrics and system health</p>
       </div>
       
-      <div class="metrics-grid">
-        <div class="metric-card">
-          <div class="metric-value">${this.stats?.symbolCount?.toLocaleString() || '0'}</div>
-          <div class="metric-label">Total Symbols</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">${this.stats?.namespaceCount?.toLocaleString() || '0'}</div>
-          <div class="metric-label">Namespaces</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">${this.getProjectCount()}</div>
-          <div class="metric-label">Active Projects</div>
-        </div>
-        <div class="metric-card">
-          <div class="metric-value">${this.getLanguageCount()}</div>
-          <div class="metric-label">Languages</div>
-        </div>
+      ${this.renderInsightCarousel()}
+      
+      <div class="metrics-grid" id="enhanced-metrics">
+        <!-- Enhanced metrics will be rendered here -->
       </div>
       
       <div class="dashboard-grid">
@@ -523,10 +750,86 @@ export class DashboardOverview extends DashboardComponent {
       fullRebuildBtn.addEventListener('click', () => this.handleReindex(true));
     }
 
+    // Initialize enhanced metrics
+    this.initializeEnhancedMetrics();
+    
     // Initialize charts if data is loaded
     if (this.stats) {
       this.initializeCharts();
     }
+  }
+  
+  private async initializeEnhancedMetrics(): Promise<void> {
+    const metricsContainer = this.shadow.getElementById('enhanced-metrics');
+    if (!metricsContainer) return;
+    
+    try {
+      const metrics = await this.loadMetricsWithHistory();
+      metricsContainer.innerHTML = metrics.map(metric => this.createEnhancedMetricCard(metric)).join('');
+      
+      // Set up tooltips
+      this.setupMetricTooltips();
+      
+      // Set up quick action handlers
+      this.setupQuickActionHandlers();
+      
+      // Set up carousel controls
+      this.setupCarouselControls();
+      
+      // Set up insight action handlers
+      this.setupInsightHandlers();
+    } catch (error) {
+      console.error('Failed to initialize enhanced metrics:', error);
+    }
+  }
+  
+  private setupQuickActionHandlers(): void {
+    this.shadow.querySelectorAll('.quick-action-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = (e.currentTarget as HTMLElement).getAttribute('data-action');
+        // Action handlers are defined in the metric data
+      });
+    });
+  }
+  
+  private setupCarouselControls(): void {
+    const prevBtn = this.shadow.querySelector('.carousel-prev');
+    const nextBtn = this.shadow.querySelector('.carousel-next');
+    const indicator = this.shadow.querySelector('.carousel-indicator');
+    
+    if (!prevBtn || !nextBtn || !indicator) return;
+    
+    let currentIndex = 0;
+    
+    const updateCarousel = () => {
+      this.shadow.querySelectorAll('.insight-card').forEach((card, index) => {
+        card.classList.toggle('active', index === currentIndex);
+      });
+      indicator.textContent = `${currentIndex + 1} / ${this.insights.length}`;
+    };
+    
+    prevBtn.addEventListener('click', () => {
+      currentIndex = (currentIndex - 1 + this.insights.length) % this.insights.length;
+      updateCarousel();
+    });
+    
+    nextBtn.addEventListener('click', () => {
+      currentIndex = (currentIndex + 1) % this.insights.length;
+      updateCarousel();
+    });
+  }
+  
+  private setupInsightHandlers(): void {
+    this.shadow.querySelectorAll('.insight-action').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const insightId = (e.currentTarget as HTMLElement).getAttribute('data-insight-id');
+        const insight = this.insights.find(i => i.id === insightId);
+        if (insight?.suggestedAction) {
+          insight.suggestedAction.action();
+        }
+      });
+    });
   }
 
   private async handleReindex(fullRebuild: boolean = false) {
@@ -539,6 +842,61 @@ export class DashboardOverview extends DashboardComponent {
     btn.classList.add('loading');
     btn.setAttribute('disabled', 'true');
     const originalText = btn.textContent;
+    
+    // Create progress indicator
+    const progressContainer = document.createElement('div');
+    progressContainer.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--border-radius);
+      padding: 20px;
+      max-width: 400px;
+      z-index: 10000;
+      box-shadow: var(--shadow-large);
+    `;
+    
+    const progressTitle = document.createElement('div');
+    progressTitle.style.cssText = `
+      color: var(--primary-accent);
+      font-weight: 600;
+      margin-bottom: 10px;
+    `;
+    progressTitle.textContent = fullRebuild ? '🗑️ Full Rebuild Progress' : '🔄 Re-index Progress';
+    
+    const progressText = document.createElement('div');
+    progressText.style.cssText = `
+      color: var(--text-primary);
+      font-size: 0.9rem;
+      line-height: 1.4;
+      margin-bottom: 10px;
+    `;
+    
+    const progressBar = document.createElement('div');
+    progressBar.style.cssText = `
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 2px;
+      overflow: hidden;
+    `;
+    
+    const progressFill = document.createElement('div');
+    progressFill.style.cssText = `
+      height: 100%;
+      background: var(--primary-accent);
+      width: 0%;
+      transition: width 0.3s ease;
+    `;
+    
+    progressBar.appendChild(progressFill);
+    progressContainer.appendChild(progressTitle);
+    progressContainer.appendChild(progressText);
+    progressContainer.appendChild(progressBar);
+    document.body.appendChild(progressContainer);
+    
     btn.textContent = fullRebuild ? '🗑️ Rebuilding...' : '🔄 Re-indexing...';
 
     try {
@@ -577,7 +935,19 @@ export class DashboardOverview extends DashboardComponent {
             try {
               const data = JSON.parse(line);
               if (data.message) {
-                btn.textContent = fullRebuild ? `🗑️ ${data.message}` : `🔄 ${data.message}`;
+                // Update button text (shortened for button)
+                const shortMessage = data.message.length > 30 
+                  ? data.message.substring(0, 27) + '...'
+                  : data.message;
+                btn.textContent = fullRebuild ? `🗑️ ${shortMessage}` : `🔄 ${shortMessage}`;
+                
+                // Update progress indicator
+                progressText.textContent = data.message;
+                
+                // Update progress bar if percentage data is available
+                if (data.data && data.data.percentage) {
+                  progressFill.style.width = `${data.data.percentage}%`;
+                }
               }
             } catch {
               // Not JSON, ignore
@@ -588,27 +958,33 @@ export class DashboardOverview extends DashboardComponent {
 
       // Success
       btn.textContent = fullRebuild ? '✅ Rebuild Complete' : '✅ Re-index Complete';
+      progressText.textContent = '✅ Process completed successfully!';
+      progressFill.style.width = '100%';
       btn.classList.remove('loading');
       
-      // Refresh the page data after a short delay
+      // Remove progress indicator and refresh data after delay
       setTimeout(() => {
+        document.body.removeChild(progressContainer);
         btn.textContent = originalText;
         btn.removeAttribute('disabled');
         btn.classList.remove('loading');
         this.loadData(); // Reload dashboard data
-      }, 2000);
+      }, 3000);
 
     } catch (error) {
       console.error('Re-index failed:', error);
       btn.textContent = fullRebuild ? '❌ Rebuild Failed' : '❌ Re-index Failed';
+      progressText.textContent = `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`;
+      progressFill.style.background = '#ff4757';
       btn.classList.remove('loading');
       
-      // Reset button after delay
+      // Reset button and remove progress indicator after delay
       setTimeout(() => {
+        document.body.removeChild(progressContainer);
         btn.textContent = originalText;
         btn.removeAttribute('disabled');
         btn.classList.remove('loading');
-      }, 3000);
+      }, 5000);
     }
   }
 
@@ -625,6 +1001,251 @@ export class DashboardOverview extends DashboardComponent {
   private getLanguageCount(): string {
     const languages = stateService.getState<any[]>('languages') || [];
     return languages.length.toString();
+  }
+
+  private createEnhancedMetricCard(metric: MetricData): string {
+    const trendIcon = metric.trend === 'up' ? '↑' : metric.trend === 'down' ? '↓' : '→';
+    const trendColor = metric.trend === 'up' ? '#4ade80' : metric.trend === 'down' ? '#f87171' : '#94a3b8';
+    
+    return `
+      <div class="metric-card enhanced" data-metric-id="${metric.id}">
+        <div class="metric-header">
+          <span class="metric-icon">${metric.icon || '📊'}</span>
+          <div class="quick-actions">
+            ${metric.actions?.map(action => `
+              <button class="quick-action-btn" data-action="${action.id}" title="${action.tooltip}">
+                ${iconRegistry.get(action.icon)?.content || action.icon}
+              </button>
+            `).join('') || ''}
+          </div>
+        </div>
+        
+        <div class="metric-value-container">
+          <div class="metric-value" style="color: ${metric.color || 'var(--primary-accent)'}">
+            ${metric.value.toLocaleString()}${metric.unit || ''}
+          </div>
+          ${metric.previousValue !== undefined ? `
+            <div class="metric-trend" style="color: ${trendColor}">
+              <span class="trend-icon">${trendIcon}</span>
+              <span class="trend-value">${metric.trendPercentage ? `${metric.trendPercentage.toFixed(1)}%` : ''}</span>
+            </div>
+          ` : ''}
+        </div>
+        
+        <div class="metric-label">${metric.label}</div>
+        
+        ${metric.sparklineData ? `
+          <div class="metric-sparkline">
+            ${this.renderSparkline(metric.sparklineData)}
+          </div>
+        ` : ''}
+        
+        <div class="metric-footer">
+          <span class="metric-details-hint">Click for details</span>
+        </div>
+      </div>
+    `;
+  }
+
+  private renderSparkline(data: number[]): string {
+    const svg = MicroChartRenderer.renderSparkline(data, {
+      width: 180,
+      height: 40,
+      color: '#ba55d3',
+      showArea: true,
+      smooth: true
+    });
+    return svg.outerHTML;
+  }
+
+  private async loadMetricsWithHistory(): Promise<MetricData[]> {
+    // Generate sample historical data for demonstration
+    const generateHistory = (current: number, length: number = 7): number[] => {
+      const history = [];
+      for (let i = 0; i < length; i++) {
+        const variance = 0.1; // 10% variance
+        const value = current * (1 + (Math.random() - 0.5) * variance);
+        history.push(Math.round(value));
+      }
+      return history;
+    };
+
+    const symbolCount = this.stats?.symbolCount || 0;
+    const namespaceCount = this.stats?.namespaceCount || 0;
+    const projectCount = parseInt(this.getProjectCount());
+    const languageCount = parseInt(this.getLanguageCount());
+
+    const metrics: MetricData[] = [
+      {
+        id: 'symbols',
+        label: 'Total Symbols',
+        value: symbolCount,
+        previousValue: symbolCount * 0.95,
+        icon: '🔤',
+        color: '#ba55d3',
+        sparklineData: generateHistory(symbolCount),
+        trend: 'up',
+        trendPercentage: 5.2,
+        actions: [
+          { id: 'search', icon: 'search', tooltip: 'Search symbols', action: () => { window.location.href = '/search'; } },
+          { id: 'analyze', icon: 'analyze', tooltip: 'Analyze symbols', action: () => { window.location.href = '/analytics'; } },
+          { id: 'hotspots', icon: 'hotspots', tooltip: 'View hotspots', action: () => { window.location.href = '/performance'; } }
+        ]
+      },
+      {
+        id: 'namespaces',
+        label: 'Namespaces',
+        value: namespaceCount,
+        previousValue: namespaceCount * 0.98,
+        icon: '📦',
+        color: '#9370db',
+        sparklineData: generateHistory(namespaceCount),
+        trend: 'stable',
+        trendPercentage: 2.1,
+        actions: [
+          { id: 'browse', icon: 'layers', tooltip: 'Browse namespaces', action: () => { window.location.href = '/namespaces'; } },
+          { id: 'graph', icon: 'graph', tooltip: 'View graph', action: () => { window.location.href = '/relationships'; } }
+        ]
+      },
+      {
+        id: 'projects',
+        label: 'Active Projects',
+        value: projectCount,
+        icon: '🏗️',
+        color: '#64ffda',
+        sparklineData: generateHistory(projectCount, 5),
+        trend: 'stable',
+        actions: [
+          { id: 'add', icon: 'add', tooltip: 'Add project', action: () => { window.location.href = '/projects'; } },
+          { id: 'recent', icon: 'recent', tooltip: 'Recent projects', action: () => { 
+            // TODO: Implement recent projects filter/view
+            console.log('Recent projects action not yet implemented'); 
+          } }
+        ]
+      },
+      {
+        id: 'languages',
+        label: 'Languages',
+        value: languageCount,
+        icon: '🌐',
+        color: '#4ade80',
+        sparklineData: generateHistory(languageCount, 5),
+        trend: 'up',
+        trendPercentage: 12.5,
+        actions: [
+          { id: 'cross-ref', icon: 'cross-ref', tooltip: 'Cross-language refs', action: () => { window.location.href = '/multi-language'; } },
+          { id: 'patterns', icon: 'patterns', tooltip: 'Language patterns', action: () => { window.location.href = '/patterns'; } }
+        ]
+      }
+    ];
+
+    return metrics;
+  }
+
+  private setupMetricTooltips(): void {
+    this.shadow.querySelectorAll('.metric-card.enhanced').forEach(card => {
+      const metricId = card.getAttribute('data-metric-id');
+      if (!metricId) return;
+
+      tooltipManager.bind(card as HTMLElement, {
+        content: TooltipManager.createRichContent({
+          title: 'Symbol Statistics',
+          description: 'Detailed breakdown of symbols in your codebase',
+          stats: [
+            { label: 'Functions', value: '2,431', color: '#ba55d3' },
+            { label: 'Classes', value: '892', color: '#9370db' },
+            { label: 'Interfaces', value: '234', color: '#8b008b' },
+            { label: 'Variables', value: '1,203', color: '#4b0082' }
+          ],
+          actions: [
+            { label: 'View Details', icon: '→' },
+            { label: 'Export Report', icon: '📄' }
+          ]
+        }),
+        placement: 'auto',
+        interactive: true,
+        html: true,
+        maxWidth: 350
+      });
+    });
+  }
+
+  private async loadInsights(): Promise<void> {
+    // Mock insights for demonstration
+    this.insights = [
+      {
+        id: '1',
+        severity: 'warning',
+        category: 'Performance',
+        title: 'High Cyclomatic Complexity',
+        message: 'Found 23 functions with complexity > 15',
+        affectedSymbols: [],
+        suggestedAction: {
+          label: 'Review Functions',
+          action: () => { window.location.href = '/performance?filter=complexity'; }
+        },
+        metrics: {
+          impact: 75,
+          confidence: 90,
+          occurrences: 23
+        },
+        timestamp: new Date()
+      },
+      {
+        id: '2',
+        severity: 'info',
+        category: 'Architecture',
+        title: 'Singleton Pattern Detected',
+        message: '5 classes implement singleton pattern',
+        affectedSymbols: [],
+        metrics: {
+          impact: 30,
+          confidence: 95,
+          occurrences: 5
+        },
+        timestamp: new Date()
+      }
+    ];
+  }
+
+  private renderInsightCarousel(): string {
+    if (this.insights.length === 0) return '';
+
+    return `
+      <div class="insight-carousel">
+        <div class="carousel-header">
+          <h3>💡 Smart Insights</h3>
+          <div class="carousel-controls">
+            <button class="carousel-prev">‹</button>
+            <span class="carousel-indicator">1 / ${this.insights.length}</span>
+            <button class="carousel-next">›</button>
+          </div>
+        </div>
+        <div class="carousel-content">
+          ${this.insights.map((insight, index) => `
+            <div class="insight-card ${index === 0 ? 'active' : ''}" data-index="${index}">
+              <div class="insight-severity ${insight.severity}">
+                ${insight.severity === 'critical' ? '🔴' : insight.severity === 'warning' ? '🟡' : '🔵'}
+              </div>
+              <div class="insight-body">
+                <h4>${insight.title}</h4>
+                <p>${insight.message}</p>
+                ${insight.suggestedAction ? `
+                  <button class="insight-action" data-insight-id="${insight.id}">
+                    ${insight.suggestedAction.label} →
+                  </button>
+                ` : ''}
+              </div>
+              <div class="insight-metrics">
+                <span title="Impact">🎯 ${insight.metrics?.impact}%</span>
+                <span title="Confidence">📊 ${insight.metrics?.confidence}%</span>
+                <span title="Occurrences">📍 ${insight.metrics?.occurrences}</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
   }
 }
 

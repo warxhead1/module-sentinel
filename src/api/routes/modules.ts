@@ -18,7 +18,7 @@ export class ModulesRoutes {
    */
   async getModules(req: Request, res: Response) {
     try {
-      const modules = this.modulesService.getModulesHierarchy();
+      const modules = await this.modulesService.getModulesHierarchy();
       
       const response: ApiResponse = {
         success: true,
@@ -55,7 +55,7 @@ export class ModulesRoutes {
         return res.status(400).json(response);
       }
 
-      const details = this.modulesService.getModuleDetails(
+      const details = await this.modulesService.getModuleDetails(
         decodeURIComponent(namespace),
         decodeURIComponent(module)
       );

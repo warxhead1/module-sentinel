@@ -1,236 +1,938 @@
 /**
- * Optimized C++ Tree-Sitter Parser
- * 
- * High-performance C++ parser leveraging:
- * 1. Unified single-pass AST traversal
- * 2. Selective control flow analysis based on complexity
- * 3. Efficient symbol resolution cache
- * 4. Batch database operations
- * 5. Parser instance pooling
+ * Refactored Optimized C++ Tree-Sitter Parser
+ *
+ * Modular, multithreaded C++ parser using specialized helper classes
+ * for symbol extraction, relationship analysis, control flow, and complexity analysis.
  */
 
-import Parser from 'tree-sitter';
-import { Database } from 'better-sqlite3';
-import * as path from 'path';
-import * as fs from 'fs/promises';
-
-import { OptimizedTreeSitterBaseParser } from './optimized-base-parser.js';
-import { VisitorHandlers, VisitorContext, ScopeInfo } from '../unified-ast-visitor.js';
-import { SymbolInfo, RelationshipInfo, PatternInfo, ParseResult } from './parser-types.js';
-import { SymbolResolutionCache, ResolutionContext } from '../../analysis/symbol-resolution-cache.js';
-import { PatternBasedParser } from './pattern-based-parser.js';
+import Parser from "tree-sitter";
+import { Database } from "better-sqlite3";
+import { Logger, createLogger } from "../../utils/logger.js";
 import {
-  CPP_SYMBOL_PATTERNS,
-  CPP_RELATIONSHIP_PATTERNS,
-  CPP_PATTERN_DETECTORS,
-} from './cpp-patterns.js';
+  MemoryMonitor,
+  getGlobalMemoryMonitor,
+} from "../../utils/memory-monitor.js";
 
-interface CppVisitorContext extends VisitorContext {
-  // C++-specific context
-  templateDepth: number;
-  insideExportBlock: boolean;
-  currentAccessLevel: 'public' | 'private' | 'protected';
-  usingDeclarations: Map<string, string>;
-  resolutionContext: ResolutionContext;
+import { OptimizedTreeSitterBaseParser } from "./optimized-base-parser.js";
+import { VisitorHandlers } from "../unified-ast-visitor.js";
+import {
+  SymbolInfo,
+  RelationshipInfo,
+  PatternInfo,
+  ParseResult,
+  ParseOptions,
+} from "./parser-types.js";
+import { SymbolResolutionCache } from "../../analysis/symbol-resolution-cache.js";
+
+// Import our new helper classes
+import { CppAstUtils } from "./cpp/cpp-ast-utils.js";
+import { CppSymbolHandlers } from "./cpp/cpp-symbol-handlers.js";
+import { CppRelationshipHandlers } from "./cpp/cpp-relationship-handlers.js";
+import { CppPatternAnalyzer } from "./cpp/cpp-pattern-analyzer.js";
+import { CppControlFlowAnalyzer } from "./cpp/cpp-control-flow-analyzer.js";
+import {
+  CppComplexityAnalyzer,
+  FileComplexityMetrics,
+} from "./cpp/cpp-complexity-analyzer.js";
+import { CppWorkerPool, WorkerPoolOptions } from "./cpp/cpp-worker-pool.js";
+import {
+  CppVisitorContext,
+  CppParseResult,
+  CppParsingOptions,
+  CppSymbolKind,
+} from "./cpp/cpp-types.js";
+
+export interface RefactoredParserOptions extends ParseOptions {
+  // C++ specific options
+  cppOptions?: CppParsingOptions;
+
+  // Worker pool options
+  enableMultithreading?: boolean;
+  workerPoolOptions?: WorkerPoolOptions;
+
+  // Analysis options
+  enableComplexityAnalysis?: boolean;
+  enableControlFlowAnalysis?: boolean;
+  enablePatternDetection?: boolean;
+
+  // Performance options
+  memoryThreshold?: number;
+  batchSize?: number;
 }
 
-export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser {
+export class RefactoredOptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser {
+  protected logger: Logger;
+  protected memoryMonitor: MemoryMonitor;
+
+  // Helper classes
+  private astUtils: CppAstUtils;
+  private symbolHandlers: CppSymbolHandlers;
+  private relationshipHandlers: CppRelationshipHandlers;
+  private patternAnalyzer: CppPatternAnalyzer;
+  private controlFlowAnalyzer: CppControlFlowAnalyzer;
+  private complexityAnalyzer: CppComplexityAnalyzer;
+  private workerPool?: CppWorkerPool;
+
+  // Cache and state
+  private static symbolCache = new SymbolResolutionCache(50000);
   private cppLanguage?: Parser.Language;
-  private static symbolCache = new SymbolResolutionCache(50000); // Shared across instances
-  private patternParser: PatternBasedParser;
   private useTreeSitter: boolean = false;
-  
-  constructor(db: Database, options: any) {
+  protected options: RefactoredParserOptions;
+
+  constructor(db: Database, options: RefactoredParserOptions) {
     super(db, options);
-    
-    // Enable debug mode to see what's happening
-    this.debugMode = true;
-    
-    // Initialize pattern-based parser as fallback
-    this.patternParser = new PatternBasedParser(
-      CPP_SYMBOL_PATTERNS,
-      CPP_RELATIONSHIP_PATTERNS,
-      true // Enable debug in pattern parser too
-    );
+
+    this.logger = createLogger("RefactoredCppParser");
+    this.memoryMonitor = getGlobalMemoryMonitor();
+    this.options = options;
+
+    // Initialize helper classes
+    this.astUtils = new CppAstUtils();
+    this.symbolHandlers = new CppSymbolHandlers();
+    this.relationshipHandlers = new CppRelationshipHandlers();
+    this.patternAnalyzer = new CppPatternAnalyzer();
+    this.controlFlowAnalyzer = new CppControlFlowAnalyzer();
+    this.complexityAnalyzer = new CppComplexityAnalyzer();
+
+    this.logger.info("Refactored C++ parser initialized", {
+      enableMultithreading: options.enableMultithreading,
+      enableComplexityAnalysis: options.enableComplexityAnalysis,
+      enableControlFlowAnalysis: options.enableControlFlowAnalysis,
+    });
   }
-  
+
   async initialize(): Promise<void> {
+    const checkpoint = this.memoryMonitor.createCheckpoint("initializeParser");
+
     try {
-      // Try to load WASM version first
-      const wasmPath = path.join(__dirname, '..', '..', 'wasm', 'tree-sitter-cpp.wasm');
-      
-      try {
-        this.debug(`Attempting to load C++ WASM from: ${wasmPath}`);
-        
-        if (await fs.access(wasmPath).then(() => true).catch(() => false)) {
-          // Load WASM grammar using tree-sitter's Language.load
-          const Language = (Parser as any).Language;
-          if (Language && Language.load) {
-            const cppLanguage = await Language.load(wasmPath);
-            if (cppLanguage && this.parser) {
-              this.parser.setLanguage(cppLanguage);
-              this.useTreeSitter = true;
-              this.debug('Successfully loaded C++ WASM grammar!');
-              return;
-            }
-          }
-        }
-      } catch (error) {
-        this.debug(`Failed to load WASM grammar: ${error}`);
+      this.logger.info("Initializing C++ parser components");
+
+      // Initialize tree-sitter language
+      await this.initializeTreeSitter();
+
+      // Initialize worker pool if multithreading is enabled
+      if (this.options.enableMultithreading) {
+        await this.initializeWorkerPool();
       }
-      
-      // Try to load native grammar if WASM fails
-      try {
-        // Check if tree-sitter-cpp is installed
-        const cppLanguage = require('tree-sitter-cpp');
-        if (cppLanguage && this.parser) {
-          this.parser.setLanguage(cppLanguage);
-          this.useTreeSitter = true;
-          this.debug('Successfully loaded native tree-sitter-cpp!');
-          return;
-        }
-      } catch (error) {
-        this.debug(`Native tree-sitter-cpp not available: ${error}`);
-      }
-      
-      // Fall back to pattern-based parsing
-      this.useTreeSitter = false;
-      this.debug('Using optimized pattern-based parsing for C++');
-      
+
+      this.logger.info("Parser initialization completed", {
+        useTreeSitter: this.useTreeSitter,
+        hasWorkerPool: !!this.workerPool,
+      });
     } catch (error) {
-      this.debug(`Failed to initialize C++ parser: ${error}`);
-      this.useTreeSitter = false;
+      this.logger.error("Parser initialization failed", error);
+      throw error;
+    } finally {
+      checkpoint.complete();
     }
   }
 
   /**
-   * Override parseFile to always use pattern-based parsing when tree-sitter is not available
+   * Parse a single C++ file
    */
   async parseFile(filePath: string, content: string): Promise<ParseResult> {
+    const checkpoint = this.memoryMonitor.createCheckpoint("parseFile");
     const startTime = Date.now();
-    
-    // Check cache first
-    const cached = this.getCachedParse(filePath);
-    if (cached) {
-      this.debug(`Cache hit for ${filePath}`);
-      await this.storeParsedData(filePath, cached);
-      return cached as ParseResult;
+
+    try {
+      this.logger.info("Parsing C++ file", {
+        file: filePath,
+        size: content.length,
+        useTreeSitter: this.useTreeSitter,
+      });
+
+      // Check cache first
+      const cached = this.getCachedParse(filePath);
+      if (cached) {
+        this.logger.debug("Cache hit for file", { file: filePath });
+        await this.storeParsedData(filePath, cached);
+        return cached as ParseResult;
+      }
+
+      let result: CppParseResult;
+
+      // Use worker pool for large files if available
+      if (
+        this.workerPool &&
+        content.length > (this.options.batchSize || 50000)
+      ) {
+        result = await this.parseWithWorkerPool(filePath, content);
+      } else {
+        result = await this.parseDirectly(filePath, content);
+      }
+
+      // Enhance result with additional analysis if enabled
+      const enhancedResult = await this.enhanceParseResult(
+        result,
+        filePath,
+        content
+      );
+
+      // Convert to legacy format for compatibility
+      const legacyResult = this.convertToLegacyResult(enhancedResult);
+
+      // Cache and store
+      this.setCachedParse(filePath, legacyResult);
+      await this.storeParsedData(filePath, legacyResult);
+
+      const duration = Date.now() - startTime;
+      this.logger.info("File parsing completed", {
+        file: filePath,
+        duration,
+        symbols: enhancedResult.symbols.length,
+        relationships: enhancedResult.relationships.length,
+        useTreeSitter: this.useTreeSitter,
+      });
+
+      return legacyResult;
+    } catch (error) {
+      this.logger.error("File parsing failed", error, { file: filePath });
+      throw error;
+    } finally {
+      checkpoint.complete();
     }
-    
-    let result;
-    
-    // Always use pattern-based parsing if tree-sitter is not available
-    if (!this.useTreeSitter || content.length > 50 * 1024) {
-      this.debug(`Using pattern-based parsing for: ${filePath}`);
-      result = await this.performPatternBasedExtraction(content, filePath);
+  }
+
+  /**
+   * Parse multiple files concurrently
+   */
+  async parseFiles(
+    files: Array<{ filePath: string; content: string }>
+  ): Promise<Map<string, ParseResult | Error>> {
+    const checkpoint = this.memoryMonitor.createCheckpoint("parseFiles");
+
+    try {
+      this.logger.info("Parsing multiple C++ files", { count: files.length });
+
+      if (this.workerPool) {
+        // Use worker pool for concurrent processing
+        return await this.parseFilesWithWorkerPool(files);
+      } else {
+        // Process sequentially
+        return await this.parseFilesSequentially(files);
+      }
+    } catch (error) {
+      this.logger.error("Multiple file parsing failed", error);
+      throw error;
+    } finally {
+      checkpoint.complete();
+    }
+  }
+
+  /**
+   * Shutdown the parser and cleanup resources
+   */
+  async shutdown(): Promise<void> {
+    this.logger.info("Shutting down C++ parser");
+
+    try {
+      if (this.workerPool) {
+        await this.workerPool.shutdown();
+      }
+
+      this.logger.info("Parser shutdown completed");
+    } catch (error) {
+      this.logger.error("Parser shutdown failed", error);
+    }
+  }
+
+  // Core parsing methods
+
+  private async parseDirectly(
+    filePath: string,
+    content: string
+  ): Promise<CppParseResult> {
+    if (this.useTreeSitter) {
+      return await this.parseWithTreeSitter(filePath, content);
     } else {
-      // Use tree-sitter for smaller files when available
-      try {
-        const tree = this.parser.parse(content);
-        if (!tree) {
-          throw new Error('Parser returned null tree');
+      return await this.parseWithPatterns(filePath, content);
+    }
+  }
+
+  private async parseWithTreeSitter(
+    filePath: string,
+    content: string
+  ): Promise<CppParseResult> {
+    const checkpoint = this.memoryMonitor.createCheckpoint(
+      "parseWithTreeSitter"
+    );
+
+    try {
+      this.logger.debug("Using tree-sitter parsing", { file: filePath });
+
+      const tree = this.parser.parse(content);
+      if (!tree) {
+        throw new Error("Parser returned null tree");
+      }
+
+      if (tree.rootNode.hasError) {
+        this.logger.warn(
+          "Tree has parsing errors, continuing with symbol extraction",
+          {
+            file: filePath,
+          }
+        );
+      }
+
+      // Create C++ visitor context
+      const context: CppVisitorContext = this.createCppContext(
+        filePath,
+        content
+      );
+
+      // Use visitor to traverse the AST
+      const result = await this.visitor.traverseWithContext(tree, context);
+
+      // Convert to CppParseResult format
+      return this.convertVisitorResultToCppResult(result, context);
+    } catch (error) {
+      this.logger.warn(
+        "Tree-sitter parsing failed, falling back to patterns",
+        error,
+        {
+          file: filePath,
         }
-        result = await this.visitor.traverse(tree, filePath, content);
-      } catch (error) {
-        this.debug(`Tree-sitter parsing failed, falling back to patterns: ${error}`);
-        result = await this.performPatternBasedExtraction(content, filePath);
+      );
+      return await this.parseWithPatterns(filePath, content);
+    } finally {
+      checkpoint.complete();
+    }
+  }
+
+  private async parseWithPatterns(
+    filePath: string,
+    content: string
+  ): Promise<CppParseResult> {
+    const checkpoint = this.memoryMonitor.createCheckpoint("parseWithPatterns");
+
+    try {
+      this.logger.debug("Using pattern-based parsing", { file: filePath });
+
+      const context = this.createCppContext(filePath, content);
+      return await this.patternAnalyzer.analyzeCode(content, filePath, context);
+    } catch (error) {
+      this.logger.error("Pattern-based parsing failed", error, {
+        file: filePath,
+      });
+      throw error;
+    } finally {
+      checkpoint.complete();
+    }
+  }
+
+  private async parseWithWorkerPool(
+    filePath: string,
+    content: string
+  ): Promise<CppParseResult> {
+    if (!this.workerPool) {
+      throw new Error("Worker pool not initialized");
+    }
+
+    this.logger.debug("Using worker pool for parsing", { file: filePath });
+
+    return await this.workerPool.processFile(
+      filePath,
+      content,
+      this.options.cppOptions || {},
+      0 // Default priority
+    );
+  }
+
+  // Enhancement methods
+
+  private async enhanceParseResult(
+    result: CppParseResult,
+    filePath: string,
+    content: string
+  ): Promise<CppParseResult> {
+    const checkpoint =
+      this.memoryMonitor.createCheckpoint("enhanceParseResult");
+
+    try {
+      const enhancedResult = { ...result };
+
+      // Control flow analysis - merge with existing data
+      if (this.options.enableControlFlowAnalysis) {
+        const additionalControlFlow = await this.analyzeControlFlow(
+          result,
+          content
+        );
+        
+        // Merge control flow data instead of replacing
+        enhancedResult.controlFlowData = {
+          blocks: [
+            ...(result.controlFlowData?.blocks || []),
+            ...additionalControlFlow.blocks
+          ],
+          calls: [
+            ...(result.controlFlowData?.calls || []),
+            ...additionalControlFlow.calls
+          ]
+        };
+      }
+
+      // Complexity analysis
+      if (this.options.enableComplexityAnalysis) {
+        const complexityMetrics = await this.analyzeComplexity(
+          result,
+          filePath,
+          content
+        );
+        // Add complexity metrics to metadata
+        enhancedResult.cppMetadata = {
+          namespaces: enhancedResult.cppMetadata?.namespaces || [],
+          templates: enhancedResult.cppMetadata?.templates || [],
+          modules: enhancedResult.cppMetadata?.modules,
+          concepts: enhancedResult.cppMetadata?.concepts,
+          includes: enhancedResult.cppMetadata?.includes || [],
+          // Add complexity data
+          complexityMetrics: complexityMetrics,
+        } as any;
+      }
+
+      // Additional pattern detection
+      if (this.options.enablePatternDetection) {
+        const additionalPatterns = await this.detectAdditionalPatterns(result);
+        enhancedResult.patterns.push(...additionalPatterns);
+      }
+
+      return enhancedResult;
+    } catch (error) {
+      this.logger.error("Result enhancement failed", error, { file: filePath });
+      return result; // Return original result if enhancement fails
+    } finally {
+      checkpoint.complete();
+    }
+  }
+
+  private async analyzeControlFlow(
+    result: CppParseResult,
+    content: string
+  ): Promise<{ blocks: any[]; calls: any[] }> {
+    const controlFlowData: { blocks: any[]; calls: any[] } = {
+      blocks: [],
+      calls: [],
+    };
+
+    try {
+      const functions = result.symbols.filter(
+        (s) =>
+          s.kind === CppSymbolKind.FUNCTION ||
+          s.kind === CppSymbolKind.METHOD ||
+          s.kind === CppSymbolKind.CONSTRUCTOR ||
+          s.kind === CppSymbolKind.DESTRUCTOR
+      );
+
+      for (const func of functions) {
+        if (func.complexity && func.complexity >= 2) {
+          // Create a temporary symbol object for the unified analyzer
+          // Since symbols aren't stored in DB yet, we use a fake ID
+
+          // Store the symbol temporarily in DB for analysis
+          const insertResult = (this.db as Database)
+            .prepare(
+              `
+            INSERT INTO universal_symbols (name, qualified_name, kind, file_path, line, column, end_line, end_column, project_id, language_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+          `
+            )
+            .run(
+              func.name,
+              func.qualifiedName || func.name,
+              func.kind,
+              func.filePath,
+              func.line,
+              func.column || 1,
+              func.endLine || func.line,
+              func.endColumn || func.column || 1
+            );
+
+          const symbolId = insertResult.lastInsertRowid as number;
+
+          try {
+            // Use pattern-based control flow analysis for functions
+            // Since we don't have the actual AST node here, we'll use pattern-based analysis
+            const lines = content.split('\n');
+            
+            // Create a temporary context for the analyzer
+            const analysisContext = this.createCppContext(
+              func.filePath || "",
+              content
+            );
+
+            // Use pattern-based analysis directly
+            const analysisResult =
+              await this.controlFlowAnalyzer.analyzePatternBased(
+                func,
+                lines,
+                func.line - 1, // Convert to 0-based line index
+                analysisContext
+              );
+
+            controlFlowData.blocks.push(
+              ...analysisResult.blocks.map((b) => ({ ...b }))
+            );
+            controlFlowData.calls.push(
+              ...analysisResult.calls.map((c) => ({ ...c }))
+            );
+          } finally {
+            // Clean up the temporary symbol
+            (this.db as Database)
+              .prepare("DELETE FROM universal_symbols WHERE id = ?")
+              .run(symbolId);
+          }
+        }
+      }
+    } catch (error) {
+      this.logger.error("Control flow analysis failed", error);
+    }
+
+    return controlFlowData;
+  }
+
+  private async analyzeComplexity(
+    result: CppParseResult,
+    filePath: string,
+    content: string
+  ): Promise<FileComplexityMetrics> {
+    try {
+      return await this.complexityAnalyzer.analyzeFileComplexity(
+        filePath,
+        content,
+        result.symbols
+      );
+    } catch (error) {
+      this.logger.error("Complexity analysis failed", error, {
+        file: filePath,
+      });
+      throw error;
+    }
+  }
+
+  private async detectAdditionalPatterns(
+    result: CppParseResult
+  ): Promise<PatternInfo[]> {
+    const patterns: PatternInfo[] = [];
+
+    try {
+      // Detect RAII patterns
+      const raiiClasses = result.symbols.filter(
+        (s) => s.kind === CppSymbolKind.CLASS && s.languageFeatures?.isRAII
+      );
+
+      for (const cls of raiiClasses) {
+        patterns.push({
+          patternType: "raii",
+          patternName: "Resource Acquisition Is Initialization",
+          confidence: 0.8,
+          details: { className: cls.qualifiedName },
+        });
+      }
+
+      // Detect Singleton patterns
+      const singletonCandidates = result.symbols.filter(
+        (s) =>
+          s.kind === CppSymbolKind.CLASS &&
+          result.symbols.some(
+            (constructor) =>
+              constructor.kind === CppSymbolKind.CONSTRUCTOR &&
+              constructor.parentScope === s.qualifiedName &&
+              constructor.visibility === "private"
+          )
+      );
+
+      for (const singleton of singletonCandidates) {
+        patterns.push({
+          patternType: "singleton",
+          patternName: "Singleton Pattern",
+          confidence: 0.7,
+          details: { className: singleton.qualifiedName },
+        });
+      }
+    } catch (error) {
+      this.logger.error("Additional pattern detection failed", error);
+    }
+
+    return patterns;
+  }
+
+  // Worker pool methods
+
+  private async parseFilesWithWorkerPool(
+    files: Array<{ filePath: string; content: string }>
+  ): Promise<Map<string, ParseResult | Error>> {
+    if (!this.workerPool) {
+      throw new Error("Worker pool not initialized");
+    }
+
+    const workItems = files.map((file) => ({
+      filePath: file.filePath,
+      content: file.content,
+      options: this.options.cppOptions,
+      priority: 0,
+    }));
+
+    const results = await this.workerPool.processFiles(workItems);
+    const convertedResults = new Map<string, ParseResult | Error>();
+
+    for (const [filePath, result] of results) {
+      if (result instanceof Error) {
+        convertedResults.set(filePath, result);
+      } else {
+        convertedResults.set(filePath, this.convertToLegacyResult(result));
       }
     }
-    
-    // Cache the result
-    this.setCachedParse(filePath, result);
-    
-    // Store in database
-    await this.storeParsedData(filePath, result);
-    
-    const duration = Date.now() - startTime;
-    this.debug(`Parsed ${filePath} in ${duration}ms`);
-    
-    // Return the result
-    return result as ParseResult;
+
+    return convertedResults;
   }
-  
+
+  private async parseFilesSequentially(
+    files: Array<{ filePath: string; content: string }>
+  ): Promise<Map<string, ParseResult | Error>> {
+    const results = new Map<string, ParseResult | Error>();
+
+    for (const file of files) {
+      try {
+        const result = await this.parseFile(file.filePath, file.content);
+        results.set(file.filePath, result);
+      } catch (error) {
+        results.set(file.filePath, error as Error);
+      }
+    }
+
+    return results;
+  }
+
+  // Initialization methods
+
+  private async initializeTreeSitter(): Promise<void> {
+    try {
+      let cppLanguage;
+      try {
+        cppLanguage = require("tree-sitter-cpp");
+      } catch (e1: any) {
+        try {
+          const module = await import("tree-sitter-cpp");
+          cppLanguage = module.default || module;
+        } catch (e2: any) {
+          throw new Error(
+            `All import strategies failed: ${e1.message}, ${e2.message}`
+          );
+        }
+      }
+
+      if (cppLanguage && this.parser) {
+        this.parser.setLanguage(cppLanguage);
+        this.useTreeSitter = true;
+        this.logger.info("Successfully loaded tree-sitter-cpp");
+        return;
+      } else {
+        throw new Error("Language or parser is null after loading");
+      }
+    } catch (error) {
+      this.logger.warn(
+        "Failed to load tree-sitter-cpp, using pattern-based parsing",
+        error
+      );
+      this.useTreeSitter = false;
+    }
+  }
+
+  private async initializeWorkerPool(): Promise<void> {
+    if (!this.options.enableMultithreading) {
+      return;
+    }
+
+    try {
+      this.workerPool = new CppWorkerPool(this.options.workerPoolOptions);
+      await this.workerPool.initialize();
+
+      this.logger.info("Worker pool initialized", {
+        maxWorkers: this.workerPool.getStats().totalWorkers,
+      });
+    } catch (error) {
+      this.logger.error("Worker pool initialization failed", error);
+      // Continue without worker pool
+      this.workerPool = undefined;
+    }
+  }
+
+  // Visitor methods (delegates to helper classes)
+
   protected createVisitorHandlers(): VisitorHandlers {
     return {
-      // Symbol extraction handlers
-      onClass: this.handleClass.bind(this),
-      onFunction: this.handleFunction.bind(this),
-      onNamespace: this.handleNamespace.bind(this),
-      onVariable: this.handleVariable.bind(this),
-      onEnum: this.handleEnum.bind(this),
-      onTypedef: this.handleTypedef.bind(this),
-      
-      // Relationship extraction handlers
-      onCall: this.handleCall.bind(this),
-      onInheritance: this.handleInheritance.bind(this),
-      onImport: this.handleImport.bind(this),
-      onTypeReference: this.handleTypeReference.bind(this),
-      
-      // Pattern detection
-      onPattern: this.handlePattern.bind(this),
-      
-      // Scope management
-      onEnterScope: this.handleEnterScope.bind(this),
-      onExitScope: this.handleExitScope.bind(this),
+      // Symbol handlers
+      onClass: (node, ctx) =>
+        this.symbolHandlers.handleClass(node, ctx as CppVisitorContext),
+      onFunction: (node, ctx) =>
+        this.symbolHandlers.handleFunction(node, ctx as CppVisitorContext),
+      onNamespace: (node, ctx) =>
+        this.symbolHandlers.handleNamespace(node, ctx as CppVisitorContext),
+      onVariable: (node, ctx) =>
+        this.symbolHandlers.handleVariable(node, ctx as CppVisitorContext),
+      onEnum: (node, ctx) =>
+        this.symbolHandlers.handleEnum(node, ctx as CppVisitorContext),
+      onTypedef: (node, ctx) =>
+        this.symbolHandlers.handleTypedef(node, ctx as CppVisitorContext),
+
+      // Relationship handlers
+      onCall: (node, ctx) => {
+        const relationships = this.relationshipHandlers.handleCall(
+          node,
+          ctx as CppVisitorContext
+        );
+        if (relationships && relationships.length > 0) {
+          // Add all relationships to context and return the first one
+          relationships.slice(1).forEach((rel) => ctx.relationships.push(rel));
+          return relationships[0];
+        }
+        return null;
+      },
+      onInheritance: (node, ctx) =>
+        this.relationshipHandlers.handleInheritance(
+          node,
+          ctx as CppVisitorContext
+        ),
+      onImport: (node, ctx) => {
+        const relationships = this.relationshipHandlers.handleImport(
+          node,
+          ctx as CppVisitorContext
+        );
+        if (relationships && relationships.length > 0) {
+          // Add all relationships to context and return the first one
+          relationships.slice(1).forEach((rel) => ctx.relationships.push(rel));
+          return relationships[0];
+        }
+        return null;
+      },
+      onDeclaration: (node, ctx) => {
+        const relationships = this.relationshipHandlers.handleDeclaration(
+          node,
+          ctx as CppVisitorContext
+        );
+        if (relationships.length > 0) {
+          // Add all relationships to context and return the first one
+          relationships.slice(1).forEach((rel) => ctx.relationships.push(rel));
+          return relationships[0];
+        }
+        return null;
+      },
+      onTypeReference: (node, ctx) => {
+        const relationships = this.relationshipHandlers.handleTypeReference(
+          node,
+          ctx as CppVisitorContext
+        );
+        if (relationships.length > 0) {
+          // Add all relationships to context and return the first one
+          relationships.slice(1).forEach((rel) => ctx.relationships.push(rel));
+          return relationships[0];
+        }
+        return null;
+      },
+
+      // Pattern handlers
+      onPattern: (node, ctx) => {
+        if (node.type === "lambda_expression") {
+          return this.handleLambdaExpression(node, ctx as CppVisitorContext);
+        }
+        return null;
+      },
+      onTemplate: () => null,
+
+      // Control flow handler
+      onControlStructure: (node, ctx) => {
+        this.handleControlStructure(node, ctx as CppVisitorContext);
+      },
+
+      // Scope handlers - handled by the visitor automatically
+      onEnterScope: () => {},
+      onExitScope: () => {},
     };
   }
-  
+
   protected getNodeTypeMap(): Map<string, keyof VisitorHandlers> {
     return new Map([
       // Classes and structs
-      ['class_specifier', 'onClass'],
-      ['struct_specifier', 'onClass'],
-      
-      // Functions and methods
-      ['function_definition', 'onFunction'],
-      ['function_declaration', 'onFunction'],
-      ['method_definition', 'onFunction'],
-      ['constructor_definition', 'onFunction'],
-      ['destructor_definition', 'onFunction'],
-      ['operator_definition', 'onFunction'],
-      
-      // Namespaces and modules
-      ['namespace_definition', 'onNamespace'],
-      ['module_declaration', 'onNamespace'],
-      ['export_declaration', 'onNamespace'],
-      
+      ["class_specifier", "onClass"],
+      ["struct_specifier", "onClass"],
+
+      // Functions - Only function_definition exists in tree-sitter-cpp
+      ["function_definition", "onFunction"],
+
+      // Namespaces
+      ["namespace_definition", "onNamespace"],
+
       // Variables and fields
-      ['field_declaration', 'onVariable'],
-      ['variable_declaration', 'onVariable'],
-      ['parameter_declaration', 'onVariable'],
-      
+      ["field_declaration", "onVariable"],
+      ["parameter_declaration", "onVariable"],
+      ["declaration", "onVariable"],
+
       // Type definitions
-      ['enum_specifier', 'onEnum'],
-      ['type_definition', 'onTypedef'],
-      ['alias_declaration', 'onTypedef'],
-      ['using_declaration', 'onTypedef'],
-      
+      ["enum_specifier", "onEnum"],
+      ["type_definition", "onTypedef"],
+      ["alias_declaration", "onTypedef"],
+
       // Relationships
-      ['call_expression', 'onCall'],
-      ['base_class_clause', 'onInheritance'],
-      ['import_declaration', 'onImport'],
-      ['type_identifier', 'onTypeReference'],
-      
+      ["call_expression", "onCall"],
+      ["base_class_clause", "onInheritance"],
+      ["preproc_include", "onImport"],
+      ["type_identifier", "onTypeReference"],
+      ["qualified_identifier", "onTypeReference"],
+
       // Patterns
-      ['template_declaration', 'onPattern'],
-      ['lambda_expression', 'onPattern'],
+      ["template_declaration", "onTemplate"],
+      ["lambda_expression", "onPattern"],
+
+      // Virtual specifiers (override, final)
+      ["virtual_specifier", "onPattern"],
+      
+      // Control flow structures
+      ["if_statement", "onControlStructure"],
+      ["for_statement", "onControlStructure"],
+      ["while_statement", "onControlStructure"],
+      ["do_statement", "onControlStructure"],
+      ["switch_statement", "onControlStructure"],
+      ["try_statement", "onControlStructure"],
+      ["catch_clause", "onControlStructure"],
     ]);
   }
+
+  // Helper methods
   
-  protected async performPatternBasedExtraction(
-    content: string,
-    filePath: string
-  ): Promise<{
-    symbols: SymbolInfo[];
-    relationships: RelationshipInfo[];
-    patterns: PatternInfo[];
-    controlFlowData: { blocks: any[]; calls: any[] };
-    stats: any;
-  }> {
-    const startTime = Date.now();
+  private handleControlStructure(node: Parser.SyntaxNode, context: CppVisitorContext): void {
+    try {
+      // Find the enclosing function
+      let functionNode = node.parent;
+      let functionName = "";
+      
+      while (functionNode && functionNode.type !== "function_definition") {
+        functionNode = functionNode.parent;
+      }
+      
+      if (functionNode) {
+        const declarator = functionNode.childForFieldName("declarator");
+        if (declarator) {
+          functionName = this.symbolHandlers.extractFunctionNameFromDeclarator(declarator, context);
+        }
+      }
+      
+      const blockType = this.mapNodeTypeToBlockType(node.type);
+      const startLine = node.startPosition.row + 1;
+      const endLine = node.endPosition.row + 1;
+      
+      let condition = "";
+      if (node.type === "if_statement" || node.type === "while_statement" || node.type === "for_statement") {
+        const conditionNode = node.childForFieldName("condition");
+        if (conditionNode) {
+          condition = this.astUtils.getNodeText(conditionNode, context.content);
+        }
+      }
+      
+      const block = {
+        symbolName: functionName,
+        blockType,
+        startLine,
+        endLine,
+        condition,
+        complexity: 1
+      };
+      
+      context.controlFlowData.blocks.push(block);
+      
+      this.logger.debug("Control flow block detected", {
+        type: blockType,
+        function: functionName,
+        line: startLine
+      });
+      
+    } catch (error) {
+      this.logger.error("Failed to handle control structure", error);
+    }
+  }
+  
+  private mapNodeTypeToBlockType(nodeType: string): string {
+    switch (nodeType) {
+      case "if_statement":
+        return "conditional";
+      case "for_statement":
+      case "while_statement": 
+      case "do_statement":
+        return "loop";
+      case "switch_statement":
+        return "switch";
+      case "try_statement":
+      case "catch_clause":
+        return "exception";
+      default:
+        return "unknown";
+    }
+  }
+  
+  private handleLambdaExpression(node: Parser.SyntaxNode, context: CppVisitorContext): PatternInfo {
+    const startLine = node.startPosition.row + 1;
+    const endLine = node.endPosition.row + 1;
     
-    // Use enhanced pattern parser with namespace tracking
-    const context: CppVisitorContext = {
+    // Extract lambda capture list
+    const captureNode = node.childForFieldName("captures");
+    const captureText = captureNode ? this.astUtils.getNodeText(captureNode, context.content) : "[]";
+    
+    // Extract lambda parameters
+    const paramNode = node.childForFieldName("declarator");
+    const paramText = paramNode ? this.astUtils.getNodeText(paramNode, context.content) : "";
+    
+    // Create a unique name for the lambda
+    const lambdaName = `lambda_${startLine}_${node.startPosition.column}`;
+    
+    // Also create a symbol for the lambda
+    const lambdaSymbol: SymbolInfo = {
+      name: lambdaName,
+      qualifiedName: lambdaName,
+      kind: CppSymbolKind.LAMBDA,
+      filePath: context.filePath,
+      line: startLine,
+      column: node.startPosition.column + 1,
+      endLine: endLine,
+      endColumn: node.endPosition.column + 1,
+      signature: `${captureText}${paramText}`,
+      semanticTags: ["lambda"],
+      complexity: 1,
+      confidence: 0.9,
+      isDefinition: true,
+      isExported: false,
+      isAsync: false,
+    };
+    
+    // Add to symbols
+    context.symbols.set(lambdaName, lambdaSymbol);
+    
+    // Create pattern info
+    const pattern: PatternInfo = {
+      patternType: "lambda",
+      patternName: lambdaName,
+      confidence: 0.9,
+      details: {
+        matchedCode: this.astUtils.getNodeText(node, context.content),
+        startLine,
+        endLine,
+        captureList: captureText,
+        parameters: paramText,
+      }
+    };
+    
+    this.logger.debug("Lambda expression detected", {
+      name: lambdaName,
+      line: startLine,
+      capture: captureText
+    });
+    
+    return pattern;
+  }
+
+  private createCppContext(
+    filePath: string,
+    content: string
+  ): CppVisitorContext {
+    return {
       filePath,
       content,
       symbols: new Map(),
@@ -242,762 +944,80 @@ export class OptimizedCppTreeSitterParser extends OptimizedTreeSitterBaseParser 
         nodesVisited: 0,
         symbolsExtracted: 0,
         complexityChecks: 0,
-        controlFlowAnalyzed: 0
+        controlFlowAnalyzed: 0,
       },
       templateDepth: 0,
       insideExportBlock: false,
-      currentAccessLevel: 'public',
+      currentAccessLevel: "public",
       usingDeclarations: new Map(),
       resolutionContext: {
         currentFile: filePath,
         currentNamespace: undefined,
         importedNamespaces: new Set(),
-        typeAliases: new Map()
-      }
+        typeAliases: new Map(),
+      },
+      accessLevels: new Map(),
     };
-    
-    // Parse with pattern-based approach
-    await this.parseWithPatterns(content, filePath, context);
-    
-    const duration = Date.now() - startTime;
-    context.stats.nodesVisited = content.split('\n').length; // Approximate
-    
-    const symbols = Array.from(context.symbols.values());
-    this.debug(`Pattern-based extraction found ${symbols.length} symbols in ${filePath}`);
-    
+  }
+
+  private convertVisitorResultToCppResult(
+    result: any,
+    context: CppVisitorContext
+  ): CppParseResult {
     return {
-      symbols,
+      symbols: Array.from(context.symbols.values()),
       relationships: context.relationships,
       patterns: context.patterns,
       controlFlowData: context.controlFlowData,
-      stats: { ...context.stats, patternParseTimeMs: duration }
+      stats: context.stats,
     };
-  }
-  
-  /**
-   * Join multi-line function signatures - minimal approach
-   */
-  private joinMultiLineFunctions(lines: string[]): Array<{ content: string; originalLine: number }> {
-    const processedLines: Array<{ content: string; originalLine: number }> = [];
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const lineNum = i + 1;
-      
-      // Only join if line ends with '(' and next line exists and looks like parameters
-      if (line.trim().endsWith('(') && 
-          i + 1 < lines.length && 
-          lines[i + 1].trim().match(/^\s*(const\s+)?\w+/) && // Next line starts with a type
-          line.match(/[\w:&<>,\s*]+\s+(\w+::)*\w+\s*\(\s*$/)) { // Current line looks like function
-        
-        // Simple join: just combine this line with the next 2 lines max
-        let combined = line.trim();
-        let j = i + 1;
-        while (j < lines.length && j < i + 3) { // Max 3 lines
-          const nextLine = lines[j].trim();
-          combined += ' ' + nextLine;
-          if (nextLine.includes(')') && nextLine.includes('{')) {
-            // Found complete signature
-            processedLines.push({ content: combined, originalLine: lineNum });
-            i = j; // Skip the lines we consumed
-            break;
-          }
-          j++;
-        }
-        
-        // If we didn't find a complete signature, just add original line
-        if (j >= i + 3 || !combined.includes(') {')) {
-          processedLines.push({ content: line, originalLine: lineNum });
-        }
-      } else {
-        processedLines.push({ content: line, originalLine: lineNum });
-      }
-    }
-    
-    return processedLines;
   }
 
-  private async parseWithPatterns(content: string, filePath: string, context: CppVisitorContext): Promise<void> {
-    const lines = content.split('\n');
-    let currentNamespace: string | undefined;
-    let namespaceStack: string[] = [];
-    let braceDepth = 0;
-    let insideClass: { name: string; depth: number } | null = null;
-    
-    this.debug(`\nParsing ${filePath} with ${lines.length} lines`);
-    
-    // Pre-process to join multi-line function signatures
-    const processedLines = this.joinMultiLineFunctions(lines);
-    
-    for (let i = 0; i < processedLines.length; i++) {
-      const line = processedLines[i].content;
-      const lineNum = processedLines[i].originalLine;
-      
-      // Track brace depth
-      braceDepth += (line.match(/{/g) || []).length;
-      braceDepth -= (line.match(/}/g) || []).length;
-      
-      // Namespace detection
-      const namespaceMatch = line.match(/^\s*(?:export\s+)?namespace\s+(\w+(?:::\w+)*)\s*{?/);
-      if (namespaceMatch) {
-        const ns = namespaceMatch[1];
-        namespaceStack.push(ns);
-        currentNamespace = namespaceStack.join('::');
-        context.resolutionContext.currentNamespace = currentNamespace;
-        
-        const symbol: SymbolInfo = {
-          name: ns,
-          qualifiedName: currentNamespace,
-          kind: 'namespace',
-          filePath,
-          line: lineNum,
-          column: 1,
-          semanticTags: ['namespace'],
-          complexity: 0,
-          confidence: 0.9,
-          isDefinition: true,
-          isExported: line.includes('export'),
-          isAsync: false,
-          namespace: namespaceStack.slice(0, -1).join('::') || undefined
-        };
-        
-        context.symbols.set(symbol.qualifiedName, symbol);
-        context.stats.symbolsExtracted++;
-        this.debug(`  Found namespace: ${symbol.qualifiedName}`);
-      }
-      
-      // Class/struct detection
-      const classMatch = line.match(/^\s*(?:export\s+)?(?:template\s*<[^>]+>\s*)?(class|struct)\s+(\w+)(?:\s*:\s*(.+?))?(?:\s*{|$)/);
-      if (classMatch) {
-        const [, type, name, inheritance] = classMatch;
-        const qualifiedName = currentNamespace ? `${currentNamespace}::${name}` : name;
-        
-        insideClass = { name: qualifiedName, depth: braceDepth };
-        
-        const symbol: SymbolInfo = {
-          name,
-          qualifiedName,
-          kind: type,
-          filePath,
-          line: lineNum,
-          column: 1,
-          semanticTags: [type, line.includes('template') ? 'template' : ''].filter(Boolean),
-          complexity: 1,
-          confidence: 0.95,
-          isDefinition: true,
-          isExported: line.includes('export'),
-          isAsync: false,
-          namespace: currentNamespace
-        };
-        
-        context.symbols.set(symbol.qualifiedName, symbol);
-        context.stats.symbolsExtracted++;
-        this.debug(`  Found ${type}: ${symbol.qualifiedName}`);
-        
-        // Cache the symbol for fast resolution
-        OptimizedCppTreeSitterParser.symbolCache.addSymbol({
-          id: context.stats.symbolsExtracted,
-          name,
-          qualifiedName,
-          kind: type,
-          filePath,
-          line: lineNum,
-          column: 1,
-          namespace: currentNamespace,
-          semanticTags: symbol.semanticTags,
-          childIds: [],
-          callers: [],
-          callees: [],
-          inheritsFrom: [],
-          inheritedBy: [],
-          uses: [],
-          usedBy: [],
-          lastAccessed: Date.now(),
-          accessCount: 0
-        });
-        
-        // Extract inheritance relationships
-        if (inheritance) {
-          const baseClasses = inheritance.split(',').map(s => s.trim());
-          for (const baseClass of baseClasses) {
-            const cleanBase = baseClass.replace(/^\s*(public|private|protected)\s+/, '');
-            context.relationships.push({
-              fromName: qualifiedName,
-              toName: cleanBase,
-              relationshipType: 'inherits',
-              confidence: 0.9,
-              lineNumber: lineNum,
-              crossLanguage: false
-            });
-          }
-        }
-      }
-      
-      // Improved function/method detection to handle complex C++ patterns
-      // Pattern 1: Class-qualified methods like "IPlanetBuilder& PlanetBuilder::WithTextureResolution(uint32_t resolution)"
-      const classMethodMatch = line.match(/^\s*(?:export\s+)?(?:template\s*<[^>]+>\s*)?(?:inline\s+)?(?:static\s+)?(?:virtual\s+)?(?:constexpr\s+)?([\w:&<>,\s*]+?)\s+(\w+::)+(\w+)\s*\([^)]*\)(?:\s*const)?(?:\s*noexcept)?(?:\s*->\s*[\w\s<>,&*]+)?(?:\s*{|;)/);
-      
-      // Pattern 2: Regular functions/methods
-      const functionMatch = line.match(/^\s*(?:export\s+)?(?:template\s*<[^>]+>\s*)?(?:inline\s+)?(?:static\s+)?(?:virtual\s+)?(?:constexpr\s+)?([\w:&<>,\s*]+?)\s+(\w+)\s*\([^)]*\)(?:\s*const)?(?:\s*noexcept)?(?:\s*->\s*[\w\s<>,&*]+)?(?:\s*{|;)/);
-      
-      let matchResult = classMethodMatch || functionMatch;
-      if (matchResult && !line.includes('if') && !line.includes('while') && !line.includes('for') && !line.includes('=')) {
-        let returnType, name, fullQualifiedName;
-        
-        if (classMethodMatch) {
-          // Handle class-qualified methods
-          [, returnType, , name] = classMethodMatch;
-          const classPath = classMethodMatch[0].match(/(\w+::)+/)?.[0];
-          fullQualifiedName = classPath ? `${classPath}${name}` : name;
-        } else {
-          // Handle regular functions
-          [, returnType, name] = functionMatch!;
-          fullQualifiedName = name;
-        }
-        
-        const [fullMatch] = matchResult;
-        
-        // Filter out LOG calls - they should be relationships, not symbols
-        if (name.startsWith('LOG_') || fullMatch.includes('LOG_ERROR(') || 
-            fullMatch.includes('LOG_DEBUG(') || fullMatch.includes('LOG_INFO(') || 
-            fullMatch.includes('LOG_WARN(') || fullMatch.includes('LOG_CRITICAL(') ||
-            fullMatch.includes('LOG_TRACE(') || fullMatch.includes('LOG_FATAL(') ||
-            fullMatch.includes('LOG_WARNING(')) {
-          continue; // Skip this line and continue processing
-        }
-        
-        const isConstructor = insideClass && name === insideClass.name.split('::').pop();
-        const isDestructor = name.startsWith('~');
-        
-        const parentQualifiedName = insideClass?.name;
-        const qualifiedName = classMethodMatch ? 
-          (currentNamespace ? `${currentNamespace}::${fullQualifiedName}` : fullQualifiedName) :
-          (parentQualifiedName ? `${parentQualifiedName}::${name}` : 
-           currentNamespace ? `${currentNamespace}::${name}` : name);
-        
-        const symbol: SymbolInfo = {
-          name,
-          qualifiedName,
-          kind: isConstructor ? 'constructor' : isDestructor ? 'destructor' : 'function',
-          filePath,
-          line: lineNum,
-          column: 1,
-          returnType: returnType || 'void',
-          signature: fullMatch.trim(),
-          semanticTags: this.extractFunctionTags(line, name),
-          complexity: 1,
-          confidence: 0.9,
-          isDefinition: line.includes('{'),
-          isExported: line.includes('export'),
-          isAsync: line.includes('async') || line.includes('co_'),
-          namespace: currentNamespace,
-          parentScope: parentQualifiedName
-        };
-        
-        // Estimate complexity for selective control flow analysis
-        const complexity = this.estimateFunctionComplexity(symbol, lines, i);
-        symbol.complexity = complexity;
-        
-        context.symbols.set(symbol.qualifiedName, symbol);
-        context.stats.symbolsExtracted++;
-        this.debug(`  Found ${symbol.kind}: ${symbol.qualifiedName} (complexity: ${complexity})`);
-        
-        // Only analyze control flow for complex functions
-        if (complexity >= 2 && context.stats.controlFlowAnalyzed < 10) {
-          context.stats.complexityChecks++;
-          this.debug(`    Analyzing control flow for ${symbol.qualifiedName}`);
-          await this.analyzePatternBasedControlFlow(symbol, lines, i, context);
-          const blocksFound = context.controlFlowData.blocks.filter(b => b.symbolName === symbol.qualifiedName).length;
-          this.debug(`    Found ${blocksFound} control flow blocks`);
-        }
-      }
-      
-      // Exit class scope
-      if (insideClass && braceDepth < insideClass.depth) {
-        insideClass = null;
-      }
-      
-      // Exit namespace scope
-      if (namespaceStack.length > 0 && braceDepth < namespaceStack.length) {
-        namespaceStack.pop();
-        currentNamespace = namespaceStack.length > 0 ? namespaceStack.join('::') : undefined;
-        context.resolutionContext.currentNamespace = currentNamespace;
-      }
-    }
-    
-    // Detect patterns
-    const symbols = Array.from(context.symbols.values());
-    for (const detector of CPP_PATTERN_DETECTORS) {
-      const patterns = detector.detect(symbols as any);
-      if (patterns) {
-        context.patterns.push({
-          patternType: patterns.type,
-          patternName: patterns.description || patterns.type,
-          confidence: patterns.confidence,
-          details: patterns
-        });
-      }
-    }
-  }
-  
-  private extractFunctionTags(line: string, name: string): string[] {
-    const tags: string[] = ['function'];
-    
-    if (line.includes('template')) tags.push('template');
-    if (line.includes('inline')) tags.push('inline');
-    if (line.includes('static')) tags.push('static');
-    if (line.includes('virtual')) tags.push('virtual');
-    if (line.includes('override')) tags.push('override');
-    if (line.includes('const')) tags.push('const');
-    if (line.includes('noexcept')) tags.push('noexcept');
-    if (line.includes('constexpr')) tags.push('constexpr');
-    if (line.includes('operator')) tags.push('operator');
-    if (line.includes('co_await') || line.includes('co_yield') || line.includes('co_return')) tags.push('coroutine');
-    
-    // Execution mode detection
-    if (name.toLowerCase().includes('gpu') || name.toLowerCase().includes('kernel')) {
-      tags.push('gpu-execution');
-    }
-    if (name.toLowerCase().includes('simd') || name.toLowerCase().includes('vector')) {
-      tags.push('simd');
-    }
-    
-    return tags;
-  }
-  
-  private estimateFunctionComplexity(symbol: SymbolInfo, lines: string[], startIdx: number): number {
-    let complexity = 1;
-    let braceDepth = 0;
-    let lineCount = 0;
-    
-    // Quick scan to find function end and count control structures
-    for (let i = startIdx; i < lines.length && i < startIdx + 100; i++) {
-      const line = lines[i];
-      braceDepth += (line.match(/{/g) || []).length;
-      braceDepth -= (line.match(/}/g) || []).length;
-      
-      if (braceDepth > 0) {
-        lineCount++;
-        
-        // Count control flow structures
-        if (/\b(if|else\s+if)\s*\(/.test(line)) complexity += 1;
-        if (/\b(for|while|do)\s*\(/.test(line)) complexity += 2;
-        if (/\bswitch\s*\(/.test(line)) complexity += 2;
-        if (/\btry\s*{/.test(line)) complexity += 1;
-        if (/\bcatch\s*\(/.test(line)) complexity += 1;
-        if (/\b(goto|break|continue|return)\b/.test(line)) complexity += 0.5;
-        if (/\b(co_await|co_yield|co_return)\b/.test(line)) complexity += 2;
-      }
-      
-      if (braceDepth === 0 && lineCount > 0) {
-        break;
-      }
-    }
-    
-    // Adjust for function size
-    if (lineCount < 3) return 0; // Skip trivial functions
-    if (lineCount > 20) complexity += 2;
-    if (lineCount > 50) complexity += 3;
-    
-    // Function name heuristics
-    const nameLower = symbol.name.toLowerCase();
-    if (nameLower.includes('process') || nameLower.includes('analyze')) complexity += 1;
-    if (nameLower.includes('get') || nameLower.includes('set')) complexity -= 1;
-    
-    return Math.max(0, Math.floor(complexity));
-  }
-  
-  private async analyzePatternBasedControlFlow(
-    symbol: SymbolInfo,
-    lines: string[],
-    startIdx: number,
-    context: CppVisitorContext
-  ): Promise<void> {
-    context.stats.controlFlowAnalyzed++;
-    
-    let braceDepth = 0;
-    let functionStartDepth = 0;
-    let foundFunctionStart = false;
-    
-    // Create entry block
-    context.controlFlowData.blocks.push({
-      symbolName: symbol.qualifiedName,
-      blockType: 'entry',
-      startLine: symbol.line,
-      endLine: symbol.line,
-      complexity: 1
-    });
-    
-    // Track control flow blocks with their actual end positions
-    const pendingBlocks: Array<{
-      block: any;
-      startBraceDepth: number;
-      startLineNum: number;
-    }> = [];
-    
-    // First, find where the function body actually starts
-    for (let i = startIdx; i < lines.length && i < startIdx + 10; i++) {
-      const line = lines[i];
-      if (line.includes('{')) {
-        foundFunctionStart = true;
-        functionStartDepth = braceDepth + (line.match(/{/g) || []).length - (line.match(/}/g) || []).length;
-        break;
-      }
-    }
-    
-    // Scan function body
-    for (let i = startIdx; i < lines.length && i < startIdx + 200; i++) {
-      const line = lines[i];
-      const lineNum = i + 1;
-      
-      const openBraces = (line.match(/{/g) || []).length;
-      const closeBraces = (line.match(/}/g) || []).length;
-      
-      // Check for control structures before updating brace depth
-      if (/\bif\s*\(/.test(line)) {
-        const block = {
-          symbolName: symbol.qualifiedName,
-          blockType: 'conditional',
-          startLine: lineNum,
-          endLine: lineNum, // Will be updated when we find the closing brace
-          condition: 'if',
-          complexity: 1
-        };
-        // Store the brace depth AFTER this line's opening brace
-        const depthAfterOpen = braceDepth + openBraces;
-        pendingBlocks.push({ block, startBraceDepth: depthAfterOpen, startLineNum: lineNum });
-      } else if (/\b(for|while)\s*\(/.test(line)) {
-        const loopType = line.includes('for') ? 'for' : 'while';
-        const block = {
-          symbolName: symbol.qualifiedName,
-          blockType: 'loop',
-          startLine: lineNum,
-          endLine: lineNum, // Will be updated when we find the closing brace
-          condition: loopType,
-          loopType: loopType,
-          complexity: 2
-        };
-        // Store the brace depth AFTER this line's opening brace
-        const depthAfterOpen = braceDepth + openBraces;
-        pendingBlocks.push({ block, startBraceDepth: depthAfterOpen, startLineNum: lineNum });
-      } else if (/\bswitch\s*\(/.test(line)) {
-        const block = {
-          symbolName: symbol.qualifiedName,
-          blockType: 'switch',
-          startLine: lineNum,
-          endLine: lineNum, // Will be updated when we find the closing brace
-          condition: 'switch',
-          complexity: 2
-        };
-        // Store the brace depth AFTER this line's opening brace
-        const depthAfterOpen = braceDepth + openBraces;
-        pendingBlocks.push({ block, startBraceDepth: depthAfterOpen, startLineNum: lineNum });
-      }
-      
-      // Update brace depth
-      braceDepth += openBraces;
-      braceDepth -= closeBraces;
-      
-      // Check if any pending blocks should be closed
-      // Process in reverse order to handle nested blocks correctly
-      for (let j = pendingBlocks.length - 1; j >= 0; j--) {
-        const pending = pendingBlocks[j];
-        // A block ends when we return to a brace depth less than when it started
-        if (braceDepth < pending.startBraceDepth) {
-          // This block has ended
-          pending.block.endLine = lineNum;
-          context.controlFlowData.blocks.push(pending.block);
-          pendingBlocks.splice(j, 1);
-        }
-      }
-      
-      if (braceDepth > 0 || (foundFunctionStart && braceDepth >= functionStartDepth)) {
-        // Function calls
-        const callMatches = line.matchAll(/\b(\w+(?:::\w+)*)\s*\(/g);
-        for (const match of callMatches) {
-          const targetFunction = match[1];
-          if (!['if', 'while', 'for', 'switch', 'catch', 'sizeof', 'typeof', 'return'].includes(targetFunction)) {
-            context.controlFlowData.calls.push({
-              callerName: symbol.qualifiedName,
-              targetFunction,
-              lineNumber: lineNum,
-              columnNumber: match.index || 0,
-              callType: 'direct'
-            });
-          }
-        }
-      }
-      
-      // Check if we've exited the function
-      if (foundFunctionStart && braceDepth < functionStartDepth && i > startIdx) {
-        symbol.endLine = lineNum;
-        // Close any remaining pending blocks
-        for (const pending of pendingBlocks) {
-          pending.block.endLine = lineNum;
-          context.controlFlowData.blocks.push(pending.block);
-        }
-        break;
-      }
-    }
-    
-    // Create exit block
-    context.controlFlowData.blocks.push({
-      symbolName: symbol.qualifiedName,
-      blockType: 'exit',
-      startLine: symbol.endLine || symbol.line,
-      endLine: symbol.endLine || symbol.line,
-      complexity: 1
-    });
-  }
-  
-  // Handler methods for visitor pattern
-  
-  private handleClass(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    const context = ctx as CppVisitorContext;
-    const nameNode = node.childForFieldName('name');
-    if (!nameNode) return null;
-    
-    const name = this.getNodeText(nameNode, context.content);
-    const qualifiedName = this.buildQualifiedName(name, context);
-    
-    const symbol: SymbolInfo = {
-      name,
-      qualifiedName,
-      kind: node.type === 'class_specifier' ? 'class' : 'struct',
-      filePath: context.filePath,
-      line: node.startPosition.row + 1,
-      column: node.startPosition.column + 1,
-      endLine: node.endPosition.row + 1,
-      endColumn: node.endPosition.column + 1,
-      semanticTags: [node.type === 'class_specifier' ? 'class' : 'struct'],
-      complexity: 1,
-      confidence: 0.95,
-      isDefinition: true,
-      isExported: context.insideExportBlock,
-      isAsync: false,
-      namespace: context.resolutionContext.currentNamespace
+  private convertToLegacyResult(cppResult: CppParseResult): ParseResult {
+    return {
+      symbols: cppResult.symbols,
+      relationships: cppResult.relationships,
+      patterns: cppResult.patterns,
+      controlFlowData: cppResult.controlFlowData,
+      stats: cppResult.stats,
     };
-    
-    // Cache for fast resolution
-    this.cacheSymbol(symbol);
-    
-    return symbol;
   }
-  
-  private handleFunction(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    const context = ctx as CppVisitorContext;
-    // Implementation similar to pattern-based but using AST node
-    // ... (abbreviated for brevity)
-    return null;
+
+  /**
+   * Pattern-based extraction fallback for large files
+   */
+  protected async performPatternBasedExtraction(
+    content: string,
+    filePath: string
+  ): Promise<{
+    symbols: SymbolInfo[];
+    relationships: RelationshipInfo[];
+    patterns: PatternInfo[];
+    controlFlowData: { blocks: any[]; calls: any[] };
+    stats: any;
+  }> {
+    const context = this.createCppContext(filePath, content);
+    return await this.patternAnalyzer.analyzeCode(content, filePath, context);
   }
-  
-  private handleNamespace(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    const context = ctx as CppVisitorContext;
-    const nameNode = node.childForFieldName('name');
-    if (!nameNode) return null;
-    
-    const name = this.getNodeText(nameNode, context.content);
-    
-    // Update resolution context
-    context.resolutionContext.currentNamespace = name;
-    
-    const symbol: SymbolInfo = {
-      name,
-      qualifiedName: name,
-      kind: 'namespace',
-      filePath: context.filePath,
-      line: node.startPosition.row + 1,
-      column: node.startPosition.column + 1,
-      semanticTags: ['namespace'],
-      complexity: 0,
-      confidence: 1.0,
-      isDefinition: true,
-      isExported: node.type === 'export_declaration',
-      isAsync: false
+
+  // Statistics and monitoring
+  getParserStats() {
+    const baseStats = {
+      useTreeSitter: this.useTreeSitter,
+      cacheSize:
+        RefactoredOptimizedCppTreeSitterParser.symbolCache.getStatistics().size,
     };
-    
-    return symbol;
-  }
-  
-  private handleVariable(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    // Variable handling
-    return null;
-  }
-  
-  private handleEnum(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    // Enum handling
-    return null;
-  }
-  
-  private handleTypedef(node: Parser.SyntaxNode, ctx: VisitorContext): SymbolInfo | null {
-    // Typedef handling
-    return null;
-  }
-  
-  private handleCall(node: Parser.SyntaxNode, ctx: VisitorContext): RelationshipInfo | null {
-    const context = ctx as CppVisitorContext;
-    const functionNode = node.childForFieldName('function');
-    if (!functionNode) return null;
-    
-    const targetName = this.getNodeText(functionNode, context.content);
-    
-    // Resolve the target symbol using cache
-    const resolved = OptimizedCppTreeSitterParser.symbolCache.resolveSymbol(
-      targetName,
-      context.resolutionContext
-    );
-    
-    if (resolved) {
-      const currentScope = context.scopeStack[context.scopeStack.length - 1];
+
+    if (this.workerPool) {
       return {
-        fromName: currentScope?.qualifiedName || 'unknown',
-        toName: resolved.qualifiedName,
-        relationshipType: 'calls',
-        confidence: 0.95,
-        lineNumber: node.startPosition.row + 1,
-        crossLanguage: false
+        ...baseStats,
+        workerPool: this.workerPool.getStats(),
       };
     }
-    
-    return null;
-  }
-  
-  private handleInheritance(node: Parser.SyntaxNode, ctx: VisitorContext): RelationshipInfo[] | null {
-    const context = ctx as CppVisitorContext;
-    const relationships: RelationshipInfo[] = [];
-    
-    // Get the class name from parent node
-    const classNode = node.parent;
-    if (!classNode) return null;
-    
-    const classNameNode = classNode.childForFieldName('name');
-    if (!classNameNode) return null;
-    
-    const className = this.getNodeText(classNameNode, context.content);
-    
-    // Parse base classes from inheritance node
-    const inheritanceText = this.getNodeText(node, context.content);
-    
-    // Extract base classes (handle: "public Base1, private Base2")
-    const baseClassRegex = /(?:public|private|protected)?\s*([A-Za-z_][\w:]*)(?:<[^>]+>)?/g;
-    let match;
-    
-    while ((match = baseClassRegex.exec(inheritanceText)) !== null) {
-      const baseClass = match[1];
-      if (baseClass && baseClass !== className) {
-        // Extract simple class name (remove namespace qualification)
-        const baseSimpleName = baseClass.includes('::') ? baseClass.split('::').pop()! : baseClass;
-        
-        relationships.push({
-          fromName: className,
-          toName: baseSimpleName,
-          relationshipType: 'inherits',
-          confidence: 1.0,
-          lineNumber: node.startPosition.row + 1,
-          crossLanguage: false
-        });
-        
-        console.log(`[OPTIMIZED INHERITANCE] Found: ${className} -> ${baseSimpleName} (line ${node.startPosition.row + 1})`);
-      }
-    }
-    
-    return relationships.length > 0 ? relationships : null;
-  }
-  
-  private handleImport(node: Parser.SyntaxNode, ctx: VisitorContext): RelationshipInfo | null {
-    // Import handling
-    return null;
-  }
-  
-  private handleTypeReference(node: Parser.SyntaxNode, ctx: VisitorContext): RelationshipInfo | null {
-    // Type reference handling
-    return null;
-  }
-  
-  private handlePattern(node: Parser.SyntaxNode, ctx: VisitorContext): PatternInfo | null {
-    // Pattern detection
-    return null;
-  }
-  
-  private handleEnterScope(scope: ScopeInfo, ctx: VisitorContext): void {
-    const context = ctx as CppVisitorContext;
-    if (scope.type === 'namespace') {
-      context.resolutionContext.currentNamespace = scope.qualifiedName;
-    }
-  }
-  
-  private handleExitScope(scope: ScopeInfo, ctx: VisitorContext): void {
-    const context = ctx as CppVisitorContext;
-    if (scope.type === 'namespace') {
-      const parentScope = context.scopeStack[context.scopeStack.length - 2];
-      context.resolutionContext.currentNamespace = parentScope?.qualifiedName;
-    }
-  }
-  
-  private buildQualifiedName(name: string, context: CppVisitorContext): string {
-    const parts: string[] = [];
-    
-    if (context.resolutionContext.currentNamespace) {
-      parts.push(context.resolutionContext.currentNamespace);
-    }
-    
-    for (const scope of context.scopeStack) {
-      if (scope.type === 'class' || scope.type === 'namespace') {
-        parts.push(scope.name);
-      }
-    }
-    
-    parts.push(name);
-    return parts.join('::');
-  }
-  
-  private getNodeText(node: Parser.SyntaxNode, content: string): string {
-    return content.substring(node.startIndex, node.endIndex);
-  }
-  
-  private cacheSymbol(symbol: SymbolInfo): void {
-    OptimizedCppTreeSitterParser.symbolCache.addSymbol({
-      id: Date.now(), // Temporary ID
-      name: symbol.name,
-      qualifiedName: symbol.qualifiedName,
-      kind: symbol.kind,
-      filePath: symbol.filePath,
-      line: symbol.line,
-      column: symbol.column,
-      namespace: symbol.namespace,
-      semanticTags: symbol.semanticTags,
-      childIds: [],
-      callers: [],
-      callees: [],
-      inheritsFrom: [],
-      inheritedBy: [],
-      uses: [],
-      usedBy: [],
-      lastAccessed: Date.now(),
-      accessCount: 0
-    });
-  }
-  
-  /**
-   * Get cache statistics
-   */
-  static getCacheStatistics() {
-    return OptimizedCppTreeSitterParser.symbolCache.getStatistics();
-  }
-  
-  /**
-   * Clear the symbol cache
-   */
-  static clearCache() {
-    OptimizedCppTreeSitterParser.symbolCache.clear();
-  }
-  
-  /**
-   * Clear all caches including parent class caches
-   */
-  static clearAllCaches() {
-    OptimizedTreeSitterBaseParser.clearAllCaches();
-    OptimizedCppTreeSitterParser.symbolCache.clear();
-    console.log('🧹 Cleared C++ parser caches');
+
+    return baseStats;
   }
 }
+
+// Export alias for backward compatibility
+export { RefactoredOptimizedCppTreeSitterParser as OptimizedCppTreeSitterParser };

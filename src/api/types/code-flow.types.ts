@@ -199,6 +199,12 @@ export interface ControlFlow {
     call_type: string;
   }>;
   exceptions: any[];
+  dataFlowEdges?: Array<{
+    from: number;
+    to: number;
+    type: string;
+    variable: string | null;
+  }>;
 }
 
 // Helper type for database query results

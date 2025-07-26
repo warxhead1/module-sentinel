@@ -268,7 +268,7 @@ export class TestDataFixtures {
     const symbols = await this.createSampleSymbols(projectId, languageId);
     
     // Add a main function for entry point testing
-    const mainFunction = await this.db.insertSymbols([{
+    const _mainFunction = await this.db.insertSymbols([{
       projectId,
       languageId,
       name: 'main',

@@ -228,10 +228,10 @@
     *   In `api.service.ts`, added the `getRelationships` method to fetch overall graph data.
 *   **Tests:**
     *   **Integration Test:** `test/integration/dashboard/data-flow.test.ts`
-        *   **Requirement:** Mock the API response for `/api/relationships` (using the new, enriched structure).
+        *   **Requirement:** Mock the API response for `/api/relationships` with the new, enriched data structure.
         *   **Requirement:** Verify that `relationship-graph.ts` correctly receives and processes the data when `dataService.fetch` is called, ensuring the data flows through `api.service.ts` and `data.service.ts` as expected.
 
-### Task 3.2: Implement Cross-Tab Synchronization (Node Selection)
+### Task 3.2: Implement Cross-Tab Synchronization (Node Selection) [x]
 
 *   **Description:** When a node is selected in the graph, publish its ID to a central state management service. This service will act as a broadcast mechanism, allowing other dashboard components to subscribe and react to the selected node, enabling seamless cross-tab interaction.
 *   **Files:**
@@ -240,9 +240,8 @@
 *   **Changes:**
     *   In `state.service.ts` (or a new dedicated `selection.service.ts`), add:
         *   A private `selectedNodeId` property.
-        *   A method `setSelectedNode(nodeId: string)` that updates `selectedNodeId` and notifies subscribers.
-        *   A method `subscribeToSelectedNode(callback: (nodeId: string) => void)` that allows other components to register callbacks for selection changes. (Consider using a simple event emitter pattern or a reactive programming approach like RxJS `Subject` if available).
-    *   In `relationship-graph.ts`, within the `selectNode` method (which is called when a graph node is clicked), call `stateService.setSelectedNode(node.id)` after updating the local state.
+        *   A method `setSelectedNode(nodeId: string)` that updates `selectedNodeId` and notifies subscribers. (Consider using a simple event emitter pattern or a reactive programming approach like RxJS `Subject` if available).
+    *   In `relationship-graph.ts`, within the `selectNode` method (which is called when a graph node is clicked), call `stateService.setState('selectedNodeId', node.id)` after updating the local state.
 *   **Tests:**
     *   **Unit Test:** `test/unit/dashboard/state.service.test.ts` (or `selection.service.test.ts`)
         *   **Requirement:** Test `setSelectedNode` and `subscribeToSelectedNode` to ensure correct event publishing and subscription. Verify that registered callbacks are invoked with the correct `nodeId` when a selection occurs.

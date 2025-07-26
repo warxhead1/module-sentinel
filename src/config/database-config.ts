@@ -2,9 +2,9 @@
  * Centralized Database Configuration
  * Single source of truth for all database paths based on NODE_ENV
  */
-import * as path from 'path';
-import * as fs from 'fs';
-import * as os from 'os';
+import * as path from "path";
+import * as fs from "fs";
+import * as os from "os";
 
 export class DatabaseConfig {
   private static instance: DatabaseConfig;
@@ -14,18 +14,27 @@ export class DatabaseConfig {
 
   private constructor() {
     // Simple: Check NODE_ENV
-    this.env = process.env.NODE_ENV || 'development';
-    
-    // Simple: Use PROD_DB or DEV_DB based on NODE_ENV
-    if (this.env === 'production') {
-      this.dbPath = process.env.PROD_DB || path.join(os.homedir(), '.module-sentinel', 'production.db');
+    this.env = process.env.NODE_ENV || "development";
+
+    // Use separate databases for each environment
+    if (this.env === "production") {
+      this.dbPath =
+        process.env.PROD_DB ||
+        path.join(os.homedir(), ".module-sentinel", "production.db");
+    } else if (this.env === "test") {
+      // Test environment gets its own isolated database
+      this.dbPath =
+        process.env.TEST_DB ||
+        path.join(os.homedir(), ".module-sentinel", "test", "test.db");
     } else {
-      // Everything else (dev, test, whatever) uses DEV_DB
-      this.dbPath = process.env.DEV_DB || path.join(os.homedir(), '.module-sentinel', 'development.db');
+      // Development environment
+      this.dbPath =
+        process.env.DEV_DB ||
+        path.join(os.homedir(), ".module-sentinel", "development.db");
     }
-    
+
     this.dbDir = path.dirname(this.dbPath);
-    
+
     // Ensure directory exists
     this.ensureDirectoryExists();
   }
@@ -68,7 +77,7 @@ export class DatabaseConfig {
     return {
       env: this.env,
       path: this.dbPath,
-      exists: fs.existsSync(this.dbPath)
+      exists: fs.existsSync(this.dbPath),
     };
   }
 
@@ -78,7 +87,6 @@ export class DatabaseConfig {
   private ensureDirectoryExists(): void {
     if (!fs.existsSync(this.dbDir)) {
       fs.mkdirSync(this.dbDir, { recursive: true });
-      console.log(`📁 Created database directory: ${this.dbDir}`);
     }
   }
 
@@ -86,11 +94,7 @@ export class DatabaseConfig {
    * Log the current configuration
    */
   logConfig(): void {
-    console.log('🗄️  Database Configuration:');
-    console.log(`   Environment: ${this.env}`);
-    console.log(`   Database Path: ${this.dbPath}`);
-    console.log(`   Database Exists: ${fs.existsSync(this.dbPath)}`);
-    console.log(`   Directory: ${this.dbDir}`);
+    console.log("🗄️  Database Configuration:");
   }
 
   /**
@@ -101,11 +105,9 @@ export class DatabaseConfig {
       // Create backup first
       const backupPath = `${this.dbPath}.backup.${Date.now()}`;
       fs.copyFileSync(this.dbPath, backupPath);
-      console.log(`📦 Created backup: ${backupPath}`);
-      
+
       // Remove the database
       fs.unlinkSync(this.dbPath);
-      console.log(`🗑️  Removed database: ${this.dbPath}`);
     }
   }
 }
@@ -117,13 +119,13 @@ export function getDatabasePath(): string {
 
 // Export environment check functions
 export function isDevelopment(): boolean {
-  return DatabaseConfig.getInstance().getEnv() === 'development';
+  return DatabaseConfig.getInstance().getEnv() === "development";
 }
 
 export function isProduction(): boolean {
-  return DatabaseConfig.getInstance().getEnv() === 'production';
+  return DatabaseConfig.getInstance().getEnv() === "production";
 }
 
 export function isTest(): boolean {
-  return DatabaseConfig.getInstance().getEnv() === 'test';
+  return DatabaseConfig.getInstance().getEnv() === "test";
 }

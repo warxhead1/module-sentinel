@@ -1,147 +1,249 @@
-import { TestDatabaseManager } from './TestDatabaseManager';
-import * as path from 'path';
+/**
+ * Base Test Class
+ *
+ * Provides common testing utilities and assertion methods
+ * to avoid code duplication across test files.
+ */
 
-export class AssertionError extends Error {
-  constructor(message: string, actual?: any, expected?: any) {
-    super(message);
-    this.name = 'AssertionError';
-    if (actual !== undefined) {
-      this.message += `\n  Expected: ${JSON.stringify(expected)}`;
-      this.message += `\n  Actual: ${JSON.stringify(actual)}`;
-    }
-  }
-}
+import Database from "better-sqlite3";
+import { TestResult } from "./JUnitReporter.js";
+import { Assert, AssertionError } from "../../src/utils/test-assertions.js";
+import { createLogger, Logger } from "../../src/utils/logger.js";
 
 export abstract class BaseTest {
-  protected dbManager: TestDatabaseManager;
-  protected projectPath: string;
+  protected db: Database.Database;
+  protected assertionCount = 0;
+  protected passedAssertions = 0;
+  protected currentTestName = "";
   protected testName: string;
-  protected assertionCount: number = 0;
-  protected passedAssertions: number = 0;
+  protected logger: Logger;
 
-  constructor(testName: string, projectPath: string = '/home/warxh/planet_procgen') {
+  constructor(testName: string, db: Database.Database) {
     this.testName = testName;
-    this.projectPath = projectPath;
-    this.dbManager = new TestDatabaseManager(`.test-db/${testName}`);
+    this.db = db;
+    this.logger = createLogger(`Test:${testName}`);
   }
 
-  // Assertion methods
+  /**
+   * Run all tests and return results
+   */
+  abstract run(): Promise<TestResult[]>;
+
+  /**
+   * Assert a condition is true
+   */
   protected assert(condition: boolean, message: string): void {
     this.assertionCount++;
-    if (!condition) {
-      throw new AssertionError(`❌ ${message}`);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message}`);
-  }
-
-  protected assertEqual<T>(actual: T, expected: T, message?: string): void {
-    this.assertionCount++;
-    if (actual !== expected) {
-      const msg = message || `Expected ${expected}, got ${actual}`;
-      throw new AssertionError(`❌ ${msg}`, actual, expected);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `${actual} equals ${expected}`}`);
-  }
-
-  protected assertGreaterThan(actual: number, expected: number, message?: string): void {
-    this.assertionCount++;
-    if (actual <= expected) {
-      const msg = message || `Expected ${actual} > ${expected}`;
-      throw new AssertionError(`❌ ${msg}`, actual, expected);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `${actual} > ${expected}`}`);
-  }
-
-  protected assertGreaterEqual(actual: number, expected: number, message?: string): void {
-    this.assertionCount++;
-    if (actual < expected) {
-      const msg = message || `Expected ${actual} >= ${expected}`;
-      throw new AssertionError(`❌ ${msg}`, actual, expected);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `${actual} >= ${expected}`}`);
-  }
-
-  protected assertLessThan(actual: number, expected: number, message?: string): void {
-    this.assertionCount++;
-    if (actual >= expected) {
-      const msg = message || `Expected ${actual} < ${expected}`;
-      throw new AssertionError(`❌ ${msg}`, actual, expected);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `${actual} < ${expected}`}`);
-  }
-
-  protected assertContains<T>(array: T[], item: T, message?: string): void {
-    this.assertionCount++;
-    if (!array.includes(item)) {
-      const msg = message || `Expected array to contain ${item}`;
-      throw new AssertionError(`❌ ${msg}`, array, item);
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `Array contains ${item}`}`);
-  }
-
-  protected assertNotEmpty<T>(array: T[], message?: string): void {
-    this.assertionCount++;
-    if (!array || array.length === 0) {
-      const msg = message || `Expected non-empty array`;
-      throw new AssertionError(`❌ ${msg}`, array?.length || 0, "> 0");
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `Array is not empty (length: ${array.length})`}`);
-  }
-
-  protected assertExists(value: any, message?: string): void {
-    this.assertionCount++;
-    if (value === null || value === undefined) {
-      const msg = message || `Expected value to exist`;
-      throw new AssertionError(`❌ ${msg}`, value, "not null/undefined");
-    }
-    this.passedAssertions++;
-    console.log(`✅ ${message || `Value exists`}`);
-  }
-
-  protected printAssertionSummary(): void {
-    console.log(`\n📊 Assertion Summary: ${this.passedAssertions}/${this.assertionCount} passed`);
-    if (this.passedAssertions === this.assertionCount) {
-      console.log(`🎉 All assertions passed!`);
-    } else {
-      console.log(`⚠️  ${this.assertionCount - this.passedAssertions} assertions failed`);
-    }
-  }
-
-  async setup(): Promise<void> {
-    console.log(`\n🔧 Setting up test: ${this.testName}`);
-    await this.dbManager.initialize();
-    await this.specificSetup();
-  }
-
-  async teardown(): Promise<void> {
-    console.log(`\n🧹 Tearing down test: ${this.testName}`);
-    await this.specificTeardown();
-    this.dbManager.closeAll();
-  }
-
-  abstract specificSetup(): Promise<void>;
-  abstract specificTeardown(): Promise<void>;
-  abstract run(): Promise<void>;
-
-  async execute(): Promise<void> {
     try {
-      await this.setup();
-      await this.run();
-      this.printAssertionSummary();
-      console.log(`✅ Test ${this.testName} completed successfully`);
+      Assert.isTrue(condition, message);
+      this.passedAssertions++;
     } catch (error) {
-      this.printAssertionSummary();
-      console.error(`❌ Test ${this.testName} failed:`, error);
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
       throw error;
-    } finally {
-      await this.teardown();
     }
+  }
+
+  /**
+   * Assert two values are equal
+   */
+  protected assertEqual<T>(actual: T, expected: T, message: string): void {
+    this.assertionCount++;
+    try {
+      Assert.equal(actual, expected, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Assert actual is at least the minimum value
+   */
+  protected assertAtLeast(
+    actual: number,
+    minimum: number,
+    message: string
+  ): void {
+    this.assertionCount++;
+    try {
+      Assert.isAtLeast(actual, minimum, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Assert actual is at most the maximum value
+   */
+  protected assertAtMost(
+    actual: number,
+    maximum: number,
+    message: string
+  ): void {
+    this.assertionCount++;
+    try {
+      Assert.isLessThan(actual, maximum + 1, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Assert array contains a value
+   */
+  protected assertContains<T>(array: T[], value: T, message: string): void {
+    this.assertionCount++;
+    try {
+      Assert.includes(array, value, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Assert string contains substring
+   */
+  protected assertStringContains(
+    str: string,
+    substring: string,
+    message: string
+  ): void {
+    this.assertionCount++;
+    try {
+      Assert.contains(str, substring, message);
+      this.passedAssertions++;
+    } catch (error) {
+      if (error instanceof AssertionError) {
+        this.logger.error(`Assertion failed in ${this.currentTestName}`, error);
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Assert value is defined (not null or undefined)
+   */
+  protected assertDefined<T>(
+    value: T | null | undefined,
+    message: string
+  ): asserts value is T {
+    this.assert(
+      value !== null && value !== undefined,
+      `${message} (value is null or undefined)`
+    );
+  }
+
+  /**
+   * Assert value is truthy
+   */
+  protected assertTruthy(value: any, message: string): void {
+    this.assert(!!value, `${message} (value is falsy)`);
+  }
+
+  /**
+   * Assert value is falsy
+   */
+  protected assertFalsy(value: any, message: string): void {
+    this.assert(!value, `${message} (value is truthy)`);
+  }
+
+  /**
+   * Create a test result from a test execution
+   */
+  protected createTestResult(
+    testName: string,
+    testFunction: () => Promise<void> | void,
+    startTime: number
+  ): Promise<TestResult> {
+    return this.runTest(testName, testFunction, startTime);
+  }
+
+  /**
+   * Run a single test and return result
+   */
+  protected async runTest(
+    name: string,
+    testFunction: () => Promise<void> | void,
+    startTime?: number
+  ): Promise<TestResult> {
+    const start = startTime || Date.now();
+    this.currentTestName = name;
+    this.assertionCount = 0;
+    this.passedAssertions = 0;
+
+    try {
+      await testFunction();
+
+      const message =
+        this.assertionCount > 0
+          ? `Passed ${this.passedAssertions}/${this.assertionCount} assertions`
+          : "Test passed";
+
+      return {
+        name,
+        status: "passed",
+        time: Date.now() - start,
+        message,
+      };
+    } catch (error) {
+      return {
+        name,
+        status: "failed",
+        time: Date.now() - start,
+        error: error instanceof Error ? error : new Error(String(error)),
+        message: `Failed after ${this.passedAssertions}/${this.assertionCount} assertions`,
+      };
+    }
+  }
+
+  /**
+   * Log a message during tests
+   */
+  protected log(message: string): void {
+    this.logger.info(message);
+  }
+
+  /**
+   * Log a warning during tests
+   */
+  protected warn(message: string): void {
+    this.logger.warn(message, { test: this.currentTestName });
+  }
+
+  /**
+   * Log an error during tests
+   */
+  protected error(message: string): void {
+    this.logger.error(message, undefined, { test: this.currentTestName });
+  }
+
+  /**
+   * Log success during tests
+   */
+  protected success(message: string): void {
+    console.log(`  ✅ [${this.currentTestName}] ${message}`);
   }
 }

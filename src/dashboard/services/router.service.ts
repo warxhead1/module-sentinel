@@ -3,6 +3,8 @@
  * Handles client-side routing with proper SPA navigation
  */
 
+import { navigationContext } from '../utils/navigation-context.js';
+
 export interface Route {
   path: string;
   component: string;
@@ -17,7 +19,10 @@ export class RouterService {
   private isNavigating = false;
 
   constructor() {
-    // Listen for browser navigation
+    // Listen for hash changes
+    window.addEventListener('hashchange', () => this.handleRoute());
+    
+    // Listen for browser navigation (popstate)
     window.addEventListener('popstate', () => this.handleRoute());
     
     // Listen for custom navigation events
@@ -26,7 +31,7 @@ export class RouterService {
       if (path) this.navigate(path);
     });
     
-    // Intercept link clicks
+    // Intercept link clicks for hash-based routing
     document.addEventListener('click', (e) => {
       const link = (e.target as HTMLElement).closest('a[href^="/"]');
       if (link && link instanceof HTMLAnchorElement) {
@@ -81,11 +86,12 @@ export class RouterService {
         }
       }
 
-      // Update browser history
+      // Update browser history with hash
+      const hashPath = path === '/' ? '#/' : `#${path}`;
       if (options.replace) {
-        window.history.replaceState(options.state || {}, '', path);
+        window.history.replaceState(options.state || {}, '', hashPath);
       } else {
-        window.history.pushState(options.state || {}, '', path);
+        window.history.pushState(options.state || {}, '', hashPath);
       }
 
       // Update current path
@@ -102,9 +108,18 @@ export class RouterService {
       // Update active nav
       this.updateActiveNav(path);
 
+      // Extract and preserve navigation context
+      const context = navigationContext.extractContextFromUrl(path);
+      if (context.selectedSymbol || context.selectedFile || context.selectedNamespace) {
+        const currentContext = navigationContext.getContext();
+        if (currentContext) {
+          navigationContext.updateContext(context);
+        }
+      }
+      
       // Emit navigation event
       window.dispatchEvent(new CustomEvent('navigation', {
-        detail: { path, route, component: route.component }
+        detail: { path, route, component: route.component, context }
       }));
 
     } finally {
@@ -116,7 +131,7 @@ export class RouterService {
    * Handle route change (from popstate or initial load)
    */
   async handleRoute() {
-    const path = window.location.pathname;
+    const path = window.location.hash.replace('#', '') || '/';
     await this.navigate(path, { replace: true });
   }
 
@@ -169,10 +184,14 @@ export class RouterService {
       // Create and append new component
       const element = document.createElement(route.component);
       
+      // Extract context from URL
+      const context = navigationContext.extractContextFromUrl(this.currentPath);
+      
       // Add route data to element
       (element as any).routeData = {
         path: this.currentPath,
-        params: this.extractParams(route.path, this.currentPath)
+        params: this.extractParams(route.path, this.currentPath),
+        context
       };
 
       // Add entrance animation
@@ -302,5 +321,29 @@ export class RouterService {
     }
     
     return url;
+  }
+  
+  /**
+   * Navigate with context
+   */
+  async navigateWithContext(path: string, context?: any) {
+    // Build URL with context parameters
+    const url = new URL(path, window.location.origin);
+    
+    if (context?.selectedSymbol) {
+      url.searchParams.set('symbol_id', context.selectedSymbol.id);
+      url.searchParams.set('symbol_name', context.selectedSymbol.name);
+    }
+    
+    if (context?.selectedFile) {
+      url.searchParams.set('file', context.selectedFile.path);
+    }
+    
+    if (context?.selectedNamespace) {
+      url.searchParams.set('namespace', context.selectedNamespace.fullPath);
+    }
+    
+    const finalPath = url.pathname + url.search;
+    await this.navigate(finalPath);
   }
 }

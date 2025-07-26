@@ -1,5 +1,5 @@
-import * as fs from 'fs/promises';
-import * as path from 'path';
+import * as fs from "fs/promises";
+import * as path from "path";
 
 export class CppPreprocessor {
   private includePaths: string[] = [];
@@ -16,41 +16,53 @@ export class CppPreprocessor {
 
   private async processFile(filePath: string): Promise<string> {
     if (this.processedFiles.has(filePath)) {
-      return ''; // Avoid infinite recursion for circular includes
+      return ""; // Avoid infinite recursion for circular includes
     }
     this.processedFiles.add(filePath);
 
     let content;
     try {
-      content = await fs.readFile(filePath, 'utf-8');
+      content = await fs.readFile(filePath, "utf-8");
     } catch (error) {
-      console.warn(`Warning: Could not read file ${filePath}. Skipping.`);
-      return '';
+      console.warn(
+        `Warning: Could not read file ${filePath}. Skipping ${error}.`
+      );
+      return "";
     }
 
-    const lines = content.split('\n');
-    let preprocessedContent: string[] = [];
+    const lines = content.split("\n");
+    const preprocessedContent: string[] = [];
 
     for (const line of lines) {
-      const includeMatch = line.match(/^\s*#include\s*[<\"](.+)[>\"]$/);
+      const includeMatch = line.match(/^\s*#include\s*[<"](.+)[>"]$/);
       if (includeMatch) {
         const includedFileName = includeMatch[1];
-        const includedFilePath = await this.resolveIncludePath(includedFileName, path.dirname(filePath));
+        const includedFilePath = await this.resolveIncludePath(
+          includedFileName,
+          path.dirname(filePath)
+        );
         if (includedFilePath) {
-          preprocessedContent.push(`// #include \"${includedFileName}\" (resolved from ${includedFilePath})`);
+          preprocessedContent.push(
+            `// #include "${includedFileName}" (resolved from ${includedFilePath})`
+          );
           preprocessedContent.push(await this.processFile(includedFilePath));
         } else {
-          preprocessedContent.push(`// #include \"${includedFileName}\" (not found)`);
+          preprocessedContent.push(
+            `// #include "${includedFileName}" (not found)`
+          );
         }
       } else {
         preprocessedContent.push(line);
       }
     }
 
-    return preprocessedContent.join('\n');
+    return preprocessedContent.join("\n");
   }
 
-  private async resolveIncludePath(fileName: string, currentDir: string): Promise<string | null> {
+  private async resolveIncludePath(
+    fileName: string,
+    currentDir: string
+  ): Promise<string | null> {
     // 1. Check relative to current file's directory
     const relativePath = path.join(currentDir, fileName);
     if (await this.fileExists(relativePath)) {

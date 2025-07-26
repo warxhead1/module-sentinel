@@ -6,9 +6,14 @@ dist/
 dist-test/
 build/
 *.js
+!eslint.config.js
 *.d.ts
 *.js.map
 *.d.ts.map
+
+# until we have rust going
+module-sentinel-rust
+DEPRECATION_PLAN.md
 
 # Package archives
 *.tgz

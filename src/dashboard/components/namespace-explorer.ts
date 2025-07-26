@@ -1,12 +1,23 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import { showSymbolSelector } from './symbol-selector-modal.js';
+import { stateService } from '../services/state.service.js';
 
 export class NamespaceExplorer extends DashboardComponent {
   private namespaceTree: any = {};
   private selectedNamespace: string | null = null;
   private namespaceDetails: any = null;
+  private selectedSymbol: any = null;
 
   async loadData(): Promise<void> {
     try {
+      // Check if a symbol is selected from state
+      const selectedSymbolId = stateService.getState('selectedNodeId');
+      const storedSymbol = stateService.getState('selectedSymbol');
+      
+      if (storedSymbol && !this.selectedSymbol) {
+        this.selectedSymbol = storedSymbol;
+      }
+      
       const response = await this.fetchAPI('/api/namespaces');
       this.namespaceTree = response.tree || {};
       
@@ -27,7 +38,14 @@ export class NamespaceExplorer extends DashboardComponent {
   async selectNamespace(namespace: string) {
     try {
       this.selectedNamespace = namespace;
-      const response = await this.fetchAPI(`/api/namespace-details?ns=${encodeURIComponent(namespace)}`);
+      let url = `/api/namespace-details?ns=${encodeURIComponent(namespace)}`;
+      
+      // If a symbol is selected, include it to get related namespace info
+      if (this.selectedSymbol) {
+        url += `&symbol_id=${this.selectedSymbol.id}`;
+      }
+      
+      const response = await this.fetchAPI(url);
       this.namespaceDetails = response;
       this.render();
     } catch (error) {
@@ -57,6 +75,54 @@ export class NamespaceExplorer extends DashboardComponent {
           margin-bottom: 30px;
           padding-bottom: 20px;
           border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .header-content {
+          flex: 1;
+        }
+        
+        .symbol-selector-btn {
+          background: rgba(78, 205, 196, 0.2);
+          border: 1px solid #4ecdc4;
+          color: #4ecdc4;
+          padding: 10px 20px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .symbol-selector-btn:hover {
+          background: rgba(78, 205, 196, 0.3);
+          transform: translateY(-1px);
+        }
+        
+        .selected-symbol {
+          background: rgba(78, 205, 196, 0.1);
+          border: 1px solid rgba(78, 205, 196, 0.3);
+          padding: 8px 16px;
+          border-radius: 6px;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: #ccc;
+        }
+        
+        .clear-symbol {
+          cursor: pointer;
+          color: #888;
+          transition: color 0.2s ease;
+        }
+        
+        .clear-symbol:hover {
+          color: #ff6b6b;
         }
         
         h1 {
@@ -225,9 +291,21 @@ export class NamespaceExplorer extends DashboardComponent {
       </style>
       
       <div class="page-header">
-        <h1>Namespace Explorer</h1>
-        <p class="subtitle">Browse and analyze code organization by namespace</p>
+        <div class="header-content">
+          <h1>Namespace Explorer</h1>
+          <p class="subtitle">Browse and analyze code organization by namespace</p>
+        </div>
+        <button class="symbol-selector-btn" onclick="this.getRootNode().host.openSymbolSelector()">
+          🔍 Select Symbol
+        </button>
       </div>
+      
+      ${this.selectedSymbol ? `
+        <div class="selected-symbol">
+          <span>Exploring namespace of: <strong>${this.selectedSymbol.name}</strong></span>
+          <span class="clear-symbol" onclick="this.getRootNode().host.clearSymbolSelection()">✕</span>
+        </div>
+      ` : ''}
       
       <div class="namespace-layout">
         <div class="namespace-sidebar">
@@ -333,6 +411,34 @@ export class NamespaceExplorer extends DashboardComponent {
       'struct': '🔷'
     };
     return icons[kind] || '•';
+  }
+
+  private openSymbolSelector() {
+    showSymbolSelector({
+      title: 'Select Symbol to Explore',
+      onSelect: (symbol) => {
+        this.selectedSymbol = symbol;
+        stateService.setState('selectedNodeId', symbol.id);
+        stateService.setState('selectedSymbol', symbol);
+        
+        // Auto-select the namespace of the selected symbol
+        if (symbol.namespace) {
+          this.selectNamespace(symbol.namespace);
+        } else {
+          this.loadData();
+        }
+      },
+      onCancel: () => {
+        // User cancelled, no action needed
+      }
+    });
+  }
+
+  private clearSymbolSelection() {
+    this.selectedSymbol = null;
+    stateService.setState('selectedNodeId', null);
+    stateService.setState('selectedSymbol', null);
+    this.loadData();
   }
 
   private attachTreeListeners() {

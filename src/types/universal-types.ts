@@ -112,6 +112,7 @@ export enum UniversalRelationshipType {
   Uses = 'uses',
   Calls = 'calls',
   References = 'references',
+  ConnectsTo = 'connects_to',
   
   // Containment
   Contains = 'contains',

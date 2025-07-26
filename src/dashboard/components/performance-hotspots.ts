@@ -1,4 +1,7 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
+import { showSymbolSelector } from './symbol-selector-modal.js';
+import { stateService } from '../services/state.service.js';
+import './navigation-actions.js';
 
 interface Hotspot {
   id: string;
@@ -22,10 +25,25 @@ export class PerformanceHotspots extends DashboardComponent {
   private selectedHotspot: Hotspot | null = null;
   private filterType: string = 'all';
   private sortBy: 'severity' | 'score' | 'file' = 'severity';
+  private selectedSymbol: any = null;
 
   async loadData(): Promise<void> {
     try {
-      const response = await this.fetchAPI('/api/performance/hotspots');
+      // Check if a symbol is selected from state
+      const selectedSymbolId = stateService.getState('selectedNodeId');
+      const storedSymbol = stateService.getState('selectedSymbol');
+      
+      if (storedSymbol && !this.selectedSymbol) {
+        this.selectedSymbol = storedSymbol;
+      }
+      
+      let url = '/api/performance/hotspots';
+      if (selectedSymbolId) {
+        // Load hotspots related to the selected symbol
+        url = `/api/performance/hotspots?symbol_id=${selectedSymbolId}`;
+      }
+      
+      const response = await this.fetchAPI(url);
       this.hotspots = response.hotspots || [];
       this.render();
     } catch (error) {
@@ -58,6 +76,54 @@ export class PerformanceHotspots extends DashboardComponent {
           margin-bottom: 30px;
           padding-bottom: 20px;
           border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        
+        .header-content {
+          flex: 1;
+        }
+        
+        .symbol-selector-btn {
+          background: rgba(78, 205, 196, 0.2);
+          border: 1px solid #4ecdc4;
+          color: #4ecdc4;
+          padding: 10px 20px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 14px;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        
+        .symbol-selector-btn:hover {
+          background: rgba(78, 205, 196, 0.3);
+          transform: translateY(-1px);
+        }
+        
+        .selected-symbol {
+          background: rgba(78, 205, 196, 0.1);
+          border: 1px solid rgba(78, 205, 196, 0.3);
+          padding: 8px 16px;
+          border-radius: 6px;
+          margin-bottom: 20px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          color: #ccc;
+        }
+        
+        .clear-symbol {
+          cursor: pointer;
+          color: #888;
+          transition: color 0.2s ease;
+        }
+        
+        .clear-symbol:hover {
+          color: #ff6b6b;
         }
         
         h1 {
@@ -280,9 +346,23 @@ export class PerformanceHotspots extends DashboardComponent {
       </style>
       
       <div class="page-header">
-        <h1>Performance Hotspots</h1>
-        <p class="subtitle">Identify and optimize performance bottlenecks in your code</p>
+        <div class="header-content">
+          <h1>Performance Hotspots</h1>
+          <p class="subtitle">Identify and optimize performance bottlenecks in your code</p>
+        </div>
+        <button class="symbol-selector-btn" onclick="this.getRootNode().host.openSymbolSelector()">
+          🔍 Select Symbol
+        </button>
       </div>
+      
+      ${this.selectedSymbol ? `
+        <div class="selected-symbol">
+          <span>Analyzing hotspots for: <strong>${this.selectedSymbol.name}</strong></span>
+          <span class="clear-symbol" onclick="this.getRootNode().host.clearSymbolSelection()">✕</span>
+        </div>
+      ` : ''}
+      
+      <navigation-actions></navigation-actions>
       
       <div class="controls-bar">
         <div class="filter-group">
@@ -438,6 +518,28 @@ export class PerformanceHotspots extends DashboardComponent {
         </div>
       </div>
     `;
+  }
+
+  private openSymbolSelector() {
+    showSymbolSelector({
+      title: 'Select Symbol to Analyze',
+      onSelect: (symbol) => {
+        this.selectedSymbol = symbol;
+        stateService.setState('selectedNodeId', symbol.id);
+        stateService.setState('selectedSymbol', symbol);
+        this.loadData();
+      },
+      onCancel: () => {
+        // User cancelled, no action needed
+      }
+    });
+  }
+
+  private clearSymbolSelection() {
+    this.selectedSymbol = null;
+    stateService.setState('selectedNodeId', null);
+    stateService.setState('selectedSymbol', null);
+    this.loadData();
   }
 
   private attachEventListeners() {
