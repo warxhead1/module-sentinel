@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS universal_symbols (
   complexity INTEGER DEFAULT 1,
   is_definition INTEGER DEFAULT 1,
   parent_scope TEXT,
+  -- Enhanced semantic intelligence fields
+  semantic_embedding TEXT,
+  readability_score REAL,
+  architectural_role TEXT,
+  complexity_metrics TEXT,
+  semantic_similarity_hash TEXT,
+  last_modified INTEGER,
+  change_frequency INTEGER DEFAULT 0,
   -- For unique constraint
   UNIQUE(project_id, language_id, qualified_name, file_path, line)
 );
@@ -171,7 +179,8 @@ CREATE TABLE IF NOT EXISTS control_flow_blocks (
   parent_block_id INTEGER,
   condition TEXT,
   loop_type TEXT,
-  complexity INTEGER DEFAULT 1
+  complexity INTEGER DEFAULT 1,
+  created_at INTEGER DEFAULT (strftime('%s', 'now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_control_flow_blocks_symbol ON control_flow_blocks(symbol_id);
@@ -295,5 +304,5 @@ INSERT OR IGNORE INTO languages (name, display_name, parser_class, extensions, i
   ('javascript', 'JavaScript', 'JavaScriptLanguageParser', '["js", "jsx", "mjs"]', 1, 70);
 
 -- Insert default project if needed
-INSERT OR IGNORE INTO projects (id, name, display_name, root_path) VALUES
-  (1, 'test-project', 'Test Project', '/test/complex-files');
+-- (Removed hardcoded test project - projects should be added dynamically)
+

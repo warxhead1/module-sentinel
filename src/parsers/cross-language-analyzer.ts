@@ -115,14 +115,11 @@ export class CrossLanguageAnalyzer {
    */
   async analyzeCrossLanguageRelationships(
     symbolsByLanguage: Map<string, UniversalSymbol[]>,
-    existingRelationships: Map<string, UniversalRelationship[]>
+    _existingRelationships: Map<string, UniversalRelationship[]>
   ): Promise<CrossLanguageRelationship[]> {
     const crossLanguageRels: CrossLanguageRelationship[] = [];
     
-    // Step 1: Extract language interfaces
-    const interfaces = this.extractLanguageInterfaces(symbolsByLanguage);
-    
-    // Step 2: Detect cross-language bridges
+    // Step 1: Detect cross-language bridges
     const languages = Array.from(symbolsByLanguage.keys());
     
     for (let i = 0; i < languages.length; i++) {
@@ -135,7 +132,7 @@ export class CrossLanguageAnalyzer {
         
         // Detect relationships between these two languages
         const relationships = await this.detectBridgeRelationships(
-          lang1, symbols1, lang2, symbols2, interfaces
+          lang1, symbols1, lang2, symbols2
         );
         
         crossLanguageRels.push(...relationships);
@@ -208,14 +205,13 @@ export class CrossLanguageAnalyzer {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
     // Try each bridge detector
-    for (const [bridgeType, detector] of this.bridgeDetectors) {
+    for (const [_bridgeType, detector] of this.bridgeDetectors) {
       const bridgeRels = await detector.detect(
-        lang1, symbols1, lang2, symbols2, interfaces
+        lang1, symbols1, lang2, symbols2
       );
       relationships.push(...bridgeRels);
     }
@@ -226,7 +222,7 @@ export class CrossLanguageAnalyzer {
   /**
    * Infer possible bridge types from symbols
    */
-  private inferBridgeTypes(symbols: UniversalSymbol[], language: string): CrossLanguageBridgeType[] {
+  private inferBridgeTypes(symbols: UniversalSymbol[], _language: string): CrossLanguageBridgeType[] {
     const bridgeTypes: Set<CrossLanguageBridgeType> = new Set();
     
     for (const symbol of symbols) {
@@ -406,8 +402,7 @@ export interface BridgeDetector {
     lang1: string,
     symbols1: UniversalSymbol[],
     lang2: string,
-    symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
+    symbols2: UniversalSymbol[]
   ): Promise<CrossLanguageRelationship[]>;
 }
 
@@ -420,7 +415,6 @@ export class APIBridgeDetector implements BridgeDetector {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
@@ -502,7 +496,6 @@ export class FFIBridgeDetector implements BridgeDetector {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
@@ -571,7 +564,8 @@ export class FFIBridgeDetector implements BridgeDetector {
   private extractLibraryName(symbol1: UniversalSymbol, symbol2: UniversalSymbol): string {
     // Extract from file path or symbol namespace
     const path1 = symbol1.filePath;
-    const path2 = symbol2.filePath;
+    // symbol2.filePath not currently used in this heuristic
+    const _path2 = symbol2.filePath;
     
     // Simple heuristic
     if (path1.includes('.so') || path1.includes('.dll') || path1.includes('.dylib')) {
@@ -599,7 +593,6 @@ export class SerializationBridgeDetector implements BridgeDetector {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
@@ -686,7 +679,6 @@ export class DatabaseBridgeDetector implements BridgeDetector {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
@@ -744,7 +736,7 @@ export class DatabaseBridgeDetector implements BridgeDetector {
     return name.replace(/(repository|dao|model|entity)$/i, '').toLowerCase();
   }
   
-  private extractTableName(db1: UniversalSymbol, db2: UniversalSymbol): string {
+  private extractTableName(db1: UniversalSymbol, _db2: UniversalSymbol): string {
     return this.extractEntityName(db1.name);
   }
   
@@ -778,7 +770,6 @@ export class ConfigurationBridgeDetector implements BridgeDetector {
     symbols1: UniversalSymbol[],
     lang2: string,
     symbols2: UniversalSymbol[],
-    interfaces: Map<string, LanguageInterface[]>
   ): Promise<CrossLanguageRelationship[]> {
     const relationships: CrossLanguageRelationship[] = [];
     
@@ -829,7 +820,7 @@ export class ConfigurationBridgeDetector implements BridgeDetector {
     return key1 === key2;
   }
   
-  private extractConfigKey(symbol1: UniversalSymbol, symbol2?: UniversalSymbol): string {
+  private extractConfigKey(symbol1: UniversalSymbol, _symbol2?: UniversalSymbol): string {
     // Extract configuration key from symbol name
     const name = symbol1.name.replace(/^(get|set|load)_?/i, '')
                               .replace(/_(config|setting|env)$/i, '')

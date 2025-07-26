@@ -13,6 +13,7 @@ export interface Request {
 
 export interface Response {
   writeHead(statusCode: number, headers?: Record<string, string>): void;
+  write(chunk: string): void;
   end(data?: string): void;
   json(data: any): void;
   status(code: number): Response;

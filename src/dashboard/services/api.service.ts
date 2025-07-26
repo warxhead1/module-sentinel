@@ -2,7 +2,14 @@
  * API Service for Module Sentinel Dashboard
  * Centralized API communication with error handling and caching
  */
-import type { ApiResponse, Symbol, ModuleFile, Relationship, GraphNode, GraphEdge } from '../../shared/types/api';
+import type {
+  ApiResponse,
+  Symbol,
+  ModuleFile,
+  Relationship,
+  GraphNode,
+  GraphEdge,
+} from "../../shared/types/api";
 
 interface GraphData {
   nodes: GraphNode[];
@@ -11,20 +18,26 @@ interface GraphData {
 
 export class ApiService {
   private baseUrl: string;
-  private cache = new Map<string, { data: any; timestamp: number; ttl: number }>();
+  private cache = new Map<
+    string,
+    { data: any; timestamp: number; ttl: number }
+  >();
 
-  constructor(baseUrl = '/api') {
+  constructor(baseUrl = "/api") {
     this.baseUrl = baseUrl;
   }
 
   /**
    * Generic fetch wrapper with error handling
    */
-  private async fetch<T>(endpoint: string, options: RequestInit = {}): Promise<ApiResponse<T>> {
+  private async fetch<T>(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<ApiResponse<T>> {
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           ...options.headers,
         },
         ...options,
@@ -40,7 +53,7 @@ export class ApiService {
       console.error(`API Error (${endpoint}):`, error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown API error'
+        error: error instanceof Error ? error.message : "Unknown API error",
       };
     }
   }
@@ -49,7 +62,7 @@ export class ApiService {
    * Cached fetch with TTL
    */
   private async cachedFetch<T>(
-    endpoint: string, 
+    endpoint: string,
     ttl: number = 5 * 60 * 1000, // 5 minutes default
     options: RequestInit = {}
   ): Promise<ApiResponse<T>> {
@@ -61,12 +74,12 @@ export class ApiService {
     }
 
     const result = await this.fetch<T>(endpoint, options);
-    
+
     if (result.success && result.data) {
       this.cache.set(cacheKey, {
         data: result.data,
         timestamp: Date.now(),
-        ttl
+        ttl,
       });
     }
 
@@ -78,7 +91,7 @@ export class ApiService {
    */
   clearCache(pattern?: string) {
     if (pattern) {
-      for (const key of this.cache.keys()) {
+      for (const key of Array.from(this.cache.keys())) {
         if (key.includes(pattern)) {
           this.cache.delete(key);
         }
@@ -96,7 +109,7 @@ export class ApiService {
    * Health check
    */
   async checkHealth() {
-    return this.fetch<{ status: string; timestamp: string }>('/health');
+    return this.fetch<{ status: string; timestamp: string }>("/health");
   }
 
   /**
@@ -108,14 +121,14 @@ export class ApiService {
       namespaceCount: number;
       kindBreakdown: Record<string, number>;
       languageBreakdown: Record<string, number>;
-    }>('/stats', 2 * 60 * 1000); // Cache for 2 minutes
+    }>("/stats", 2 * 60 * 1000); // Cache for 2 minutes
   }
 
   /**
    * Get all modules organized by namespace
    */
   async getModules() {
-    return this.cachedFetch<ModuleFile[]>('/modules', 5 * 60 * 1000); // Cache for 5 minutes
+    return this.cachedFetch<ModuleFile[]>("/modules", 5 * 60 * 1000); // Cache for 5 minutes
   }
 
   /**
@@ -124,24 +137,29 @@ export class ApiService {
   async getModuleDetails(namespace: string, moduleName: string) {
     const encodedNamespace = encodeURIComponent(namespace);
     const encodedModule = encodeURIComponent(moduleName);
-    return this.fetch<Symbol[]>(`/modules/${encodedNamespace}/${encodedModule}`);
+    return this.fetch<Symbol[]>(
+      `/modules/${encodedNamespace}/${encodedModule}`
+    );
   }
 
   /**
    * Search symbols
    */
-  async searchSymbols(query: string, options: {
-    kind?: string;
-    namespace?: string;
-    limit?: number;
-    offset?: number;
-  } = {}) {
+  async searchSymbols(
+    query: string,
+    options: {
+      kind?: string;
+      namespace?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ) {
     const params = new URLSearchParams({
       q: query,
-      ...options.kind && { kind: options.kind },
-      ...options.namespace && { namespace: options.namespace },
-      ...options.limit && { limit: options.limit.toString() },
-      ...options.offset && { offset: options.offset.toString() },
+      ...(options.kind && { kind: options.kind }),
+      ...(options.namespace && { namespace: options.namespace }),
+      ...(options.limit && { limit: options.limit.toString() }),
+      ...(options.offset && { offset: options.offset.toString() }),
     });
 
     return this.fetch<Symbol[]>(`/symbols?${params}`);
@@ -150,28 +168,35 @@ export class ApiService {
   /**
    * Get symbol relationships
    */
-  async getSymbolRelationships(symbolId: number, direction: 'incoming' | 'outgoing' | 'both' = 'both') {
+  async getSymbolRelationships(
+    symbolId: number,
+    direction: "incoming" | "outgoing" | "both" = "both"
+  ) {
     const params = new URLSearchParams({ direction });
-    return this.fetch<Relationship[]>(`/symbols/${symbolId}/relationships?${params}`);
+    return this.fetch<Relationship[]>(
+      `/symbols/${symbolId}/relationships?${params}`
+    );
   }
 
   /**
    * Get overall code relationships graph data
    */
   async getRelationships() {
-    return this.cachedFetch<GraphData>('/relationships', 5 * 60 * 1000); // Cache for 5 minutes
+    return this.cachedFetch<GraphData>("/relationships", 5 * 60 * 1000); // Cache for 5 minutes
   }
 
   /**
    * Get all namespaces
    */
   async getNamespaces() {
-    return this.cachedFetch<Array<{
-      namespace: string;
-      symbol_count: number;
-      kind_count: number;
-      kinds: string;
-    }>>('/namespaces', 10 * 60 * 1000); // Cache for 10 minutes
+    return this.cachedFetch<
+      Array<{
+        namespace: string;
+        symbol_count: number;
+        kind_count: number;
+        kinds: string;
+      }>
+    >("/namespaces", 10 * 60 * 1000); // Cache for 10 minutes
   }
 
   /**
@@ -180,7 +205,9 @@ export class ApiService {
   async getNamespaceSymbols(namespace: string, limit = 100) {
     const encodedNamespace = encodeURIComponent(namespace);
     const params = new URLSearchParams({ limit: limit.toString() });
-    return this.fetch<Symbol[]>(`/namespaces/${encodedNamespace}/symbols?${params}`);
+    return this.fetch<Symbol[]>(
+      `/namespaces/${encodedNamespace}/symbols?${params}`
+    );
   }
 
   // ============================================================================
@@ -194,7 +221,7 @@ export class ApiService {
     return {
       size: this.cache.size,
       keys: Array.from(this.cache.keys()),
-      totalMemory: JSON.stringify(Array.from(this.cache.values())).length
+      totalMemory: JSON.stringify(Array.from(this.cache.values())).length,
     };
   }
 
@@ -202,19 +229,82 @@ export class ApiService {
    * Preload common data
    */
   async preloadData() {
-    console.log('🔄 Preloading dashboard data...');
-    
-    const promises = [
-      this.getStats(),
-      this.getNamespaces(),
-      this.getModules()
-    ];
+    console.log("🔄 Preloading dashboard data...");
+
+    const promises = [this.getStats(), this.getNamespaces(), this.getModules()];
 
     const results = await Promise.allSettled(promises);
-    
-    const successful = results.filter(r => r.status === 'fulfilled').length;
-    console.log(`✅ Preloaded ${successful}/${promises.length} datasets`);
-    
+
+    const successful = results.filter((r) => r.status === "fulfilled").length;
+
     return results;
+  }
+
+  // ============================================================================
+  // ANTI-PATTERN ANALYSIS METHODS
+  // ============================================================================
+
+  /**
+   * Get advanced anti-patterns from analytics API
+   */
+  async getAntiPatterns(options: {
+    severity?: 'low' | 'medium' | 'high' | 'critical';
+    type?: string;
+    limit?: number;
+  } = {}): Promise<ApiResponse<any[]>> {
+    const params = new URLSearchParams();
+    if (options.severity) params.set('severity', options.severity);
+    if (options.type) params.set('type', options.type);
+    if (options.limit) params.set('limit', options.limit.toString());
+    
+    const queryString = params.toString() ? `?${params.toString()}` : '';
+    return this.fetch(`/analytics/anti-patterns${queryString}`);
+  }
+
+  /**
+   * Get anti-patterns summary for dashboard
+   */
+  async getAntiPatternSummary(): Promise<ApiResponse<{
+    total: number;
+    bySeverity: Record<string, number>;
+    byType: Record<string, number>;
+    mostProblematic: Array<{
+      symbolName: string;
+      type: string;
+      severity: string;
+      description: string;
+    }>;
+    recommendations: string[];
+  }>> {
+    return this.cachedFetch('/analytics/anti-patterns/summary', 2 * 60 * 1000); // Cache for 2 minutes
+  }
+
+  /**
+   * Get anti-patterns for a specific symbol
+   */
+  async getSymbolAntiPatterns(symbolId: number): Promise<ApiResponse<any[]>> {
+    return this.fetch(`/analytics/symbol/${symbolId}/anti-patterns`);
+  }
+
+  /**
+   * Get enhanced code quality metrics with anti-patterns
+   */
+  async getCodeQualityMetrics(): Promise<ApiResponse<{
+    healthScore: number;
+    confidence: number;
+    coverage: number;
+    maintainabilityIndex: number;
+    technicalDebt: number;
+    patterns: number;
+    issues: any;
+    antiPatterns: {
+      total: number;
+      bySeverity: Record<string, number>;
+      byType: Record<string, number>;
+      details: any[];
+    };
+    recommendations: string[];
+  }>> {
+    return this.cachedFetch('/analytics/quality', 1 * 60 * 1000); // Cache for 1 minute
   }
 }

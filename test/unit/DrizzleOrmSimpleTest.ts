@@ -11,7 +11,7 @@ import {
   projects, 
   languages, 
   universalSymbols 
-} from '../../dist/database/schema/universal.js';
+} from '../../src/database/drizzle/schema.js';
 
 export class DrizzleOrmTest {
   private db: Database.Database;
@@ -41,13 +41,14 @@ export class DrizzleOrmTest {
     const startTime = Date.now();
     try {
       // Insert a test project (use unique name to avoid conflicts)
+      const projectName = `drizzle-test-project-${Date.now()}`;
       const insertResult = await this.drizzleDb.insert(projects).values({
-        name: 'drizzle-test-project',
+        name: projectName,
         displayName: 'Drizzle Test Project',
         description: 'A test project for unit testing Drizzle ORM',
         rootPath: '/test/drizzle-project',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         isActive: true
       }).returning();
       
@@ -59,13 +60,13 @@ export class DrizzleOrmTest {
       const queriedProjects = await this.drizzleDb
         .select()
         .from(projects)
-        .where(eq(projects.name, 'drizzle-test-project'));
+        .where(eq(projects.name, projectName));
       
       if (queriedProjects.length !== 1) {
         throw new Error('Failed to query project');
       }
       
-      if (queriedProjects[0].name !== 'drizzle-test-project') {
+      if (queriedProjects[0].name !== projectName) {
         throw new Error('Project name mismatch');
       }
       
@@ -88,8 +89,9 @@ export class DrizzleOrmTest {
     const startTime = Date.now();
     try {
       // Insert a test language (use unique name to avoid conflicts)
+      const languageName = `test-lang-${Date.now()}`;
       const insertResult = await this.drizzleDb.insert(languages).values({
-        name: 'test-lang',
+        name: languageName,
         displayName: 'Test Language',
         parserClass: 'TestParser',
         extensions: JSON.stringify(['.test']),
@@ -105,7 +107,7 @@ export class DrizzleOrmTest {
       const queriedLanguages = await this.drizzleDb
         .select()
         .from(languages)
-        .where(eq(languages.name, 'test-lang'));
+        .where(eq(languages.name, languageName));
       
       if (queriedLanguages.length !== 1) {
         throw new Error('Failed to query language');
@@ -144,14 +146,15 @@ export class DrizzleOrmTest {
         throw new Error('Need project and language for symbol test');
       }
       
-      // Insert a test symbol
+      // Insert a test symbol with unique values
+      const timestamp = Date.now();
       const insertResult = await this.drizzleDb.insert(universalSymbols).values({
         projectId: project[0].id,
         languageId: language[0].id,
-        name: 'TestClass',
-        qualifiedName: 'namespace::TestClass',
+        name: `TestClass_${timestamp}`,
+        qualifiedName: `namespace::TestClass_${timestamp}`,
         kind: 'class',
-        filePath: '/test/TestClass.hpp',
+        filePath: `/test/TestClass_${timestamp}.hpp`,
         line: 10,
         column: 0,
         namespace: 'namespace'
@@ -165,7 +168,7 @@ export class DrizzleOrmTest {
       const queriedSymbols = await this.drizzleDb
         .select()
         .from(universalSymbols)
-        .where(eq(universalSymbols.name, 'TestClass'));
+        .where(eq(universalSymbols.name, `TestClass_${timestamp}`));
       
       if (queriedSymbols.length !== 1) {
         throw new Error('Failed to query symbol');

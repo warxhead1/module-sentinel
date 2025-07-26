@@ -13,6 +13,7 @@ export interface SymbolInfo {
   endColumn?: number;
   signature?: string;
   returnType?: string;
+  visibility?: string; // 'public', 'private', 'protected', 'internal'
   semanticTags: string[];
   complexity: number;
   confidence: number;
@@ -21,6 +22,7 @@ export interface SymbolInfo {
   isAsync: boolean;
   namespace?: string;
   parentScope?: string;
+  languageFeatures?: Record<string, any>;
 }
 
 export interface RelationshipInfo {
@@ -35,6 +37,7 @@ export interface RelationshipInfo {
   usagePattern?: string;
   sourceText?: string;
   bridgeType?: string;
+  metadata?: Record<string, any>; // Additional metadata for enhanced analysis
 }
 
 export interface PatternInfo {
@@ -53,6 +56,9 @@ export interface ParseOptions {
   enablePatternDetection?: boolean;
   enableSemanticAnalysis?: boolean;
   languageId?: number;
+  semanticAnalysisTimeout?: number;
+  parseTimeout?: number;
+  cacheStrategy?: 'aggressive' | 'moderate' | 'minimal';
 }
 
 export interface ParseResult {
@@ -61,4 +67,5 @@ export interface ParseResult {
   patterns: PatternInfo[];
   controlFlowData: { blocks: any[]; calls: any[] };
   stats: any;
+  semanticIntelligence?: any; // SemanticIntelligenceResult
 }

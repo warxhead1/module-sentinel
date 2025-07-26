@@ -1,12 +1,12 @@
-import Database from 'better-sqlite3';
-import * as path from 'path';
-import * as fs from 'fs/promises';
+import Database from "better-sqlite3";
+import * as path from "path";
+import * as fs from "fs/promises";
 
 export class TestDatabaseManager {
   private databases: Map<string, Database.Database> = new Map();
   private basePath: string;
 
-  constructor(basePath: string = '.test-db') {
+  constructor(basePath: string = ".test-db") {
     this.basePath = basePath;
   }
 
@@ -14,7 +14,10 @@ export class TestDatabaseManager {
     try {
       await fs.mkdir(this.basePath, { recursive: true });
     } catch (e) {
-      // Directory might already exist
+      // Directory might already exist - this is fine
+      if ((e as any).code !== 'EEXIST') {
+        throw e;
+      }
     }
   }
 
@@ -36,20 +39,23 @@ export class TestDatabaseManager {
     if (db && db.open) {
       db.close();
     }
-    
+
     const dbPath = path.join(this.basePath, `${name}.db`);
     try {
       await fs.unlink(dbPath);
     } catch (e) {
-      // File might not exist
+      // File might not exist - this is fine
+      if ((e as any).code !== 'ENOENT') {
+        throw e;
+      }
     }
-    
+
     this.databases.delete(name);
   }
 
   async cleanAll(): Promise<void> {
     // Close all databases
-    for (const [name, db] of this.databases.entries()) {
+    for (const db of this.databases.values()) {
       if (db && db.open) {
         db.close();
       }
@@ -60,17 +66,20 @@ export class TestDatabaseManager {
     try {
       const files = await fs.readdir(this.basePath);
       for (const file of files) {
-        if (file.endsWith('.db')) {
+        if (file.endsWith(".db")) {
           await fs.unlink(path.join(this.basePath, file));
         }
       }
     } catch (e) {
-      // Directory might not exist
+      // Directory might not exist - this is fine
+      if ((e as any).code !== 'ENOENT') {
+        throw e;
+      }
     }
   }
 
   closeAll(): void {
-    for (const [name, db] of this.databases.entries()) {
+    for (const db of this.databases.values()) {
       if (db && db.open) {
         db.close();
       }

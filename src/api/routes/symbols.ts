@@ -3,10 +3,12 @@
  */
 import type { Request, Response } from '../types/express.js';
 import { DatabaseService } from '../services/database.service.js';
-import type { ApiResponse, PaginatedResponse, SearchQuery } from '../../shared/types/api.js';
+import type { ApiResponse, PaginatedResponse } from '../../shared/types/api.js';
+import { createLogger } from '../../utils/logger.js';
 
 export class SymbolsRoutes {
   private dbService: DatabaseService;
+  private logger = createLogger('SymbolsRoutes');
 
   constructor(dbService: DatabaseService) {
     this.dbService = dbService;
@@ -37,16 +39,10 @@ export class SymbolsRoutes {
         projectIds = projectIdsStr.split(',').map(id => parseInt(id.trim(), 10)).filter(id => !isNaN(id));
       }
 
-      // Allow search by qualified_name OR query
-      if (!query.trim() && !qualifiedName) {
-        const response: ApiResponse = {
-          success: false,
-          error: 'Search query or qualified_name is required'
-        };
-        return res.status(400).json(response);
-      }
+      // Allow search by qualified_name OR query, or list all if no search specified
+      const searchQuery = qualifiedName || query;
 
-      const symbols = this.dbService.searchSymbols(qualifiedName || query, {
+      const symbols = await this.dbService.searchSymbols(searchQuery, {
         kind,
         namespace,
         qualifiedName: !!qualifiedName, // Flag to indicate exact qualified_name search
@@ -71,7 +67,7 @@ export class SymbolsRoutes {
 
       res.json(response);
     } catch (error) {
-      console.error('Error in searchSymbols:', error);
+      this.logger.error('Error in searchSymbols', error);
       
       const response: ApiResponse = {
         success: false,
@@ -98,7 +94,7 @@ export class SymbolsRoutes {
         return res.status(400).json(response);
       }
 
-      const symbols = this.dbService.getFileSymbols(qualifiedName);
+      const symbols = await this.dbService.getFileSymbols(qualifiedName);
 
       const response: ApiResponse = {
         success: true,
@@ -144,7 +140,7 @@ export class SymbolsRoutes {
         return res.status(400).json(response);
       }
 
-      const relationships = this.dbService.getSymbolRelationships(
+      const relationships = await this.dbService.getSymbolRelationships(
         symbolId, 
         direction as 'incoming' | 'outgoing' | 'both'
       );
@@ -180,10 +176,10 @@ export class SymbolsRoutes {
       let relationships;
       if (symbolId) {
         // Get relationships for specific symbol
-        relationships = this.dbService.getSymbolRelationships(symbolId, 'both');
+        relationships = await this.dbService.getSymbolRelationships(symbolId, 'both');
       } else {
         // Get all relationships (for graph visualization)
-        relationships = this.dbService.getAllRelationships(limit);
+        relationships = await this.dbService.getAllRelationships(limit);
       }
 
       const response: ApiResponse = {

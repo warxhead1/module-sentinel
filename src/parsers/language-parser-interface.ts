@@ -113,6 +113,7 @@ export enum UniversalRelationshipType {
   // Module relationships
   Imports = 'imports',
   Exports = 'exports',
+  ReExports = 're_exports',
   Depends = 'depends',
   
   // Pattern relationships
@@ -132,7 +133,13 @@ export enum UniversalRelationshipType {
   Transforms = 'transforms',
   BindsTo = 'binds_to',
   MapsTo = 'maps_to',
-  SerializesTo = 'serializes_to'
+  SerializesTo = 'serializes_to',
+  
+  // Cross-language relationships
+  Spawns = 'spawns',
+  Executes = 'executes',
+  Invokes = 'invokes',
+  Communicates = 'communicates'
 }
 
 /**

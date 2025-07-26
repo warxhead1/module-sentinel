@@ -1,6 +1,6 @@
 import { Worker } from 'worker_threads';
 import * as os from 'os';
-import * as path from 'path';
+import * as _path from 'path';
 
 interface WorkerTask<T, R> {
   id: string;

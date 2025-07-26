@@ -1,34 +1,39 @@
 /**
  * Cross-Language API Linkage Detector
- * 
+ *
  * This system detects and maps API boundaries between different languages,
  * including FFI calls, REST APIs, gRPC services, and other inter-language communication.
  */
 
-import { EventEmitter } from 'events';
-import Database from 'better-sqlite3';
-import { UniversalSymbol, UniversalRelationship, UniversalRelationshipType } from '../parsers/language-parser-interface.js';
+import { EventEmitter } from "events";
+import Database from "better-sqlite3";
+import { DrizzleDatabase, type DrizzleDb } from "../database/drizzle-db.js";
+import {
+  UniversalSymbol,
+  UniversalRelationship as _UniversalRelationship,
+  UniversalRelationshipType as _UniversalRelationshipType,
+} from "../parsers/language-parser-interface.js";
 
 /**
  * API binding types
  */
 export enum ApiBindingType {
-  FFI = 'ffi',                    // Foreign Function Interface
-  REST = 'rest',                  // REST API calls
-  GraphQL = 'graphql',            // GraphQL queries/mutations
-  gRPC = 'grpc',                  // gRPC service calls
-  WebSocket = 'websocket',        // WebSocket connections
-  Database = 'database',          // Database queries
-  MessageQueue = 'message_queue', // Message queue operations
-  SharedMemory = 'shared_memory', // Shared memory access
-  PipeIPC = 'pipe_ipc',          // Named pipes / IPC
-  SocketIPC = 'socket_ipc',      // Unix domain sockets
-  COM = 'com',                   // COM objects (Windows)
-  JNI = 'jni',                   // Java Native Interface
-  PythonC = 'python_c',          // Python C extensions
-  NodeAddon = 'node_addon',      // Node.js native addons
-  WebAssembly = 'webassembly',   // WebAssembly imports/exports
-  Custom = 'custom'              // Custom protocol
+  FFI = "ffi", // Foreign Function Interface
+  REST = "rest", // REST API calls
+  GraphQL = "graphql", // GraphQL queries/mutations
+  gRPC = "grpc", // gRPC service calls
+  WebSocket = "websocket", // WebSocket connections
+  Database = "database", // Database queries
+  MessageQueue = "message_queue", // Message queue operations
+  SharedMemory = "shared_memory", // Shared memory access
+  PipeIPC = "pipe_ipc", // Named pipes / IPC
+  SocketIPC = "socket_ipc", // Unix domain sockets
+  COM = "com", // COM objects (Windows)
+  JNI = "jni", // Java Native Interface
+  PythonC = "python_c", // Python C extensions
+  NodeAddon = "node_addon", // Node.js native addons
+  WebAssembly = "webassembly", // WebAssembly imports/exports
+  Custom = "custom", // Custom protocol
 }
 
 /**
@@ -37,33 +42,33 @@ export enum ApiBindingType {
 export interface ApiBinding {
   id?: number;
   projectId: number;
-  
+
   // Source and target information
   sourceSymbolId?: string;
   targetSymbolId?: string;
   sourceLanguage: string;
   targetLanguage: string;
-  
+
   // Binding details
   bindingType: ApiBindingType;
   protocol?: string;
   endpoint?: string;
-  
+
   // Type mapping between languages
   typeMapping: TypeMapping;
-  
+
   // Serialization details
   serializationFormat?: SerializationFormat;
   schemaDefinition?: string;
-  
+
   // Detection metadata
   confidence: number;
   detectorName: string;
   detectionReason: string;
-  
+
   // Additional metadata
   metadata?: Record<string, any>;
-  
+
   // Timestamps
   createdAt: Date;
   updatedAt?: Date;
@@ -94,16 +99,16 @@ export interface TypeMappingRule {
  * Serialization format
  */
 export enum SerializationFormat {
-  JSON = 'json',
-  XML = 'xml',
-  Protobuf = 'protobuf',
-  MessagePack = 'msgpack',
-  Avro = 'avro',
-  Thrift = 'thrift',
-  CBOR = 'cbor',
-  BSON = 'bson',
-  Binary = 'binary',
-  Text = 'text'
+  JSON = "json",
+  XML = "xml",
+  Protobuf = "protobuf",
+  MessagePack = "msgpack",
+  Avro = "avro",
+  Thrift = "thrift",
+  CBOR = "cbor",
+  BSON = "bson",
+  Binary = "binary",
+  Text = "text",
 }
 
 /**
@@ -112,19 +117,19 @@ export enum SerializationFormat {
 export interface CrossLanguageDependency {
   id?: number;
   projectId: number;
-  
+
   // Language information
   fromLanguage: string;
   toLanguage: string;
-  
+
   // Dependency details
   dependencyType: DependencyType;
   dependencyPath: string;
-  
+
   // Symbols involved
   fromSymbolId?: string;
   toSymbolId?: string;
-  
+
   // Metadata
   metadata?: Record<string, any>;
   createdAt: Date;
@@ -134,190 +139,124 @@ export interface CrossLanguageDependency {
  * Dependency types
  */
 export enum DependencyType {
-  Build = 'build',           // Build-time dependency
-  Runtime = 'runtime',       // Runtime dependency
-  Interface = 'interface',   // Interface definition
-  Library = 'library',      // Shared library
-  Service = 'service',       // External service
-  Data = 'data',            // Data dependency
-  Config = 'config'         // Configuration dependency
+  Build = "build", // Build-time dependency
+  Runtime = "runtime", // Runtime dependency
+  Interface = "interface", // Interface definition
+  Library = "library", // Shared library
+  Service = "service", // External service
+  Data = "data", // Data dependency
+  Config = "config", // Configuration dependency
 }
 
 /**
  * API linkage detector class
  */
 export class ApiLinkageDetector extends EventEmitter {
-  private db: Database.Database;
+  private drizzleDb: DrizzleDatabase;
   private detectors: Map<string, ApiDetector> = new Map();
-  
-  constructor(dbPath: string) {
+
+  constructor(dbOrPath: string | Database.Database | DrizzleDb) {
     super();
-    this.db = new Database(dbPath);
+    if (typeof dbOrPath === "string") {
+      const db = new Database(dbOrPath);
+      this.drizzleDb = new DrizzleDatabase(db);
+    } else if ('select' in dbOrPath && 'insert' in dbOrPath) {
+      this.drizzleDb = new DrizzleDatabase(dbOrPath);
+    } else {
+      this.drizzleDb = new DrizzleDatabase(dbOrPath);
+    }
     this.initializeDatabase();
     this.registerBuiltinDetectors();
   }
-  
+
   /**
    * Initialize database tables
    */
   private initializeDatabase(): void {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS api_bindings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        source_symbol_id TEXT,
-        target_symbol_id TEXT,
-        source_language TEXT NOT NULL,
-        target_language TEXT NOT NULL,
-        binding_type TEXT NOT NULL,
-        protocol TEXT,
-        endpoint TEXT,
-        type_mapping TEXT NOT NULL,
-        serialization_format TEXT,
-        schema_definition TEXT,
-        confidence REAL NOT NULL DEFAULT 1.0,
-        detector_name TEXT NOT NULL,
-        detection_reason TEXT,
-        metadata TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE TABLE IF NOT EXISTS cross_language_deps (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        from_language TEXT NOT NULL,
-        to_language TEXT NOT NULL,
-        dependency_type TEXT NOT NULL,
-        dependency_path TEXT NOT NULL,
-        from_symbol_id TEXT,
-        to_symbol_id TEXT,
-        metadata TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-      
-      CREATE TABLE IF NOT EXISTS semantic_equivalents (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        symbol_id_1 TEXT NOT NULL,
-        symbol_id_2 TEXT NOT NULL,
-        equivalence_type TEXT NOT NULL,
-        similarity_score REAL NOT NULL DEFAULT 1.0,
-        mapping_rules TEXT,
-        notes TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(symbol_id_1, symbol_id_2)
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_api_bindings_project ON api_bindings(project_id);
-      CREATE INDEX IF NOT EXISTS idx_api_bindings_type ON api_bindings(binding_type);
-      CREATE INDEX IF NOT EXISTS idx_api_bindings_languages ON api_bindings(source_language, target_language);
-      CREATE INDEX IF NOT EXISTS idx_cross_deps_project ON cross_language_deps(project_id);
-      CREATE INDEX IF NOT EXISTS idx_cross_deps_languages ON cross_language_deps(from_language, to_language);
-      CREATE INDEX IF NOT EXISTS idx_semantic_equivalents_project ON semantic_equivalents(project_id);
-    `);
+    // Database tables are now managed by Drizzle migrations
   }
-  
+
   /**
    * Register an API detector
    */
   registerDetector(name: string, detector: ApiDetector): void {
     this.detectors.set(name, detector);
-    this.emit('detector:registered', { name, detector });
+    this.emit("detector:registered", { name, detector });
   }
-  
+
   /**
    * Detect API bindings in a project
    */
-  async detectApiBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectApiBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Run all registered detectors
     for (const [name, detector] of this.detectors) {
       try {
-        const detectorBindings = await detector.detectBindings(projectId, symbols);
+        const detectorBindings = await detector.detectBindings(
+          projectId,
+          symbols
+        );
         bindings.push(...detectorBindings);
       } catch (error) {
         console.warn(`API detector ${name} failed:`, error);
-        this.emit('detector:error', { name, error });
+        this.emit("detector:error", { name, error });
       }
     }
-    
+
     // Store bindings in database
     for (const binding of bindings) {
       await this.storeApiBinding(binding);
     }
-    
+
     return bindings;
   }
-  
+
   /**
    * Store API binding in database
    */
   async storeApiBinding(binding: ApiBinding): Promise<number> {
-    const insertBinding = this.db.prepare(`
-      INSERT OR REPLACE INTO api_bindings (
-        project_id, source_symbol_id, target_symbol_id, source_language, target_language,
-        binding_type, protocol, endpoint, type_mapping, serialization_format,
-        schema_definition, confidence, detector_name, detection_reason, metadata
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    const result = insertBinding.run(
-      binding.projectId,
-      binding.sourceSymbolId || null,
-      binding.targetSymbolId || null,
-      binding.sourceLanguage,
-      binding.targetLanguage,
-      binding.bindingType,
-      binding.protocol || null,
-      binding.endpoint || null,
-      JSON.stringify(binding.typeMapping),
-      binding.serializationFormat || null,
-      binding.schemaDefinition || null,
-      binding.confidence,
-      binding.detectorName,
-      binding.detectionReason || '',
-      binding.metadata ? JSON.stringify(binding.metadata) : null
-    );
-    
-    return result.lastInsertRowid as number;
+    return await this.drizzleDb.insertApiBinding({
+      projectId: binding.projectId,
+      sourceSymbolId: binding.sourceSymbolId || null,
+      targetSymbolId: binding.targetSymbolId || null,
+      sourceLanguage: binding.sourceLanguage,
+      targetLanguage: binding.targetLanguage,
+      bindingType: binding.bindingType,
+      protocol: binding.protocol || null,
+      endpoint: binding.endpoint || null,
+      typeMapping: binding.typeMapping,
+      serializationFormat: binding.serializationFormat || null,
+      schemaDefinition: binding.schemaDefinition || null,
+      confidence: binding.confidence,
+      detectorName: binding.detectorName,
+      detectionReason: binding.detectionReason || "",
+      metadata: binding.metadata || null
+    });
   }
-  
+
   /**
    * Get API bindings for a project
    */
-  getApiBindings(projectId: number, bindingType?: ApiBindingType): ApiBinding[] {
-    let query = `
-      SELECT * FROM api_bindings 
-      WHERE project_id = ?
-    `;
-    const params: any[] = [projectId];
-    
-    if (bindingType) {
-      query += ` AND binding_type = ?`;
-      params.push(bindingType);
-    }
-    
-    query += ` ORDER BY created_at DESC`;
-    
-    const rows = this.db.prepare(query).all(...params);
-    return rows.map(row => this.dbRowToApiBinding(row));
+  async getApiBindings(
+    projectId: number,
+    bindingType?: ApiBindingType
+  ): Promise<ApiBinding[]> {
+    const rows = await this.drizzleDb.getApiBindings(projectId, bindingType);
+    return rows.map((row) => this.dbRowToApiBinding(row));
   }
-  
+
   /**
    * Get cross-language dependencies
    */
-  getCrossLanguageDependencies(projectId: number): CrossLanguageDependency[] {
-    const rows = this.db.prepare(`
-      SELECT * FROM cross_language_deps 
-      WHERE project_id = ?
-      ORDER BY created_at DESC
-    `).all(projectId);
-    
-    return rows.map(row => this.dbRowToCrossLanguageDependency(row));
+  async getCrossLanguageDependencies(projectId: number): Promise<CrossLanguageDependency[]> {
+    const rows = await this.drizzleDb.getCrossLanguageDependencies(projectId);
+    return rows.map((row) => this.dbRowToCrossLanguageDependency(row));
   }
-  
+
   /**
    * Find semantic equivalents between languages
    */
@@ -328,81 +267,88 @@ export class ApiLinkageDetector extends EventEmitter {
     language2: string
   ): Promise<any[]> {
     const equivalents: any[] = [];
-    
+
     // Group symbols by language
-    const lang1Symbols = symbols.filter(s => s.languageFeatures?.language === language1);
-    const lang2Symbols = symbols.filter(s => s.languageFeatures?.language === language2);
-    
+    const lang1Symbols = symbols.filter(
+      (s) => s.languageFeatures?.language === language1
+    );
+    const lang2Symbols = symbols.filter(
+      (s) => s.languageFeatures?.language === language2
+    );
+
     // Find potential equivalents based on name similarity
     for (const symbol1 of lang1Symbols) {
       for (const symbol2 of lang2Symbols) {
         const similarity = this.calculateSymbolSimilarity(symbol1, symbol2);
-        
+
         if (similarity > 0.7) {
           equivalents.push({
             symbol1: symbol1.qualifiedName,
             symbol2: symbol2.qualifiedName,
             similarity,
-            type: 'name_similarity'
+            type: "name_similarity",
           });
         }
       }
     }
-    
+
     return equivalents;
   }
-  
+
   /**
    * Register built-in detectors
    */
   private registerBuiltinDetectors(): void {
     // REST API detector
-    this.registerDetector('rest-api', new RestApiDetector());
-    
+    this.registerDetector("rest-api", new RestApiDetector());
+
     // FFI detector
-    this.registerDetector('ffi', new FfiDetector());
-    
+    this.registerDetector("ffi", new FfiDetector());
+
     // gRPC detector
-    this.registerDetector('grpc', new GrpcDetector());
-    
+    this.registerDetector("grpc", new GrpcDetector());
+
     // WebSocket detector
-    this.registerDetector('websocket', new WebSocketDetector());
-    
+    this.registerDetector("websocket", new WebSocketDetector());
+
     // Database detector
-    this.registerDetector('database', new DatabaseDetector());
+    this.registerDetector("database", new DatabaseDetector());
   }
-  
+
   /**
    * Calculate similarity between two symbols
    */
-  private calculateSymbolSimilarity(symbol1: UniversalSymbol, symbol2: UniversalSymbol): number {
+  private calculateSymbolSimilarity(
+    symbol1: UniversalSymbol,
+    symbol2: UniversalSymbol
+  ): number {
     // Simple name-based similarity
     const name1 = symbol1.name.toLowerCase();
     const name2 = symbol2.name.toLowerCase();
-    
+
     if (name1 === name2) return 1.0;
-    
+
     // Levenshtein distance
     const distance = this.levenshteinDistance(name1, name2);
     const maxLength = Math.max(name1.length, name2.length);
-    
-    return 1 - (distance / maxLength);
+
+    return 1 - distance / maxLength;
   }
-  
+
   /**
    * Calculate Levenshtein distance
    */
   private levenshteinDistance(str1: string, str2: string): number {
     const matrix = [];
-    
+
     for (let i = 0; i <= str2.length; i++) {
       matrix[i] = [i];
     }
-    
+
     for (let j = 0; j <= str1.length; j++) {
       matrix[0][j] = j;
     }
-    
+
     for (let i = 1; i <= str2.length; i++) {
       for (let j = 1; j <= str1.length; j++) {
         if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
@@ -416,10 +362,10 @@ export class ApiLinkageDetector extends EventEmitter {
         }
       }
     }
-    
+
     return matrix[str2.length][str1.length];
   }
-  
+
   /**
    * Convert database row to API binding
    */
@@ -442,10 +388,10 @@ export class ApiLinkageDetector extends EventEmitter {
       detectionReason: row.detection_reason,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
       createdAt: new Date(row.created_at),
-      updatedAt: row.updated_at ? new Date(row.updated_at) : undefined
+      updatedAt: row.updated_at ? new Date(row.updated_at) : undefined,
     };
   }
-  
+
   /**
    * Convert database row to cross-language dependency
    */
@@ -460,15 +406,15 @@ export class ApiLinkageDetector extends EventEmitter {
       fromSymbolId: row.from_symbol_id,
       toSymbolId: row.to_symbol_id,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
-      createdAt: new Date(row.created_at)
+      createdAt: new Date(row.created_at),
     };
   }
-  
+
   /**
    * Close database connection
    */
   close(): void {
-    this.db.close();
+    // DrizzleDatabase manages its own connection
   }
 }
 
@@ -476,46 +422,53 @@ export class ApiLinkageDetector extends EventEmitter {
  * API detector interface
  */
 export interface ApiDetector {
-  detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]>;
+  detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]>;
 }
 
 /**
  * REST API detector
  */
 class RestApiDetector implements ApiDetector {
-  async detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Look for HTTP client calls
-    const httpSymbols = symbols.filter(s => 
-      s.signature?.includes('http') || 
-      s.signature?.includes('fetch') || 
-      s.signature?.includes('axios') ||
-      s.signature?.includes('request')
+    const httpSymbols = symbols.filter(
+      (s) =>
+        s.signature?.includes("http") ||
+        s.signature?.includes("fetch") ||
+        s.signature?.includes("axios") ||
+        s.signature?.includes("request")
     );
-    
+
     for (const symbol of httpSymbols) {
       bindings.push({
         projectId,
         sourceSymbolId: symbol.qualifiedName,
-        sourceLanguage: symbol.languageFeatures?.language || 'unknown',
-        targetLanguage: 'http',
+        sourceLanguage: symbol.languageFeatures?.language || "unknown",
+        targetLanguage: "http",
         bindingType: ApiBindingType.REST,
-        protocol: 'http',
+        protocol: "http",
         typeMapping: {
-          sourceType: 'object',
-          targetType: 'json',
+          sourceType: "object",
+          targetType: "json",
           isLossless: false,
-          requiresValidation: true
+          requiresValidation: true,
         },
         serializationFormat: SerializationFormat.JSON,
         confidence: 0.8,
-        detectorName: 'rest-api',
-        detectionReason: 'HTTP client call detected',
-        createdAt: new Date()
+        detectorName: "rest-api",
+        detectionReason: "HTTP client call detected",
+        createdAt: new Date(),
       });
     }
-    
+
     return bindings;
   }
 }
@@ -524,36 +477,40 @@ class RestApiDetector implements ApiDetector {
  * FFI detector
  */
 class FfiDetector implements ApiDetector {
-  async detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Look for extern declarations
-    const externSymbols = symbols.filter(s => 
-      s.languageFeatures?.isExtern || 
-      s.signature?.includes('extern') ||
-      s.signature?.includes('__declspec(dllimport)')
+    const externSymbols = symbols.filter(
+      (s) =>
+        s.languageFeatures?.isExtern ||
+        s.signature?.includes("extern") ||
+        s.signature?.includes("__declspec(dllimport)")
     );
-    
+
     for (const symbol of externSymbols) {
       bindings.push({
         projectId,
         sourceSymbolId: symbol.qualifiedName,
-        sourceLanguage: symbol.languageFeatures?.language || 'cpp',
-        targetLanguage: 'c',
+        sourceLanguage: symbol.languageFeatures?.language || "cpp",
+        targetLanguage: "c",
         bindingType: ApiBindingType.FFI,
         typeMapping: {
-          sourceType: 'native',
-          targetType: 'native',
+          sourceType: "native",
+          targetType: "native",
           isLossless: true,
-          requiresValidation: false
+          requiresValidation: false,
         },
         confidence: 0.9,
-        detectorName: 'ffi',
-        detectionReason: 'Extern symbol declaration detected',
-        createdAt: new Date()
+        detectorName: "ffi",
+        detectionReason: "Extern symbol declaration detected",
+        createdAt: new Date(),
       });
     }
-    
+
     return bindings;
   }
 }
@@ -562,38 +519,42 @@ class FfiDetector implements ApiDetector {
  * gRPC detector
  */
 class GrpcDetector implements ApiDetector {
-  async detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Look for gRPC-related symbols
-    const grpcSymbols = symbols.filter(s => 
-      s.signature?.includes('grpc') || 
-      s.namespace?.includes('grpc') ||
-      s.signature?.includes('.proto')
+    const grpcSymbols = symbols.filter(
+      (s) =>
+        s.signature?.includes("grpc") ||
+        s.namespace?.includes("grpc") ||
+        s.signature?.includes(".proto")
     );
-    
+
     for (const symbol of grpcSymbols) {
       bindings.push({
         projectId,
         sourceSymbolId: symbol.qualifiedName,
-        sourceLanguage: symbol.languageFeatures?.language || 'unknown',
-        targetLanguage: 'grpc',
+        sourceLanguage: symbol.languageFeatures?.language || "unknown",
+        targetLanguage: "grpc",
         bindingType: ApiBindingType.gRPC,
-        protocol: 'grpc',
+        protocol: "grpc",
         typeMapping: {
-          sourceType: 'message',
-          targetType: 'protobuf',
+          sourceType: "message",
+          targetType: "protobuf",
           isLossless: true,
-          requiresValidation: false
+          requiresValidation: false,
         },
         serializationFormat: SerializationFormat.Protobuf,
         confidence: 0.9,
-        detectorName: 'grpc',
-        detectionReason: 'gRPC service call detected',
-        createdAt: new Date()
+        detectorName: "grpc",
+        detectionReason: "gRPC service call detected",
+        createdAt: new Date(),
       });
     }
-    
+
     return bindings;
   }
 }
@@ -602,38 +563,42 @@ class GrpcDetector implements ApiDetector {
  * WebSocket detector
  */
 class WebSocketDetector implements ApiDetector {
-  async detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Look for WebSocket-related symbols
-    const wsSymbols = symbols.filter(s => 
-      s.signature?.includes('websocket') || 
-      s.signature?.includes('WebSocket') ||
-      s.name.toLowerCase().includes('websocket')
+    const wsSymbols = symbols.filter(
+      (s) =>
+        s.signature?.includes("websocket") ||
+        s.signature?.includes("WebSocket") ||
+        s.name.toLowerCase().includes("websocket")
     );
-    
+
     for (const symbol of wsSymbols) {
       bindings.push({
         projectId,
         sourceSymbolId: symbol.qualifiedName,
-        sourceLanguage: symbol.languageFeatures?.language || 'unknown',
-        targetLanguage: 'websocket',
+        sourceLanguage: symbol.languageFeatures?.language || "unknown",
+        targetLanguage: "websocket",
         bindingType: ApiBindingType.WebSocket,
-        protocol: 'websocket',
+        protocol: "websocket",
         typeMapping: {
-          sourceType: 'message',
-          targetType: 'text',
+          sourceType: "message",
+          targetType: "text",
           isLossless: false,
-          requiresValidation: true
+          requiresValidation: true,
         },
         serializationFormat: SerializationFormat.JSON,
         confidence: 0.8,
-        detectorName: 'websocket',
-        detectionReason: 'WebSocket connection detected',
-        createdAt: new Date()
+        detectorName: "websocket",
+        detectionReason: "WebSocket connection detected",
+        createdAt: new Date(),
       });
     }
-    
+
     return bindings;
   }
 }
@@ -642,38 +607,42 @@ class WebSocketDetector implements ApiDetector {
  * Database detector
  */
 class DatabaseDetector implements ApiDetector {
-  async detectBindings(projectId: number, symbols: UniversalSymbol[]): Promise<ApiBinding[]> {
+  async detectBindings(
+    projectId: number,
+    symbols: UniversalSymbol[]
+  ): Promise<ApiBinding[]> {
     const bindings: ApiBinding[] = [];
-    
+
     // Look for database-related symbols
-    const dbSymbols = symbols.filter(s => 
-      s.signature?.includes('sql') || 
-      s.signature?.includes('database') ||
-      s.signature?.includes('query') ||
-      s.name.toLowerCase().includes('db')
+    const dbSymbols = symbols.filter(
+      (s) =>
+        s.signature?.includes("sql") ||
+        s.signature?.includes("database") ||
+        s.signature?.includes("query") ||
+        s.name.toLowerCase().includes("db")
     );
-    
+
     for (const symbol of dbSymbols) {
       bindings.push({
         projectId,
         sourceSymbolId: symbol.qualifiedName,
-        sourceLanguage: symbol.languageFeatures?.language || 'unknown',
-        targetLanguage: 'sql',
+        sourceLanguage: symbol.languageFeatures?.language || "unknown",
+        targetLanguage: "sql",
         bindingType: ApiBindingType.Database,
-        protocol: 'sql',
+        protocol: "sql",
         typeMapping: {
-          sourceType: 'object',
-          targetType: 'row',
+          sourceType: "object",
+          targetType: "row",
           isLossless: false,
-          requiresValidation: true
+          requiresValidation: true,
         },
         confidence: 0.7,
-        detectorName: 'database',
-        detectionReason: 'Database query detected',
-        createdAt: new Date()
+        detectorName: "database",
+        detectionReason: "Database query detected",
+        createdAt: new Date(),
       });
     }
-    
+
     return bindings;
   }
 }

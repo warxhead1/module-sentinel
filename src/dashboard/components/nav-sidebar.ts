@@ -1,22 +1,43 @@
 import { DashboardComponent, defineComponent } from './base-component.js';
 import './project-selector.js';
 
+interface NavItem {
+  path: string;
+  icon: string;
+  title: string;
+  isSection?: boolean;
+}
+
 /**
  * Sidebar navigation component
  */
 export class NavSidebar extends DashboardComponent {
-  private navItems = [
+  private navItems: NavItem[] = [
     { path: '/', icon: '📊', title: 'Overview' },
     { path: '/projects', icon: '🏗️', title: 'Projects' },
     { path: '/modules', icon: '🗂️', title: 'Modules' },
-    { path: '/code-flow', icon: '🌊', title: 'Code Flow' },
-    { path: '/enhanced-flow', icon: '🎯', title: 'Enhanced Flow' },
+    { path: '/namespaces', icon: '📦', title: 'Namespaces' },
+    { path: '/search', icon: '🔍', title: 'Search' },
+    { 
+      path: '', 
+      icon: '🔬', 
+      title: 'Analysis', 
+      isSection: true 
+    },
     { path: '/analytics', icon: '🧠', title: 'Analytics Hub' },
     { path: '/insights', icon: '💡', title: 'Insights' },
     { path: '/patterns', icon: '🧩', title: 'Patterns' },
     { path: '/performance', icon: '🔥', title: 'Performance' },
-    { path: '/namespaces', icon: '📦', title: 'Namespaces' },
-    { path: '/search', icon: '🔍', title: 'Search' }
+    { 
+      path: '', 
+      icon: '🌐', 
+      title: 'Visualization', 
+      isSection: true 
+    },
+    { path: '/relationships', icon: '🕸️', title: 'Relationships' },
+    { path: '/impact', icon: '💥', title: 'Impact Analysis' },
+    { path: '/code-flow', icon: '🌊', title: 'Code Flow' },
+    { path: '/multi-language-flow', icon: '🌍', title: 'Multi-Language Explorer' },
   ];
 
   async loadData(): Promise<void> {
@@ -36,18 +57,29 @@ export class NavSidebar extends DashboardComponent {
       if (link && link instanceof HTMLAnchorElement) {
         e.preventDefault();
         const path = link.getAttribute('href');
-        if (path) {
-          // Dispatch navigation event
+        if (path && !link.classList.contains('section-header')) {
+          // Use hash navigation
+          window.location.hash = path;
+          
+          // Dispatch navigation event for router
           window.dispatchEvent(new CustomEvent('navigate', {
             detail: { path }
           }));
+          
+          // Re-render to update active state
+          this.render();
         }
       }
+    });
+    
+    // Listen for hash changes to update active state
+    window.addEventListener('hashchange', () => {
+      this.render();
     });
   }
 
   render() {
-    const currentPath = window.location.pathname;
+    const currentPath = window.location.hash.replace('#', '') || '/';
     
     this.shadow.innerHTML = `
       <style>
@@ -186,6 +218,30 @@ export class NavSidebar extends DashboardComponent {
           letter-spacing: 0.01em;
         }
         
+        .section-header {
+          padding: 16px 24px 8px 24px;
+          margin: 16px 12px 8px 12px;
+          color: var(--text-muted);
+          font-size: 0.75rem;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.1em;
+          border-bottom: 1px solid var(--card-border);
+          background: none !important;
+          cursor: default;
+        }
+        
+        .section-header:hover {
+          transform: none !important;
+          background: none !important;
+          border: none !important;
+          box-shadow: none !important;
+        }
+        
+        .section-header .nav-icon {
+          opacity: 0.7;
+        }
+        
         .status {
           padding: 24px;
           border-top: 1px solid var(--card-border);
@@ -237,14 +293,27 @@ export class NavSidebar extends DashboardComponent {
       <project-selector></project-selector>
       
       <ul class="nav-menu">
-        ${this.navItems.map(item => `
-          <li>
-            <a href="${item.path}" class="nav-link ${currentPath === item.path ? 'active' : ''}">
-              <span class="nav-icon">${item.icon}</span>
-              <span class="nav-title">${item.title}</span>
-            </a>
-          </li>
-        `).join('')}
+        ${this.navItems.map(item => {
+          if (item.isSection) {
+            return `
+              <li>
+                <div class="nav-link section-header">
+                  <span class="nav-icon">${item.icon}</span>
+                  <span class="nav-title">${item.title}</span>
+                </div>
+              </li>
+            `;
+          } else {
+            return `
+              <li>
+                <a href="${item.path}" class="nav-link ${currentPath === item.path ? 'active' : ''}">
+                  <span class="nav-icon">${item.icon}</span>
+                  <span class="nav-title">${item.title}</span>
+                </a>
+              </li>
+            `;
+          }
+        }).join('')}
       </ul>
       
       <div class="status">

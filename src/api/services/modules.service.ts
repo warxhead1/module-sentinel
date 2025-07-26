@@ -3,6 +3,7 @@
  */
 import type Database from 'better-sqlite3';
 import type { ModuleFile, FileInfo } from '../../shared/types/api.js';
+import { DrizzleDatabase, type DrizzleDb } from '../../database/drizzle-db.js';
 
 interface ModuleNode {
   name: string;
@@ -17,34 +18,18 @@ interface ModuleNode {
 }
 
 export class ModulesService {
-  private db: Database.Database;
+  private drizzleDb: DrizzleDatabase;
 
-  constructor(database: Database.Database) {
-    this.db = database;
+  constructor(database: Database.Database | DrizzleDb) {
+    this.drizzleDb = new DrizzleDatabase(database);
   }
 
   /**
    * Get all modules organized by namespace hierarchy
    */
-  getModulesHierarchy(): ModuleNode[] {
+  async getModulesHierarchy(): Promise<ModuleNode[]> {
     // Get all files with symbols, focusing on actual files (.ixx/.cpp)
-    const fileSymbols = this.db.prepare(`
-      SELECT 
-        s.file_path,
-        s.namespace,
-        COUNT(*) as symbol_count,
-        CASE 
-          WHEN s.file_path LIKE '%.ixx' THEN 'interface'
-          WHEN s.file_path LIKE '%.cpp' THEN 'implementation'
-          ELSE 'other'
-        END as file_type,
-        GROUP_CONCAT(DISTINCT s.kind) as symbol_kinds
-      FROM universal_symbols s
-      WHERE (s.file_path LIKE '%.ixx' OR s.file_path LIKE '%.cpp')
-        AND (s.namespace IS NOT NULL AND s.namespace != '' AND s.namespace != 'null')
-      GROUP BY s.file_path, s.namespace
-      ORDER BY s.namespace, s.file_path
-    `).all() as Array<{
+    const fileSymbols = await this.drizzleDb.getFileSymbolsForModules() as Array<{
       file_path: string;
       namespace: string;
       symbol_count: number;
@@ -53,18 +38,7 @@ export class ModulesService {
     }>;
 
     // Get imports/includes for context
-    const imports = this.db.prepare(`
-      SELECT DISTINCT
-        s1.file_path as from_file,
-        s2.name as imported_name,
-        s2.qualified_name as imported_qualified_name,
-        s2.namespace as imported_namespace
-      FROM universal_relationships r
-      JOIN universal_symbols s1 ON r.from_symbol_id = s1.id
-      JOIN universal_symbols s2 ON r.to_symbol_id = s2.id
-      WHERE r.type IN ('imports', 'includes', 'uses')
-        AND (s1.file_path LIKE '%.ixx' OR s1.file_path LIKE '%.cpp')
-    `).all() as Array<{
+    const imports = await this.drizzleDb.getModuleImports() as Array<{
       from_file: string;
       imported_name: string;
       imported_qualified_name: string;
@@ -132,23 +106,7 @@ export class ModulesService {
     });
 
     // Get top-level symbols for each file to show as children
-    const topLevelSymbols = this.db.prepare(`
-      SELECT 
-        s.file_path,
-        s.name,
-        s.qualified_name,
-        s.kind,
-        s.return_type,
-        s.signature,
-        s.visibility,
-        s.namespace
-      FROM universal_symbols s
-      WHERE (s.file_path LIKE '%.ixx' OR s.file_path LIKE '%.cpp')
-        AND s.parent_symbol_id IS NULL
-        AND s.kind IN ('class', 'struct', 'enum', 'interface', 'function', 'namespace')
-        AND (s.namespace IS NOT NULL AND s.namespace != '' AND s.namespace != 'null')
-      ORDER BY s.file_path, s.kind, s.name
-    `).all() as Array<{
+    const topLevelSymbols = await this.drizzleDb.getTopLevelSymbolsForModules() as Array<{
       file_path: string;
       name: string;
       qualified_name: string;
@@ -266,18 +224,10 @@ export class ModulesService {
   /**
    * Get detailed information for a specific module
    */
-  getModuleDetails(namespace: string, moduleName: string) {
+  async getModuleDetails(namespace: string, moduleName: string) {
     const filePath = `%${moduleName}%`;
     
-    const symbols = this.db.prepare(`
-      SELECT 
-        s.id, s.name, s.qualified_name, s.kind, s.namespace,
-        s.file_path, s.line, s.column, s.visibility, s.signature,
-        s.return_type, s.is_exported, s.language_id, s.project_id
-      FROM universal_symbols s
-      WHERE s.namespace = ? AND s.file_path LIKE ?
-      ORDER BY s.kind, s.name
-    `).all(namespace, filePath);
+    const symbols = await this.drizzleDb.getModuleDetailsByNamespace(namespace, filePath);
 
     return symbols;
   }

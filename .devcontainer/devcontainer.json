@@ -34,17 +34,8 @@
     "vscode": {
       "extensions": [
         "ms-vscode.vscode-typescript-next",
-        "bradlc.vscode-tailwindcss",
         "esbenp.prettier-vscode",
-        "ms-vscode.vscode-json",
-        "ms-vscode.cpptools",
-        "ms-vscode.cpptools-extension-pack",
-        "twxs.cmake",
-        "jeff-hykin.better-cpp-syntax",
-        "ms-python.python",
-        "ms-toolsai.jupyter",
-        "dbaeumer.vscode-eslint",
-        "eamodio.gitlens"
+        "dbaeumer.vscode-eslint"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "zsh",
@@ -68,12 +59,18 @@
     "source=${localEnv:HOME}/.oh-my-zsh,target=/home/node/.oh-my-zsh,type=bind,consistency=cached",
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached"
+    "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached",
+    "source=${localEnv:HOME}/.ssh,target=/home/node/.ssh,type=bind,consistency=cached,readonly",
+    "source=${localEnv:HOME}/.config/gh,target=/home/node/.config/gh,type=bind,consistency=cached"
   ],
   "remoteEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
-    "POWERLEVEL9K_DISABLE_GITSTATUS": "true"
+    "POWERLEVEL9K_DISABLE_GITSTATUS": "true",
+    "HTTPS_PROXY": "",
+    "HTTP_PROXY": "",
+    "NO_PROXY": "localhost,127.0.0.1",
+    "NODE_TLS_REJECT_UNAUTHORIZED": "0"
   },
   "forwardPorts": [
     3000,

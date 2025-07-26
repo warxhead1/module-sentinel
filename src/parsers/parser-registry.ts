@@ -402,6 +402,51 @@ export class ParserRegistry extends EventEmitter {
       isEnabled: true,
       priority: 20
     });
+
+    this.registerParser({
+      name: 'tree-sitter-csharp-parser',
+      language: 'csharp',
+      version: '1.0.0',
+      createParser: (config) => {
+        const { CSharpLanguageParser } = require('./adapters/csharp-language-parser.js');
+        return new CSharpLanguageParser(config);
+      },
+      description: 'Tree-sitter based C# parser',
+      supportedExtensions: ['.cs'],
+      features: ['classes', 'interfaces', 'methods', 'properties', 'async', 'linq'],
+      isEnabled: true,
+      priority: 20
+    });
+
+    this.registerParser({
+      name: 'tree-sitter-go-parser',
+      language: 'go',
+      version: '1.0.0',
+      createParser: (config) => {
+        const { GoLanguageParser } = require('./adapters/go-language-parser.js');
+        return new GoLanguageParser(config);
+      },
+      description: 'Tree-sitter based Go parser',
+      supportedExtensions: ['.go'],
+      features: ['functions', 'interfaces', 'goroutines', 'channels'],
+      isEnabled: true,
+      priority: 20
+    });
+
+    this.registerParser({
+      name: 'tree-sitter-java-parser',
+      language: 'java',
+      version: '1.0.0',
+      createParser: (config) => {
+        const { JavaLanguageParser } = require('./adapters/java-language-parser.js');
+        return new JavaLanguageParser(config);
+      },
+      description: 'Tree-sitter based Java parser',
+      supportedExtensions: ['.java'],
+      features: ['classes', 'interfaces', 'methods', 'annotations', 'generics'],
+      isEnabled: true,
+      priority: 20
+    });
   }
   
   /**

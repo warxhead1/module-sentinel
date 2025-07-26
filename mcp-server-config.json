@@ -1,9 +1,11 @@
 {
   "type": "stdio",
-  "command": "/home/warxh/.nvm/versions/node/v22.17.0/bin/node",
-  "args": ["/home/warxh/.nvm/versions/node/v22.17.0/bin/module-sentinel-mcp"],
+  "command": "node",
+  "args": ["/home/warxh/cpp_mcp_master/module-sentinel/dist/index.js"],
   "env": {
     "NODE_ENV": "development",
-    "GEMINI_API_KEY": "$GEMINI_API_KEY"
+    "MODULE_SENTINEL_PROJECT_PATH": "/home/warxh/cpp_mcp_master/module-sentinel",
+    "MODULE_SENTINEL_DEBUG": "true",
+    "MCP_MODE": "true"
   }
 }

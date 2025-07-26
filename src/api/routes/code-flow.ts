@@ -305,6 +305,148 @@ export class CodeFlowRoutes {
   }
 
   /**
+   * Get multi-language flow data for a specific symbol
+   * GET /api/code-flow/multi-language/:symbolId
+   */
+  async getMultiLanguageFlow(req: Request, res: Response) {
+    try {
+      const symbolId = parseInt(req.params.symbolId, 10);
+      const { languages = 'cpp,python,typescript' } = req.query;
+
+      if (isNaN(symbolId)) {
+        const response: ApiResponse = {
+          success: false,
+          error: 'Invalid symbol ID'
+        };
+        return res.status(400).json(response);
+      }
+
+      const languageList = String(languages).split(',');
+
+      // Get the call graph with extended depth for multi-language analysis
+      const callGraph = await this.codeFlowService.getCallGraph(symbolId, {
+        depth: 3,
+        direction: 'both',
+        includeTransitive: true
+      });
+
+      // Transform the call graph data into multi-language flow format
+      const nodes = [];
+      const edges = [];
+
+      // Add the target symbol as main node
+      nodes.push({
+        id: `symbol-${callGraph.target.id}`,
+        name: callGraph.target.name,
+        type: callGraph.target.kind,
+        namespace: callGraph.target.namespace,
+        file_path: callGraph.target.filePath,
+        language: this.detectLanguageFromPath(callGraph.target.filePath),
+        languageFeatures: {
+          isAsync: callGraph.target.isAsync,
+          isExported: callGraph.target.isExported,
+          visibility: callGraph.target.visibility
+        },
+        metrics: {
+          incoming_calls: callGraph.metrics.incoming_calls,
+          outgoing_calls: callGraph.metrics.outgoing_calls
+        }
+      });
+
+      // Add caller nodes
+      for (const caller of callGraph.callers) {
+        const language = this.detectLanguageFromPath(caller.file_path);
+        if (languageList.includes(language)) {
+          nodes.push({
+            id: `symbol-${caller.id}`,
+            name: caller.name,
+            type: caller.kind,
+            namespace: '', // CallGraphNode doesn't have namespace field
+            file_path: caller.file_path,
+            language,
+            languageFeatures: {
+              isAsync: false, // CallGraphNode doesn't have async info
+              isExported: false, // CallGraphNode doesn't have export info
+              visibility: 'public', // CallGraphNode doesn't have visibility info
+              spawn: this.detectSpawnType(caller),
+              spawnsPython: this.detectPythonSpawn(caller)
+            }
+          });
+
+          // Add edge from caller to target
+          edges.push({
+            source: `symbol-${caller.id}`,
+            target: `symbol-${callGraph.target.id}`,
+            type: caller.call_info.call_type,
+            isCrossLanguage: language !== this.detectLanguageFromPath(callGraph.target.filePath),
+            sourceLanguage: language,
+            targetLanguage: this.detectLanguageFromPath(callGraph.target.filePath),
+            details: `${caller.name} ${caller.call_info.call_type} ${callGraph.target.name}`
+          });
+        }
+      }
+
+      // Add callee nodes
+      for (const callee of callGraph.callees) {
+        const language = this.detectLanguageFromPath(callee.file_path);
+        if (languageList.includes(language)) {
+          nodes.push({
+            id: `symbol-${callee.id}`,
+            name: callee.name,
+            type: callee.kind,
+            namespace: '', // CallGraphNode doesn't have namespace field
+            file_path: callee.file_path,
+            language,
+            languageFeatures: {
+              isAsync: false, // CallGraphNode doesn't have async info
+              isExported: false, // CallGraphNode doesn't have export info
+              visibility: 'public', // CallGraphNode doesn't have visibility info
+              spawn: this.detectSpawnType(callee),
+              spawnsPython: this.detectPythonSpawn(callee)
+            }
+          });
+
+          // Add edge from target to callee
+          edges.push({
+            source: `symbol-${callGraph.target.id}`,
+            target: `symbol-${callee.id}`,
+            type: callee.call_info.call_type,
+            isCrossLanguage: this.detectLanguageFromPath(callGraph.target.filePath) !== language,
+            sourceLanguage: this.detectLanguageFromPath(callGraph.target.filePath),
+            targetLanguage: language,
+            details: `${callGraph.target.name} ${callee.call_info.call_type} ${callee.name}`
+          });
+        }
+      }
+
+      const response: ApiResponse = {
+        success: true,
+        data: {
+          nodes,
+          edges,
+          languages: languageList,
+          center_symbol_id: symbolId,
+          metrics: {
+            total_nodes: nodes.length,
+            total_edges: edges.length,
+            cross_language_edges: edges.filter(e => e.isCrossLanguage).length,
+            languages_involved: [...new Set(nodes.map(n => n.language))]
+          }
+        }
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error('Error fetching multi-language flow:', error);
+      const response: ApiResponse = {
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch multi-language flow'
+      };
+      res.status(500).json(response);
+    }
+  }
+
+  /**
    * Analyze a specific function for code flow insights
    * GET /api/code-flow/analyze/:symbolId
    */
@@ -355,5 +497,48 @@ export class CodeFlowRoutes {
       };
       res.status(500).json(response);
     }
+  }
+
+  // Helper methods for multi-language support
+  private detectLanguageFromPath(filePath: string): string {
+    if (!filePath) return 'unknown';
+    
+    const ext = filePath.split('.').pop()?.toLowerCase();
+    const languageMap: Record<string, string> = {
+      'cpp': 'cpp', 'hpp': 'cpp', 'cc': 'cpp', 'h': 'cpp', 'cxx': 'cpp', 'hxx': 'cpp', 'ixx': 'cpp',
+      'py': 'python', 'pyi': 'python', 'pyx': 'python',
+      'ts': 'typescript', 'tsx': 'typescript',
+      'js': 'javascript', 'jsx': 'javascript', 'mjs': 'javascript',
+      'rs': 'rust',
+      'go': 'go',
+      'java': 'java', 'kt': 'kotlin',
+    };
+    return languageMap[ext || ''] || 'unknown';
+  }
+
+  private detectSpawnType(symbol: any): string | undefined {
+    // Check if the symbol contains process spawning patterns
+    const name = symbol.name?.toLowerCase() || '';
+    const signature = symbol.signature?.toLowerCase() || '';
+    
+    if (name.includes('spawn') || name.includes('exec') || name.includes('system')) {
+      return 'process';
+    }
+    
+    if (signature.includes('subprocess') || signature.includes('exec') || signature.includes('spawn')) {
+      return 'process';
+    }
+    
+    return undefined;
+  }
+
+  private detectPythonSpawn(symbol: any): boolean {
+    // Check if this symbol specifically spawns Python processes
+    const name = symbol.name?.toLowerCase() || '';
+    const signature = symbol.signature?.toLowerCase() || '';
+    
+    return name.includes('python') || 
+           signature.includes('python') || 
+           signature.includes('.py');
   }
 }

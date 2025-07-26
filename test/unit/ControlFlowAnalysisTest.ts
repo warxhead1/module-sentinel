@@ -1,17 +1,22 @@
 import { BaseTest } from '../helpers/BaseTest';
-import { ControlFlowAnalyzer } from '../../src/analysis/control-flow-analyzer.js';
+import { UnifiedControlFlowAnalyzer } from '../../src/analysis/unified-control-flow-analyzer.js';
 import Database from 'better-sqlite3';
 import Parser from 'tree-sitter';
 import * as fs from 'fs';
 import * as path from 'path';
+import { TestResult } from '../helpers/JUnitReporter';
 
 export class ControlFlowAnalysisTest extends BaseTest {
-  private analyzer!: ControlFlowAnalyzer;
+  private analyzer!: UnifiedControlFlowAnalyzer;
   private parser!: Parser;
   
+  constructor(db: Database.Database) {
+    super('ControlFlowAnalysisTest', db);
+  }
+  
   async specificSetup(): Promise<void> {
-    const testDb = this.dbManager.getDatabase();
-    this.analyzer = new ControlFlowAnalyzer(testDb);
+    const testDb = this.db;
+    this.analyzer = new UnifiedControlFlowAnalyzer(testDb);
     
     this.parser = new Parser();
     
@@ -20,7 +25,7 @@ export class ControlFlowAnalysisTest extends BaseTest {
       const CppLanguage = require('tree-sitter-cpp');
       this.parser.setLanguage(CppLanguage);
     } catch (error) {
-      console.warn('⚠️  tree-sitter-cpp not available, skipping AST-based tests');
+      console.warn('⚠️  tree-sitter-cpp not available, skipping AST-based tests', error);
       // We'll skip the test if parser isn't available
     }
   }
@@ -29,11 +34,17 @@ export class ControlFlowAnalysisTest extends BaseTest {
     // Nothing specific to teardown
   }
   
-  async run(): Promise<void> {
-    await this.testSerializeToStringControlFlow();
+  async run(): Promise<TestResult[]> {
+    const results: TestResult[] = [];
+    results.push(await this.testSerializeToStringControlFlow());
+    return results;
   }
   
-  private async testSerializeToStringControlFlow(): Promise<void> {
+  private async testSerializeToStringControlFlow(): Promise<TestResult> {
+    const testName = 'testSerializeToStringControlFlow';
+    let status: 'passed' | 'failed' | 'skipped' = 'passed';
+    let errorMessage: string | undefined;
+
     console.log('\n🔍 Testing control flow analysis for SerializeToString method...');
     
     // Read the actual SerializeToString file
@@ -43,8 +54,9 @@ export class ControlFlowAnalysisTest extends BaseTest {
     );
     
     if (!fs.existsSync(filePath)) {
-      console.warn(`⚠️  Test file not found: ${filePath}`);
-      return;
+      errorMessage = `⚠️  Test file not found: ${filePath}`;
+      console.warn(errorMessage);
+      return { name: testName, status: 'skipped', time: 0, error: new Error(errorMessage) };
     }
     
     const content = fs.readFileSync(filePath, 'utf-8');
@@ -52,18 +64,20 @@ export class ControlFlowAnalysisTest extends BaseTest {
     // Skip if parser wasn't loaded
     try {
       if (!this.parser || !this.parser.getLanguage()) {
-        console.log('   ⏭️  Skipping - tree-sitter-cpp not available');
-        return;
+        errorMessage = '   ⏭️  Skipping - tree-sitter-cpp not available';
+        console.log(errorMessage);
+        return { name: testName, status: 'skipped', time: 0, error: new Error(errorMessage) };
       }
     } catch (error) {
-      console.log('   ⏭️  Skipping - tree-sitter-cpp not available');
-      return;
+      errorMessage = `   ⏭️  Skipping - tree-sitter-cpp not available: ${error}`;
+      console.log(errorMessage);
+      return { name: testName, status: 'skipped', time: 0, error: new Error(errorMessage) };
     }
     
     const tree = this.parser.parse(content);
     
     // First, let's find the SerializeToString function in the database
-    const testDb = this.dbManager.getDatabase(this.testName);
+    const testDb = this.db;
     const symbolQuery = testDb.prepare(`
       SELECT * FROM universal_symbols 
       WHERE name = 'SerializeToString' 
@@ -91,37 +105,56 @@ export class ControlFlowAnalysisTest extends BaseTest {
     
     // Analyze the control flow
     console.log(`📊 Analyzing control flow for symbol ID: ${symbol.id}`);
-    const cfg = await this.analyzer.analyzeSymbol(symbol.id, tree, content);
-    
+    let analysis;
+    try {
+      analysis = await this.analyzer.analyzeSymbol(symbol.id, tree, content);
+    } catch (e: any) {
+      errorMessage = `Error analyzing symbol: ${e.message}`;
+      status = 'failed';
+      console.error(errorMessage);
+      return { name: testName, status, time: 0, error: new Error(errorMessage) };
+    }
+
     // Check the results
     console.log(`\n📈 Control Flow Analysis Results:`);
-    console.log(`  - Total blocks: ${cfg.blocks.length}`);
-    console.log(`  - Cyclomatic complexity: ${cfg.complexity}`);
-    console.log(`  - Entry point: line ${cfg.blocks.find(b => b.type === 'entry')?.startLine}`);
+    console.log(`  - Total blocks: ${analysis.blocks.length}`);
+    console.log(`  - Cyclomatic complexity: ${analysis.statistics.cyclomaticComplexity}`);
+    console.log(`  - Entry point: line ${analysis.blocks.find(b => b.type === 'entry')?.startLine}`);
     
     // Find specific blocks we expect
-    const switchBlock = cfg.blocks.find(b => b.type === 'switch');
-    const loopBlocks = cfg.blocks.filter(b => b.type === 'loop');
-    const conditionalBlocks = cfg.blocks.filter(b => b.type === 'conditional');
+    const switchBlock = analysis.blocks.find(b => b.type === 'switch');
+    const loopBlocks = analysis.blocks.filter(b => b.type === 'loop');
+    const conditionalBlocks = analysis.blocks.filter(b => b.type === 'conditional');
     
     console.log(`\n🔍 Block Analysis:`);
     if (switchBlock) {
       console.log(`  ✅ Switch block found: lines ${switchBlock.startLine}-${switchBlock.endLine}`);
-      this.assert(
-        switchBlock.endLine > switchBlock.startLine + 5,
-        `Switch block should span multiple lines, got ${switchBlock.startLine}-${switchBlock.endLine}`
-      );
+      try {
+        this.assert(
+          switchBlock.endLine > switchBlock.startLine + 5,
+          `Switch block should span multiple lines, got ${switchBlock.startLine}-${switchBlock.endLine}`
+        );
+      } catch (e: any) {
+        status = 'failed';
+        errorMessage = e.message;
+      }
     } else {
-      console.log(`  ❌ No switch block found`);
+      errorMessage = `  ❌ No switch block found`;
+      status = 'failed';
     }
     
     console.log(`  - Found ${loopBlocks.length} loop blocks:`);
     for (const loop of loopBlocks) {
       console.log(`    • Loop at lines ${loop.startLine}-${loop.endLine}`);
-      this.assert(
-        loop.endLine > loop.startLine,
-        `Loop block should span multiple lines, got ${loop.startLine}-${loop.endLine}`
-      );
+      try {
+        this.assert(
+          loop.endLine > loop.startLine,
+          `Loop block should span multiple lines, got ${loop.startLine}-${loop.endLine}`
+        );
+      } catch (e: any) {
+        status = 'failed';
+        errorMessage = e.message;
+      }
     }
     
     console.log(`  - Found ${conditionalBlocks.length} conditional blocks:`);
@@ -130,20 +163,26 @@ export class ControlFlowAnalysisTest extends BaseTest {
     }
     
     // Verify we have the expected blocks based on the code structure
-    this.assert(cfg.blocks.length >= 7, `Expected at least 7 blocks, got ${cfg.blocks.length}`);
-    this.assert(switchBlock !== undefined, 'Should have a switch block');
-    this.assert(loopBlocks.length >= 2, `Expected at least 2 loops, got ${loopBlocks.length}`);
+    try {
+      this.assert(analysis.blocks.length >= 7, `Expected at least 7 blocks, got ${analysis.blocks.length}`);
+      this.assert(switchBlock !== undefined, 'Should have a switch block');
+      this.assert(loopBlocks.length >= 2, `Expected at least 2 loops, got ${loopBlocks.length}`);
+    } catch (e: any) {
+      status = 'failed';
+      errorMessage = e.message;
+    }
     
     // Check that blocks have proper ranges
-    const problemBlocks = cfg.blocks.filter(b => 
+    const problemBlocks = analysis.blocks.filter(b => 
       b.type !== 'entry' && b.type !== 'exit' && b.startLine === b.endLine
     );
     
     if (problemBlocks.length > 0) {
-      console.log(`\n⚠️  Found ${problemBlocks.length} blocks with same start/end line:`);
+      errorMessage = `⚠️  Found ${problemBlocks.length} blocks with same start/end line:`;
       for (const block of problemBlocks) {
-        console.log(`    • ${block.type} block at line ${block.startLine}`);
+        errorMessage += `\n    • ${block.type} block at line ${block.startLine}`;
       }
+      status = 'failed';
     }
     
     // Check function calls are captured
@@ -167,8 +206,9 @@ export class ControlFlowAnalysisTest extends BaseTest {
     console.log(`\n📋 All function calls stored:`);
     
     if (allCalls.length === 0) {
-      console.log(`  ❌ NO FUNCTION CALLS FOUND - Parser not extracting calls!`);
-      this.assert(false, 'Expected function calls but found none - parser issue');
+      errorMessage = '  ❌ NO FUNCTION CALLS FOUND - Parser not extracting calls!';
+      status = 'failed';
+      console.log(errorMessage);
     } else {
       allCalls.forEach((call: any) => {
         const targetInfo = call.target_function || `callee_id:${call.callee_id}` || 'UNKNOWN';
@@ -183,10 +223,11 @@ export class ControlFlowAnalysisTest extends BaseTest {
     );
     
     if (callsWithoutTarget.length > 0) {
-      console.log(`\n⚠️  Found ${callsWithoutTarget.length} calls with missing target information:`);
+      errorMessage = `⚠️  Found ${callsWithoutTarget.length} calls with missing target information:`;
       callsWithoutTarget.forEach((call: any) => {
-        console.log(`  Line ${call.line_number}: Missing both target_function and callee_id`);
+        errorMessage += `\n  Line ${call.line_number}: Missing both target_function and callee_id`;
       });
+      status = 'failed';
     }
     
     // Verify the specific lines where we expect function calls
@@ -207,14 +248,19 @@ export class ControlFlowAnalysisTest extends BaseTest {
     }
     
     // Assert we found at least some of the expected calls
-    this.assert(
-      foundCallsCount >= 3, 
-      `Expected at least 3 function calls at specific lines, found ${foundCallsCount}/${expectedCallLines.length}`
-    );
+    try {
+      this.assert(
+        foundCallsCount >= 3, 
+        `Expected at least 3 function calls at specific lines, found ${foundCallsCount}/${expectedCallLines.length}`
+      );
+    } catch (e: any) {
+      status = 'failed';
+      errorMessage = e.message;
+    }
     
     // Check control flow blocks have calls within their ranges
     console.log(`\n🔗 Verifying function calls within control flow blocks:`);
-    for (const block of cfg.blocks) {
+    for (const block of analysis.blocks) {
       if (block.type === 'entry' || block.type === 'exit') continue;
       
       const callsInBlock = allCalls.filter(call => 
@@ -231,6 +277,12 @@ export class ControlFlowAnalysisTest extends BaseTest {
       }
     }
     
-    console.log('\n✅ Control flow analysis test completed');
+    if (status === 'passed') {
+      console.log('✅ Control flow analysis test completed');
+    } else {
+      console.log('❌ Control flow analysis test failed');
+    }
+
+    return { name: testName, status, time: 0, error: errorMessage ? new Error(errorMessage) : undefined };
   }
 }

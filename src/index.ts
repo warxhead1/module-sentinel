@@ -9,19 +9,87 @@ import {
   ReadResourceRequestSchema,
   Tool 
 } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as dotenv from 'dotenv';
+import * as os from 'os';
 
 // Import our new components
 import { UniversalIndexer } from './indexing/universal-indexer.js';
 import { Priority1Tools } from './tools/priority-1-tools.js';
-import { ModernApiServer } from './api/server.js';
 import { SecureConfigManager } from './utils/secure-config.js';
-import { DatabaseConfig, getDatabasePath } from './config/database-config.js';
+import { DatabaseConfig } from './config/database-config.js';
+import { DrizzleDatabase } from './database/drizzle-db.js';
+import { DatabaseService } from './api/services/database.service.js';
 // Parser registry not needed for current implementation
+
+/**
+ * Simple process lock manager to prevent multiple instances
+ */
+class ProcessLockManager {
+  private static readonly LOCK_FILE = path.join(os.tmpdir(), 'module-sentinel-mcp.pid');
+  
+  static async acquireLock(): Promise<boolean> {
+    try {
+      // Check if lock file exists
+      const lockContent = await fs.readFile(ProcessLockManager.LOCK_FILE, 'utf8').catch(() => null);
+      
+      if (lockContent) {
+        const existingPid = parseInt(lockContent.trim());
+        
+        // Check if process is still running
+        try {
+          process.kill(existingPid, 0); // Signal 0 just checks if process exists
+          // Silently terminate existing process
+          
+          // Send SIGTERM to existing process
+          process.kill(existingPid, 'SIGTERM');
+          
+          // Wait a bit for graceful shutdown
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          
+          // Check if it's still running, force kill if needed
+          try {
+            process.kill(existingPid, 0);
+            // Force kill if still running
+            process.kill(existingPid, 'SIGKILL');
+          } catch {
+            // Process already terminated
+          }
+        } catch {
+          // Process doesn't exist, remove stale lock file
+          await fs.unlink(ProcessLockManager.LOCK_FILE).catch(() => {});
+        }
+      }
+      
+      // Create new lock file with current PID
+      await fs.writeFile(ProcessLockManager.LOCK_FILE, process.pid.toString());
+      // Lock acquired with current PID
+      
+      // Clean up lock file on exit
+      const cleanup = async () => {
+        try {
+          await fs.unlink(ProcessLockManager.LOCK_FILE);
+          // Lock released
+        } catch {
+          // Ignore cleanup errors
+        }
+      };
+      
+      process.on('exit', cleanup);
+      process.on('SIGINT', cleanup);
+      process.on('SIGTERM', cleanup);
+      process.on('SIGUSR1', cleanup);
+      process.on('SIGUSR2', cleanup);
+      
+      return true;
+    } catch (error) {
+      // Failed to acquire lock - silent in MCP mode
+      return false;
+    }
+  }
+}
 
 export class ModuleSentinelMCPServer {
   private server: Server;
@@ -29,13 +97,18 @@ export class ModuleSentinelMCPServer {
   private dbPath: string;
   private universalIndexer?: UniversalIndexer;
   private priority1Tools: Priority1Tools;
-  private visualizationAPI?: ModernApiServer;
+  private drizzleDb: DrizzleDatabase;
+  private dbService: DatabaseService;
+  // MCP server doesn't need visualization API - dashboard runs separately
 
   constructor(options?: { skipAutoIndex?: boolean }) {
     const skipAutoIndex = options?.skipAutoIndex ?? false;
     
     // Load environment variables
     dotenv.config();
+    
+    // Acquire process lock to prevent multiple instances
+    ProcessLockManager.acquireLock().catch(() => {});
     
     // Get configuration
     const secureConfig = SecureConfigManager.getConfig();
@@ -49,22 +122,22 @@ export class ModuleSentinelMCPServer {
 
     // Initialize database
     this.db = new Database(this.dbPath);
-    console.error(`[MCP Server] Using database at: ${this.dbPath}`);
-    console.error(`[MCP Server] Environment: ${dbConfig.getEnv()}`);
+    
+    // Initialize Drizzle wrapper and database service
+    this.drizzleDb = new DrizzleDatabase(this.db);
+    this.dbService = new DatabaseService(this.db);
+    
+    // No console output in MCP mode - all communication via stdio
     
     // Universal indexer will be created when needed with proper options
     
-    // Initialize tools
-    this.priority1Tools = new Priority1Tools(this.db);
+    // Initialize tools with raw database for embedding support
+    this.priority1Tools = new Priority1Tools(this.drizzleDb.getDrizzle(), this.db);
     
-    // Initialize visualization API
-    const visualizationPort = parseInt(process.env.VISUALIZATION_PORT || '7071');
-    this.visualizationAPI = new ModernApiServer(this.db, visualizationPort);
+    // MCP server doesn't need to start dashboard - it runs separately on port 6969
     
-    // Auto-index if not skipped
-    if (!skipAutoIndex) {
-      this.performInitialIndex(projectPath).catch(console.error);
-    }
+    // Skip auto-indexing for MCP server to avoid blocking stdio
+    // Users can manually trigger indexing via rebuild_index tool
     
     // Initialize MCP server
     this.server = new Server(
@@ -72,7 +145,10 @@ export class ModuleSentinelMCPServer {
         name: 'module-sentinel',
         version: '3.0.0',
         capabilities: {
-          tools: {},
+          tools: {
+            // List all available tools
+            list: true
+          },
           resources: {
             read: true
           }
@@ -80,7 +156,10 @@ export class ModuleSentinelMCPServer {
       },
       {
         capabilities: {
-          tools: {},
+          tools: {
+            // Client can call tools
+            call: true
+          },
           resources: {}
         }
       }
@@ -89,16 +168,49 @@ export class ModuleSentinelMCPServer {
     this.setupHandlers();
   }
 
+  private async startBackgroundServices(projectPath: string): Promise<void> {
+    console.error('[MCP Server] Starting background services...');
+    
+    try {
+      // The dashboard runs separately on port 6969 - MCP server doesn't need to start it
+      console.error('[MCP Server] Dashboard runs independently on port 6969');
+      
+      // Start indexing in background (can take time)
+      console.error('[MCP Server] About to start initial indexing in background...');
+      this.performInitialIndex(projectPath)
+        .then(() => {
+          console.error('[MCP Server] Initial indexing completed successfully');
+        })
+        .catch((error) => {
+          console.error('[MCP Server] Initial indexing failed:', error);
+        });
+      
+      console.error('[MCP Server] Background services startup completed (indexing continues in background)');
+    } catch (error) {
+      console.error('[MCP Server] Error in startBackgroundServices:', error);
+    }
+  }
+
   private async performInitialIndex(projectPath: string): Promise<void> {
     console.error('[MCP Server] Starting initial indexing...');
     
     try {
-      // Create indexer with options
+      // Get configuration from secure config manager
+      const secureConfig = SecureConfigManager.getConfig();
+      const projectName = secureConfig.projectName || 'module-sentinel';
+      const languages = secureConfig.languages || ['typescript', 'javascript', 'cpp', 'python'];
+      const debugMode = secureConfig.debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
+      
+      console.error(`[MCP Server] Project: ${projectName}, Path: ${projectPath}`);
+      console.error(`[MCP Server] Languages: ${languages.join(', ')}`);
+      
+      // Create indexer with dynamic options from config
       this.universalIndexer = new UniversalIndexer(this.db, {
         projectPath,
-        projectName: 'planet_procgen',
-        languages: ['cpp'],
-        debugMode: process.env.MODULE_SENTINEL_DEBUG === 'true'
+        projectName,
+        languages,
+        debugMode,
+        useWorkerThreads: true // Enable worker threads for MCP server
       });
       
       // Index the project
@@ -106,15 +218,14 @@ export class ModuleSentinelMCPServer {
       
       console.error(`[MCP Server] Indexed ${result.filesIndexed} files, found ${result.symbolsFound} symbols`);
       
-      // Log database health
-      const stats = this.db.prepare(`
-        SELECT 
-          (SELECT COUNT(*) FROM universal_symbols) as symbols,
-          (SELECT COUNT(*) FROM file_index) as files,
-          (SELECT COUNT(*) FROM projects) as projects
-      `).get() as any;
+      // Log database health using our API service
+      const stats = await this.dbService.getStats();
       
-      console.error('[MCP Server] Database stats:', stats);
+      console.error('[MCP Server] Database stats:', {
+        symbols: stats.symbolCount,
+        files: stats.symbolCount, // Approximation since we don't track file count separately
+        projects: 1 // Single project for now
+      });
       
     } catch (error) {
       console.error('[MCP Server] Initial indexing failed:', error);
@@ -274,20 +385,27 @@ export class ModuleSentinelMCPServer {
   }
 
   private async handleRebuildIndex(args: any) {
+    const secureConfig = SecureConfigManager.getConfig();
     const projectPath = args.projectPath || 
-                       SecureConfigManager.getConfig().projectPath || 
+                       secureConfig.projectPath || 
                        process.env.MODULE_SENTINEL_PROJECT_PATH || 
-                       '/home/warxh/planet_procgen';
+                       '/workspace';
+
+    const projectName = secureConfig.projectName || 'module-sentinel';
+    const languages = secureConfig.languages || ['typescript', 'javascript', 'cpp', 'python'];
+    const debugMode = secureConfig.debugMode || process.env.MODULE_SENTINEL_DEBUG === 'true';
 
     console.error(`[MCP Server] Rebuilding index for: ${projectPath}`);
+    console.error(`[MCP Server] Project: ${projectName}, Languages: ${languages.join(', ')}`);
     
     // Create new indexer for rebuild
     this.universalIndexer = new UniversalIndexer(this.db, {
       projectPath,
-      projectName: 'planet_procgen',
-      languages: ['cpp'],
+      projectName,
+      languages,
       forceReindex: args.force,
-      debugMode: process.env.MODULE_SENTINEL_DEBUG === 'true'
+      debugMode,
+      useWorkerThreads: true // Enable worker threads for MCP server
     });
     
     // Re-index
@@ -306,29 +424,26 @@ export class ModuleSentinelMCPServer {
     const kind = args.kind || 'all';
     const limit = args.limit || 20;
     
-    let sql = `
-      SELECT name, qualified_name, kind, file_path, line, signature
-      FROM universal_symbols
-      WHERE name LIKE ? OR qualified_name LIKE ?
-    `;
+    // Use our existing database service instead of raw SQL
+    const results = await this.dbService.searchSymbols(query, {
+      kind: kind === 'all' ? undefined : kind,
+      limit
+    });
     
-    if (kind !== 'all') {
-      sql += ` AND kind = ?`;
-    }
-    
-    sql += ` LIMIT ?`;
-    
-    const searchPattern = `%${query}%`;
-    const params = kind === 'all' 
-      ? [searchPattern, searchPattern, limit]
-      : [searchPattern, searchPattern, kind, limit];
-    
-    const results = this.db.prepare(sql).all(...params);
+    // Transform to match expected format
+    const formattedResults = results.map(symbol => ({
+      name: symbol.name,
+      qualified_name: symbol.qualified_name,
+      kind: symbol.kind,
+      file_path: symbol.file_path,
+      line: symbol.line,
+      signature: symbol.signature
+    }));
     
     return {
       content: [{
         type: 'text',
-        text: JSON.stringify(results, null, 2)
+        text: JSON.stringify(formattedResults, null, 2)
       }]
     };
   }
@@ -337,24 +452,16 @@ export class ModuleSentinelMCPServer {
   async run(): Promise<void> {
     console.error('[MCP Server] Starting Module Sentinel MCP Server v3.0...');
     
-    // Start visualization API
-    if (this.visualizationAPI) {
-      await this.visualizationAPI.start();
-      console.error('[MCP Server] Visualization API started');
-    }
-    
-    // Run MCP server
+    // Background services already started in constructor, just connect MCP protocol
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('[MCP Server] MCP Server started');
+    console.error('[MCP Server] MCP Server protocol connected');
   }
 
   async stop(): Promise<void> {
     console.error('[MCP Server] Shutting down...');
     
-    if (this.visualizationAPI) {
-      await this.visualizationAPI.stop();
-    }
+    // Dashboard runs separately, no need to stop it here
     
     this.db.close();
     console.error('[MCP Server] Shutdown complete');

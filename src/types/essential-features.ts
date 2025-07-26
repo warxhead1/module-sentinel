@@ -46,6 +46,7 @@ export interface SimilarCodeMatch {
   location: string;
   pattern: string;
   suggestion: string;
+  semanticScore?: number; // Similarity score from embeddings (0-1)
 }
 
 export interface SimilarCodeResponse {

@@ -406,7 +406,7 @@ export class ImmersiveModalSystem {
     this.createFlowVisualization(modal);
   }
 
-  private createFlowVisualization(modal: HTMLElement): void {
+  private createFlowVisualization(_modal: HTMLElement): void {
     // Create animated flow paths
     console.log('Creating flow visualization');
   }

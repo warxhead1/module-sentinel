@@ -1,13 +1,24 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import { EventEmitter } from 'events';
+import * as fs from "fs";
+import * as path from "path";
+import { EventEmitter } from "events";
+import { createLogger } from "../utils/logger.js";
 
 /**
  * File watcher for detecting changes and triggering re-indexing
  */
 export class FileWatcher extends EventEmitter {
+  private logger = createLogger("FileWatcher");
   private watchers: Map<string, fs.FSWatcher> = new Map();
-  private watchedExtensions = new Set(['.cpp', '.h', '.hpp', '.hxx', '.cxx', '.cc', '.ixx', '.cppm']);
+  private watchedExtensions = new Set([
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".hxx",
+    ".cxx",
+    ".cc",
+    ".ixx",
+    ".cppm",
+  ]);
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private debounceDelay = 1000; // 1 second debounce
 
@@ -16,22 +27,24 @@ export class FileWatcher extends EventEmitter {
    */
   watchDirectory(directoryPath: string): void {
     try {
-      const watcher = fs.watch(directoryPath, { recursive: true }, (eventType, filename) => {
-        if (!filename) return;
-        
-        const fullPath = path.join(directoryPath, filename);
-        const ext = path.extname(filename);
-        
-        // Only watch C++ files
-        if (!this.watchedExtensions.has(ext)) return;
-        
-        // Debounce to avoid multiple events for the same file
-        this.debounceFileChange(fullPath, eventType);
-      });
+      const watcher = fs.watch(
+        directoryPath,
+        { recursive: true },
+        (eventType, filename) => {
+          if (!filename) return;
+
+          const fullPath = path.join(directoryPath, filename);
+          const ext = path.extname(filename);
+
+          // Only watch C++ files
+          if (!this.watchedExtensions.has(ext)) return;
+
+          // Debounce to avoid multiple events for the same file
+          this.debounceFileChange(fullPath, eventType);
+        }
+      );
 
       this.watchers.set(directoryPath, watcher);
-      console.log(`📁 Watching directory: ${directoryPath}`);
-      
     } catch (error) {
       console.error(`Failed to watch directory ${directoryPath}:`, error);
     }
@@ -45,7 +58,6 @@ export class FileWatcher extends EventEmitter {
     if (watcher) {
       watcher.close();
       this.watchers.delete(directoryPath);
-      console.log(`🛑 Stopped watching: ${directoryPath}`);
     }
   }
 
@@ -53,12 +65,11 @@ export class FileWatcher extends EventEmitter {
    * Stop all watchers
    */
   stopAll(): void {
-    for (const [path, watcher] of this.watchers) {
+    for (const [_path, watcher] of this.watchers) {
       watcher.close();
-      console.log(`🛑 Stopped watching: ${path}`);
     }
     this.watchers.clear();
-    
+
     // Clear all debounce timers
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
@@ -92,7 +103,7 @@ export class FileWatcher extends EventEmitter {
     try {
       // Check if file still exists (might have been deleted)
       if (!fs.existsSync(filePath)) {
-        this.emit('fileDeleted', filePath);
+        this.emit("fileDeleted", filePath);
         return;
       }
 
@@ -100,16 +111,13 @@ export class FileWatcher extends EventEmitter {
       const stats = fs.statSync(filePath);
       if (!stats.isFile()) return;
 
-      console.log(`📝 File changed: ${filePath} (${eventType})`);
-      
       // Emit file change event
-      this.emit('fileChanged', {
+      this.emit("fileChanged", {
         filePath,
         eventType,
         size: stats.size,
-        mtime: stats.mtime
+        mtime: stats.mtime,
       });
-
     } catch (error) {
       console.error(`Error handling file change for ${filePath}:`, error);
     }
@@ -146,24 +154,22 @@ export function setupFileWatchingWithReindexing(
   globalFileWatcher.watchDirectory(projectPath);
 
   // Set up event handler for file changes
-  globalFileWatcher.on('fileChanged', async (changeEvent) => {
-    const { filePath, eventType } = changeEvent;
-    
+  globalFileWatcher.on("fileChanged", async (changeEvent) => {
+    const { filePath, eventType: _eventType } = changeEvent;
+
     try {
-      console.log(`🔄 Triggering re-index for changed file: ${filePath}`);
       await reindexCallback(filePath);
-      console.log(`Re-indexing completed for: ${filePath}`);
-      
     } catch (error) {
       console.error(` Re-indexing failed for ${filePath}:`, error);
     }
   });
 
   // Handle file deletions
-  globalFileWatcher.on('fileDeleted', (filePath) => {
-    console.log(`🗑️  File deleted: ${filePath}`);
-    // Could emit event to remove from database
+  globalFileWatcher.on("fileDeleted", (filePath) => {
+    const logger = createLogger("FileWatcher");
+    logger.info("File deleted, triggering cleanup", { file: filePath });
+    // TODO: Implement database cleanup for deleted files
+    // Should remove symbols, relationships, and file index entries
+    globalFileWatcher.emit("fileCleanupNeeded", filePath);
   });
-
-  console.log(`👁️  File watching with auto re-indexing enabled for: ${projectPath}`);
 }

@@ -15,7 +15,7 @@
  * - RICH SEMANTIC ANALYSIS: Advanced analysis tables (preserved from original)
  * 
  * MIGRATION STRATEGY:
- * Direct mapping from existing enhanced_symbols table to preserve all C++ complexity
+ * Designed to preserve all C++ analysis capabilities while supporting multi-language
  */
 
 import { sqliteTable, integer, text, real, blob, index, uniqueIndex, primaryKey, foreignKey } from 'drizzle-orm/sqlite-core';
@@ -136,6 +136,11 @@ export const universalSymbols = sqliteTable('universal_symbols', {
   filePathIdx: index('idx_universal_symbols_file_path').on(table.filePath),
   namespaceIdx: index('idx_universal_symbols_namespace').on(table.namespace),
   parentIdx: index('idx_universal_symbols_parent').on(table.parentSymbolId),
+  // Composite indexes for common query patterns
+  projectKindIdx: index('idx_universal_symbols_project_kind').on(table.projectId, table.kind),
+  projectLanguageIdx: index('idx_universal_symbols_project_language').on(table.projectId, table.languageId),
+  fileProjectIdx: index('idx_universal_symbols_file_project').on(table.filePath, table.projectId),
+  namespaceKindIdx: index('idx_universal_symbols_namespace_kind').on(table.namespace, table.kind),
   parentFk: foreignKey({
     columns: [table.parentSymbolId],
     foreignColumns: [table.id],
@@ -194,13 +199,18 @@ export const cppFeatures = sqliteTable('cpp_features', {
   isConstexpr: integer('is_constexpr', { mode: 'boolean' }).default(false),
   isConsteval: integer('is_consteval', { mode: 'boolean' }).default(false),
   isConstinit: integer('is_constinit', { mode: 'boolean' }).default(false),
+  isMutable: integer('is_mutable', { mode: 'boolean' }).default(false),
   
   // C++ Object Model (preserved from original)
   isVirtual: integer('is_virtual', { mode: 'boolean' }).default(false),
+  isPureVirtual: integer('is_pure_virtual', { mode: 'boolean' }).default(false),
   isOverride: integer('is_override', { mode: 'boolean' }).default(false),
   isFinal: integer('is_final', { mode: 'boolean' }).default(false),
+  isDeleted: integer('is_deleted', { mode: 'boolean' }).default(false),
+  isDefaulted: integer('is_defaulted', { mode: 'boolean' }).default(false),
   isStatic: integer('is_static', { mode: 'boolean' }).default(false),
   isInline: integer('is_inline', { mode: 'boolean' }).default(false),
+  isExplicit: integer('is_explicit', { mode: 'boolean' }).default(false),
   isFriend: integer('is_friend', { mode: 'boolean' }).default(false),
   
   // C++ Special Members (preserved from original)
@@ -214,6 +224,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   isTemplate: integer('is_template', { mode: 'boolean' }).default(false),
   isTemplateSpecialization: integer('is_template_specialization', { mode: 'boolean' }).default(false),
   templateParams: text('template_params', { mode: 'json' }).$type<any[]>(),
+  templateParameters: text('template_parameters', { mode: 'json' }).$type<any[]>(), // From migration
+  templateSpecialization: text('template_specialization', { mode: 'json' }).$type<Record<string, any>>(), // From migration
   templateArgs: text('template_args', { mode: 'json' }).$type<any[]>(),
   
   // C++ Enums (preserved from original)
@@ -230,6 +242,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   // C++ Modules (C++20/23) (preserved from original)
   isModuleInterface: integer('is_module_interface', { mode: 'boolean' }).default(false),
   moduleName: text('module_name'),
+  isModuleImplementation: integer('is_module_implementation', { mode: 'boolean' }).default(false),
+  isModulePartition: integer('is_module_partition', { mode: 'boolean' }).default(false),
   isModuleExported: integer('is_module_exported', { mode: 'boolean' }).default(false),
   exportNamespace: text('export_namespace'),
   
@@ -243,6 +257,8 @@ export const cppFeatures = sqliteTable('cpp_features', {
   // C++ Concepts (C++20) (preserved from original)
   isConcept: integer('is_concept', { mode: 'boolean' }).default(false),
   conceptConstraints: text('concept_constraints'),
+  requiresConcepts: text('requires_concepts', { mode: 'json' }).$type<any[]>(), // From migration
+  conceptDefinition: text('concept_definition'), // From migration
   
   // Domain-Specific Types (preserved from original)
   isVulkanType: integer('is_vulkan_type', { mode: 'boolean' }).default(false),
@@ -260,6 +276,11 @@ export const cppFeatures = sqliteTable('cpp_features', {
   usesGpuCompute: integer('uses_gpu_compute', { mode: 'boolean' }).default(false),
   hasCpuFallback: integer('has_cpu_fallback', { mode: 'boolean' }).default(false),
   isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
+  
+  // Additional features from migration
+  storageClass: text('storage_class'), // 'static', 'extern', 'thread_local'
+  linkageType: text('linkage_type'), // 'internal', 'external', 'none'
+  callingConvention: text('calling_convention'), // '__cdecl', '__stdcall', etc.
   
   // Metadata
   lastAnalyzed: integer('last_analyzed', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
@@ -280,68 +301,123 @@ export const cppFeatures = sqliteTable('cpp_features', {
 export const pythonFeatures = sqliteTable('python_features', {
   symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   
-  // Python decorators
-  decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
-  
-  // Python type hints
-  typeHint: text('type_hint'),
-  returnTypeHint: text('return_type_hint'),
-  
-  // Python async/await
-  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  // Function/Method features
   isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
   isCoroutine: integer('is_coroutine', { mode: 'boolean' }).default(false),
-  
-  // Python special methods
-  isDunder: integer('is_dunder', { mode: 'boolean' }).default(false),
-  isProperty: integer('is_property', { mode: 'boolean' }).default(false),
-  isClassmethod: integer('is_classmethod', { mode: 'boolean' }).default(false),
+  isLambda: integer('is_lambda', { mode: 'boolean' }).default(false),
   isStaticmethod: integer('is_staticmethod', { mode: 'boolean' }).default(false),
+  isClassmethod: integer('is_classmethod', { mode: 'boolean' }).default(false),
+  isProperty: integer('is_property', { mode: 'boolean' }).default(false),
   
-  // Python metaclasses
-  metaclass: text('metaclass'),
+  // Decorators
+  decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
   
-  // Python docstrings
+  // Type hints
+  typeAnnotations: text('type_annotations', { mode: 'json' }).$type<Record<string, any>>(),
+  returnAnnotation: text('return_annotation'),
+  
+  // Documentation
   docstring: text('docstring'),
+  docstringFormat: text('docstring_format'), // 'google', 'numpy', 'sphinx', etc.
   
-  // Python imports
+  // Parameters
+  parameters: text('parameters', { mode: 'json' }).$type<any[]>(), // with default values, *args, **kwargs
+  hasVarargs: integer('has_varargs', { mode: 'boolean' }).default(false),
+  hasKwargs: integer('has_kwargs', { mode: 'boolean' }).default(false),
+  
+  // Class features
+  baseClasses: text('base_classes', { mode: 'json' }).$type<string[]>(),
+  metaclass: text('metaclass'),
+  isDataclass: integer('is_dataclass', { mode: 'boolean' }).default(false),
+  isNamedtuple: integer('is_namedtuple', { mode: 'boolean' }).default(false),
+  isEnum: integer('is_enum', { mode: 'boolean' }).default(false),
+  
+  // Module features
+  isDunderAll: integer('is_dunder_all', { mode: 'boolean' }).default(false),
+  dunderAllExports: text('dunder_all_exports', { mode: 'json' }).$type<string[]>(),
+  
+  // Context managers
+  isContextManager: integer('is_context_manager', { mode: 'boolean' }).default(false),
+  isAsyncContextManager: integer('is_async_context_manager', { mode: 'boolean' }).default(false),
+  
+  // Legacy compatibility fields
+  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  isDunder: integer('is_dunder', { mode: 'boolean' }).default(false),
+  typeHint: text('type_hint'),
+  returnTypeHint: text('return_type_hint'),
   importFrom: text('import_from'),
   importAs: text('import_as'),
   isRelativeImport: integer('is_relative_import', { mode: 'boolean' }).default(false)
-});
+}, (table) => ({
+  // Indexes from migration
+  generatorIdx: index('idx_python_features_generator').on(table.isGenerator),
+  decoratorsIdx: index('idx_python_features_decorators').on(table.decorators),
+}));
 
 export const typescriptFeatures = sqliteTable('typescript_features', {
   symbolId: integer('symbol_id').primaryKey().references(() => universalSymbols.id, { onDelete: 'cascade' }),
   
-  // TypeScript type system
-  typeAnnotation: text('type_annotation'),
-  genericParams: text('generic_params', { mode: 'json' }).$type<any[]>(),
-  typeConstraints: text('type_constraints', { mode: 'json' }).$type<any[]>(),
-  
-  // TypeScript access modifiers
+  // Type system
   isReadonly: integer('is_readonly', { mode: 'boolean' }).default(false),
   isOptional: integer('is_optional', { mode: 'boolean' }).default(false),
+  typeParameters: text('type_parameters', { mode: 'json' }).$type<any[]>(),
+  typeConstraints: text('type_constraints', { mode: 'json' }).$type<Record<string, any>>(),
   
-  // TypeScript decorators
+  // Function features
+  isArrowFunction: integer('is_arrow_function', { mode: 'boolean' }).default(false),
+  isGenerator: integer('is_generator', { mode: 'boolean' }).default(false),
+  
+  // Decorators (experimental)
   decorators: text('decorators', { mode: 'json' }).$type<string[]>(),
   
-  // TypeScript modules
-  isNamespace: integer('is_namespace', { mode: 'boolean' }).default(false),
-  exportType: text('export_type'), // 'named', 'default', 'star'
+  // Access modifiers (TypeScript)
+  accessModifier: text('access_modifier'), // 'public', 'private', 'protected'
   
-  // TypeScript advanced types
+  // Class features
+  isAbstract: integer('is_abstract', { mode: 'boolean' }).default(false),
+  implementsInterfaces: text('implements_interfaces', { mode: 'json' }).$type<string[]>(),
+  extendsClasses: text('extends_classes', { mode: 'json' }).$type<string[]>(),
+  
+  // Interface/Type features
+  isInterface: integer('is_interface', { mode: 'boolean' }).default(false),
+  isTypeAlias: integer('is_type_alias', { mode: 'boolean' }).default(false),
+  isEnum: integer('is_enum', { mode: 'boolean' }).default(false),
+  isNamespace: integer('is_namespace', { mode: 'boolean' }).default(false),
+  
+  // Module system
+  exportType: text('export_type'), // 'named', 'default', 'namespace', 'type-only'
+  importType: text('import_type'), // 'named', 'default', 'namespace', 'type-only', 'side-effect'
+  moduleType: text('module_type'), // 'commonjs', 'esm', 'umd', 'amd'
+  
+  // JSX/React specific
+  isReactComponent: integer('is_react_component', { mode: 'boolean' }).default(false),
+  isReactHook: integer('is_react_hook', { mode: 'boolean' }).default(false),
+  jsxReturnType: text('jsx_return_type'),
+  
+  // Additional TypeScript features
+  isGeneric: integer('is_generic', { mode: 'boolean' }).default(false),
+  isTypeGuard: integer('is_type_guard', { mode: 'boolean' }).default(false),
+  isAssertion: integer('is_assertion', { mode: 'boolean' }).default(false),
+  
+  // Documentation
+  jsDocComments: text('jsdoc_comments', { mode: 'json' }).$type<Record<string, any>>(),
+  tsDocComments: text('tsdoc_comments', { mode: 'json' }).$type<Record<string, any>>(),
+  
+  // Legacy compatibility fields
+  typeAnnotation: text('type_annotation'),
+  genericParams: text('generic_params', { mode: 'json' }).$type<any[]>(),
   isUnionType: integer('is_union_type', { mode: 'boolean' }).default(false),
   isIntersectionType: integer('is_intersection_type', { mode: 'boolean' }).default(false),
   isConditionalType: integer('is_conditional_type', { mode: 'boolean' }).default(false),
   isMappedType: integer('is_mapped_type', { mode: 'boolean' }).default(false),
-  
-  // TypeScript utility types
   utilityType: text('utility_type'),
-  
-  // TypeScript ambient declarations
   isAmbient: integer('is_ambient', { mode: 'boolean' }).default(false),
   isDeclaration: integer('is_declaration', { mode: 'boolean' }).default(false)
-});
+}, (table) => ({
+  // Indexes from migration
+  reactIdx: index('idx_typescript_features_react').on(table.isReactComponent),
+  interfaceIdx: index('idx_typescript_features_interface').on(table.isInterface),
+}));
 
 // ============================================================================
 // CROSS-LANGUAGE FEATURES
@@ -352,8 +428,12 @@ export const apiBindings = sqliteTable('api_bindings', {
   projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   
   // Source and target symbols
-  sourceSymbolId: integer('source_symbol_id').references(() => universalSymbols.id, { onDelete: 'cascade' }),
-  targetSymbolId: integer('target_symbol_id').references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  sourceSymbolId: text('source_symbol_id'),
+  targetSymbolId: text('target_symbol_id'),
+  
+  // Language information
+  sourceLanguage: text('source_language').notNull(),
+  targetLanguage: text('target_language').notNull(),
   
   // Binding details
   bindingType: text('binding_type').notNull(), // 'ffi', 'rest', 'grpc', 'websocket'
@@ -361,21 +441,57 @@ export const apiBindings = sqliteTable('api_bindings', {
   endpoint: text('endpoint'),
   
   // Type mapping
-  typeMapping: text('type_mapping', { mode: 'json' }).$type<Record<string, any>>(),
+  typeMapping: text('type_mapping').notNull(),
   
   // Serialization info
   serializationFormat: text('serialization_format'), // 'json', 'protobuf', 'msgpack'
   schemaDefinition: text('schema_definition'),
   
+  // Detection metadata
+  confidence: real('confidence').notNull().default(1.0),
+  detectorName: text('detector_name').notNull(),
+  detectionReason: text('detection_reason'),
+  
   // Metadata
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
-  confidence: real('confidence').default(1.0),
-  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`)
+  metadata: text('metadata'),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text('updated_at').default(sql`CURRENT_TIMESTAMP`)
 }, (table) => ({
   projectIdx: index('idx_api_bindings_project').on(table.projectId),
   sourceIdx: index('idx_api_bindings_source').on(table.sourceSymbolId),
   targetIdx: index('idx_api_bindings_target').on(table.targetSymbolId),
-  typeIdx: index('idx_api_bindings_type').on(table.bindingType)
+  typeIdx: index('idx_api_bindings_type').on(table.bindingType),
+  languagesIdx: index('idx_api_bindings_languages').on(table.sourceLanguage, table.targetLanguage)
+}));
+
+// Cross-language binding features from migration 003
+export const crossLanguageBindings = sqliteTable('cross_language_bindings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  bindingType: text('binding_type').notNull(), // 'ffi', 'pybind11', 'ctypes', 'wasm', 'napi', etc.
+  
+  // Binding metadata
+  bindingLibrary: text('binding_library'),
+  bindingVersion: text('binding_version'),
+  
+  // Type mapping
+  typeMapping: text('type_mapping', { mode: 'json' }).$type<Record<string, any>>(),
+  
+  // Performance characteristics
+  isAsync: integer('is_async', { mode: 'boolean' }).default(false),
+  overheadCategory: text('overhead_category'), // 'low', 'medium', 'high'
+  
+  // Additional metadata
+  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
+  confidence: real('confidence').default(1.0),
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`)
+}, (table) => ({
+  fromSymbolIdx: index('idx_bindings_from_symbol').on(table.fromSymbolId),
+  toSymbolIdx: index('idx_bindings_to_symbol').on(table.toSymbolId),
+  typeIdx: index('idx_bindings_type').on(table.bindingType)
 }));
 
 export const crossLanguageDeps = sqliteTable('cross_language_deps', {
@@ -383,24 +499,56 @@ export const crossLanguageDeps = sqliteTable('cross_language_deps', {
   projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
   
   // Source and target languages
-  fromLanguageId: integer('from_language_id').references(() => languages.id),
-  toLanguageId: integer('to_language_id').references(() => languages.id),
+  fromLanguage: text('from_language').notNull(),
+  toLanguage: text('to_language').notNull(),
   
   // Dependency details
   dependencyType: text('dependency_type').notNull(), // 'build', 'runtime', 'interface'
-  dependencyPath: text('dependency_path'),
+  dependencyPath: text('dependency_path').notNull(),
   
   // Symbols involved
-  fromSymbolId: integer('from_symbol_id').references(() => universalSymbols.id),
-  toSymbolId: integer('to_symbol_id').references(() => universalSymbols.id),
+  fromSymbolId: text('from_symbol_id'),
+  toSymbolId: text('to_symbol_id'),
   
   // Metadata
-  metadata: text('metadata', { mode: 'json' }).$type<Record<string, any>>(),
+  metadata: text('metadata'),
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`)
 }, (table) => ({
-  projectIdx: index('idx_cross_language_deps_project').on(table.projectId),
-  fromLangIdx: index('idx_cross_language_deps_from_lang').on(table.fromLanguageId),
-  toLangIdx: index('idx_cross_language_deps_to_lang').on(table.toLanguageId)
+  projectIdx: index('idx_cross_deps_project').on(table.projectId),
+  languagesIdx: index('idx_cross_deps_languages').on(table.fromLanguage, table.toLanguage)
+}));
+
+// Language-specific patterns from migration 003
+export const languagePatterns = sqliteTable('language_patterns', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  languageId: integer('language_id').notNull().references(() => languages.id),
+  patternName: text('pattern_name').notNull(),
+  patternCategory: text('pattern_category').notNull(), // 'idiom', 'anti-pattern', 'best-practice'
+  
+  // Pattern definition
+  description: text('description'),
+  detection: text('detection', { mode: 'json' }).$type<Record<string, any>>(), // JSON object with detection rules
+  
+  // Examples and fixes
+  examples: text('examples', { mode: 'json' }).$type<any[]>(), // JSON array of code examples
+  recommendation: text('recommendation'),
+  autoFixAvailable: integer('auto_fix_available', { mode: 'boolean' }).default(false),
+  
+  // Severity and impact
+  severity: text('severity'), // 'info', 'warning', 'error'
+  performanceImpact: text('performance_impact'), // 'none', 'low', 'medium', 'high'
+  securityImpact: text('security_impact'), // 'none', 'low', 'medium', 'high'
+  
+  // Usage tracking
+  usageCount: integer('usage_count').default(0),
+  lastDetected: integer('last_detected', { mode: 'timestamp' }),
+  
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`)
+}, (table) => ({
+  langPatternIdx: index('idx_language_patterns_lang_pattern').on(table.languageId, table.patternName),
+  categoryIdx: index('idx_language_patterns_category').on(table.patternCategory),
+  severityIdx: index('idx_language_patterns_severity').on(table.severity)
 }));
 
 export const semanticEquivalents = sqliteTable('semantic_equivalents', {
@@ -1029,6 +1177,133 @@ export const patternSymbolsRelations = relations(patternSymbols, ({ one }) => ({
   })
 }));
 
+// ============================================================================
+// SEMANTIC INTELLIGENCE TABLES
+// ============================================================================
+
+// Semantic clusters - groups of semantically similar symbols
+export const semanticClusters = sqliteTable('semantic_clusters', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  clusterName: text('cluster_name').notNull(),
+  clusterType: text('cluster_type').notNull(), // 'function_similarity', 'data_structure', 'pattern_based', etc.
+  quality: real('quality').notNull(), // Cluster quality score (0-1)
+  symbolCount: integer('symbol_count').notNull().default(0),
+  similarityThreshold: real('similarity_threshold').notNull(),
+  centroidEmbedding: blob('centroid_embedding', { mode: 'buffer' }), // Base64 encoded centroid embedding
+  description: text('description'),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_clusters_project_type').on(table.projectId, table.clusterType),
+  qualityIdx: index('idx_semantic_clusters_quality').on(table.quality),
+  nameIdx: index('idx_semantic_clusters_name').on(table.clusterName),
+}));
+
+// Cluster membership - many-to-many relationship between symbols and clusters
+export const clusterMembership = sqliteTable('cluster_membership', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  clusterId: integer('cluster_id').notNull().references(() => semanticClusters.id, { onDelete: 'cascade' }),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  similarity: real('similarity').notNull(),
+  role: text('role').default('member'),
+  joinedAt: integer('joined_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  clusterIdx: index('idx_cluster_membership_cluster').on(table.clusterId),
+  symbolIdx: index('idx_cluster_membership_symbol').on(table.symbolId),
+  similarityIdx: index('idx_cluster_membership_similarity').on(table.similarity),
+  uniqueIdx: uniqueIndex('idx_cluster_membership_unique').on(table.clusterId, table.symbolId),
+}));
+
+// Semantic insights - AI-generated insights about code quality and architecture
+export const semanticInsights = sqliteTable('semantic_insights', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  insightType: text('insight_type').notNull(), // 'refactoring_opportunity', 'architectural_violation', 'performance_concern', 'code_smell'
+  category: text('category').notNull(), // 'architecture', 'performance', 'maintainability', 'quality', 'testing', 'security'
+  severity: text('severity').notNull(), // 'low', 'medium', 'high', 'critical'
+  confidence: real('confidence').notNull(), // AI confidence in the insight (0-1)
+  priority: text('priority').notNull(), // 'low', 'medium', 'high', 'critical'
+  title: text('title').notNull(),
+  description: text('description').notNull(),
+  affectedSymbols: text('affected_symbols'), // JSON array of symbol IDs
+  clusterId: integer('cluster_id').references(() => semanticClusters.id, { onDelete: 'set null' }),
+  metrics: text('metrics'), // JSON object with relevant metrics
+  sourceContext: text('source_context'), // Code context that triggered the insight
+  reasoning: text('reasoning'), // AI reasoning for the insight
+  contextLine: integer('context_line'),
+  contextFile: text('context_file'),
+  contextSnippet: text('context_snippet'),
+  relatedInsights: text('related_insights'), // JSON array of related insight IDs
+  detectedAt: integer('detected_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp' }),
+  resolution: text('resolution'),
+  status: text('status').default('active'), // 'active', 'resolved', 'ignored', 'false_positive'
+  userFeedback: integer('user_feedback'), // -1: negative, 0: neutral, 1: positive
+  feedbackComment: text('feedback_comment'),
+  feedbackTimestamp: integer('feedback_timestamp', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  projectTypeIdx: index('idx_semantic_insights_project_type').on(table.projectId, table.insightType),
+  severityIdx: index('idx_semantic_insights_severity').on(table.severity),
+  statusIdx: index('idx_semantic_insights_status').on(table.status),
+  feedbackIdx: index('idx_semantic_insights_feedback').on(table.userFeedback),
+  confidenceIdx: index('idx_semantic_insights_confidence').on(table.confidence),
+}));
+
+// Insight recommendations - specific actionable recommendations for insights
+export const insightRecommendations = sqliteTable('insight_recommendations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  insightId: integer('insight_id').notNull().references(() => semanticInsights.id, { onDelete: 'cascade' }),
+  action: text('action').notNull(),
+  description: text('description').notNull(),
+  effort: text('effort').notNull(), // 'low', 'medium', 'high'
+  impact: text('impact').notNull(), // 'low', 'medium', 'high'
+  priority: integer('priority').notNull(),
+  exampleCode: text('example_code'),
+  relatedSymbols: text('related_symbols'), // JSON array of symbol IDs
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  insightIdx: index('idx_insight_recommendations_insight').on(table.insightId),
+  priorityIdx: index('idx_insight_recommendations_priority').on(table.priority),
+}));
+
+// Semantic relationships - discovered semantic relationships between symbols
+export const semanticRelationships = sqliteTable('semantic_relationships', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  projectId: integer('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
+  fromSymbolId: integer('from_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  toSymbolId: integer('to_symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  semanticType: text('semantic_type').notNull(), // 'similar_purpose', 'complementary', 'alternative_implementation', etc.
+  strength: real('strength').notNull(), // Relationship strength (0-1)
+  evidence: text('evidence'), // JSON array of evidence
+  discoveredAt: integer('discovered_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  fromIdx: index('idx_semantic_relationships_from').on(table.fromSymbolId),
+  toIdx: index('idx_semantic_relationships_to').on(table.toSymbolId),
+  typeIdx: index('idx_semantic_relationships_type').on(table.semanticType),
+  strengthIdx: index('idx_semantic_relationships_strength').on(table.strength),
+  projectIdx: index('idx_semantic_relationships_project').on(table.projectId),
+  uniqueIdx: uniqueIndex('idx_semantic_relationships_unique').on(table.fromSymbolId, table.toSymbolId, table.semanticType),
+}));
+
+// Code embeddings - Vector embeddings for semantic similarity
+export const codeEmbeddings = sqliteTable('code_embeddings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  symbolId: integer('symbol_id').notNull().references(() => universalSymbols.id, { onDelete: 'cascade' }),
+  embeddingType: text('embedding_type').notNull(), // 'semantic', 'structural', 'combined'
+  embedding: blob('embedding', { mode: 'buffer' }).notNull(), // Base64 encoded vector
+  dimensions: integer('dimensions').notNull(),
+  modelVersion: text('model_version').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).default(sql`(strftime('%s', 'now'))`),
+}, (table) => ({
+  symbolIdx: index('idx_code_embeddings_symbol').on(table.symbolId),
+  typeIdx: index('idx_code_embeddings_type').on(table.embeddingType),
+  uniqueIdx: uniqueIndex('idx_code_embeddings_unique').on(table.symbolId, table.embeddingType),
+}));
+
 // Export all table types for use in application
 export type Project = typeof projects.$inferSelect;
 export type NewProject = typeof projects.$inferInsert;
@@ -1040,10 +1315,26 @@ export type UniversalRelationship = typeof universalRelationships.$inferSelect;
 export type NewUniversalRelationship = typeof universalRelationships.$inferInsert;
 export type CppFeature = typeof cppFeatures.$inferSelect;
 export type NewCppFeature = typeof cppFeatures.$inferInsert;
+export type SemanticCluster = typeof semanticClusters.$inferSelect;
+export type NewSemanticCluster = typeof semanticClusters.$inferInsert;
+export type ClusterMembership = typeof clusterMembership.$inferSelect;
+export type NewClusterMembership = typeof clusterMembership.$inferInsert;
+export type SemanticInsight = typeof semanticInsights.$inferSelect;
+export type NewSemanticInsight = typeof semanticInsights.$inferInsert;
+export type InsightRecommendation = typeof insightRecommendations.$inferSelect;
+export type NewInsightRecommendation = typeof insightRecommendations.$inferInsert;
+export type SemanticRelationship = typeof semanticRelationships.$inferSelect;
+export type NewSemanticRelationship = typeof semanticRelationships.$inferInsert;
+export type CodeEmbedding = typeof codeEmbeddings.$inferSelect;
+export type NewCodeEmbedding = typeof codeEmbeddings.$inferInsert;
 export type PythonFeature = typeof pythonFeatures.$inferSelect;
 export type NewPythonFeature = typeof pythonFeatures.$inferInsert;
 export type TypescriptFeature = typeof typescriptFeatures.$inferSelect;
 export type NewTypescriptFeature = typeof typescriptFeatures.$inferInsert;
+export type CrossLanguageBinding = typeof crossLanguageBindings.$inferSelect;
+export type NewCrossLanguageBinding = typeof crossLanguageBindings.$inferInsert;
+export type LanguagePattern = typeof languagePatterns.$inferSelect;
+export type NewLanguagePattern = typeof languagePatterns.$inferInsert;
 export type SemanticTagDefinition = typeof semanticTagDefinitions.$inferSelect;
 export type NewSemanticTagDefinition = typeof semanticTagDefinitions.$inferInsert;
 export type DetectedPattern = typeof detectedPatterns.$inferSelect;
