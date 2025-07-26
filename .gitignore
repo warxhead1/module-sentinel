@@ -99,3 +99,9 @@ scripts/verify-*.ts
 target/
 Cargo.lock
 *.pdb
+
+# NAPI-RS build artifacts (platform-specific, should not be committed)
+*.node
+napi-bindings/*.node
+module-sentinel-rust.node
+module-sentinel-rust/napi-bindings/*.node
