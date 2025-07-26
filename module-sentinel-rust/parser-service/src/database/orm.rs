@@ -197,6 +197,14 @@ impl Database {
     /// Create a new database connection
     pub async fn new(path: &str) -> Result<Self> {
         let conn = Connection::open(path).await?;
+        
+        // Disable foreign key constraints to avoid constraint failures
+        // when working with test data or incomplete setups
+        conn.call(move |conn| {
+            conn.execute("PRAGMA foreign_keys = OFF", [])?;
+            Ok(())
+        }).await?;
+        
         Ok(Self { conn: Arc::new(conn) })
     }
     

@@ -661,6 +661,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -693,6 +695,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(format!("struct {}", name)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -710,6 +714,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(format!("enum {}", name)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -747,6 +753,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -764,6 +772,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(format!("class {}", name)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -801,6 +811,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -818,6 +830,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(format!("class {}", name)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -867,6 +881,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(self.get_node_text(node, content, 200)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -896,6 +912,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(self.get_function_signature(node, content)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -914,6 +932,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(self.get_node_text(node, content, 100)),
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -931,6 +951,8 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: None,
+                            language_id,
+                            project_id: 0, // Will be set later in index_project
                             ..Default::default()
                         });
                     }
@@ -955,7 +977,9 @@ impl UnifiedParsingService {
                                     column: node.start_position().column as i32,
                                     end_line: Some(node.end_position().row as i32 + 1),
                                     signature: Some(self.get_node_text(node, content, 200)),
-                                    ..Default::default()
+                                    language_id,
+                            project_id: 0, // Will be set later in index_project
+                            ..Default::default()
                                 });
                             }
                         }
@@ -1385,7 +1409,7 @@ impl UnifiedParsingService {
                             if arg_cursor.node().kind() == "identifier" {
                                 if let Ok(parent_class) = arg_cursor.node().utf8_text(content.as_bytes()) {
                                     relationships.push(crate::database::models::UniversalRelationship {
-                                        project_id: 1,
+                                        project_id: 0, // Will be set later in index_project
                                         from_symbol_id: None,
                                         to_symbol_id: None,
                                         relationship_type: "extends".to_string(),
@@ -1394,7 +1418,7 @@ impl UnifiedParsingService {
                                         context_column: Some(node.start_position().column as i32),
                                         context_snippet: Some(parent_class.to_string()),
                                         metadata: None,
-                                        ..Default::default()
+                            ..Default::default()
                                     });
                                 }
                             }
