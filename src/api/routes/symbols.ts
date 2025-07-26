@@ -3,10 +3,12 @@
  */
 import type { Request, Response } from '../types/express.js';
 import { DatabaseService } from '../services/database.service.js';
-import type { ApiResponse, PaginatedResponse, SearchQuery } from '../../shared/types/api.js';
+import type { ApiResponse, PaginatedResponse } from '../../shared/types/api.js';
+import { createLogger } from '../../utils/logger.js';
 
 export class SymbolsRoutes {
   private dbService: DatabaseService;
+  private logger = createLogger('SymbolsRoutes');
 
   constructor(dbService: DatabaseService) {
     this.dbService = dbService;
@@ -65,7 +67,7 @@ export class SymbolsRoutes {
 
       res.json(response);
     } catch (error) {
-      console.error('Error in searchSymbols:', error);
+      this.logger.error('Error in searchSymbols', error);
       
       const response: ApiResponse = {
         success: false,

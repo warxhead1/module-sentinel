@@ -136,6 +136,11 @@ export const universalSymbols = sqliteTable('universal_symbols', {
   filePathIdx: index('idx_universal_symbols_file_path').on(table.filePath),
   namespaceIdx: index('idx_universal_symbols_namespace').on(table.namespace),
   parentIdx: index('idx_universal_symbols_parent').on(table.parentSymbolId),
+  // Composite indexes for common query patterns
+  projectKindIdx: index('idx_universal_symbols_project_kind').on(table.projectId, table.kind),
+  projectLanguageIdx: index('idx_universal_symbols_project_language').on(table.projectId, table.languageId),
+  fileProjectIdx: index('idx_universal_symbols_file_project').on(table.filePath, table.projectId),
+  namespaceKindIdx: index('idx_universal_symbols_namespace_kind').on(table.namespace, table.kind),
   parentFk: foreignKey({
     columns: [table.parentSymbolId],
     foreignColumns: [table.id],
