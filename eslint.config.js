@@ -1,75 +1,78 @@
-const js = require("@eslint/js");
-const tseslint = require("@typescript-eslint/eslint-plugin");
-const tsparser = require("@typescript-eslint/parser");
+import js from '@eslint/js';
+import typescript from '@typescript-eslint/eslint-plugin';
+import parser from '@typescript-eslint/parser';
 
-module.exports = [
+export default [
   js.configs.recommended,
   {
-    files: ["**/*.ts", "**/*.tsx"],
+    files: ['src/**/*.ts', 'src/**/*.tsx'],
     languageOptions: {
-      parser: tsparser,
+      parser: parser,
       parserOptions: {
         ecmaVersion: 2022,
-        sourceType: "module",
+        sourceType: 'module',
+        project: './tsconfig.json'
       },
+      globals: {
+        // Node.js globals
+        console: 'readonly',
+        process: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        require: 'readonly',
+        module: 'readonly',
+        exports: 'readonly',
+        Buffer: 'readonly',
+        // Timer functions
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        setImmediate: 'readonly',
+        clearImmediate: 'readonly',
+        // TypeScript Node types
+        NodeJS: 'readonly',
+        NodeRequire: 'readonly'
+      }
     },
     plugins: {
-      "@typescript-eslint": tseslint,
+      '@typescript-eslint': typescript
     },
     rules: {
-      // Critical TypeScript rules only
-      "@typescript-eslint/no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
+      ...typescript.configs.recommended.rules,
+      // Allow underscore prefix for intentionally unused variables (CLAUDE.md pattern)
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { 
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_'
+        }
       ],
-
-      // Critical JavaScript rules only
-      "no-debugger": "error",
-      "no-alert": "error",
-      "no-var": "error",
-      "prefer-const": "error",
-
-      // Disable style rules that would cause too many errors
-      "comma-dangle": "off",
-      curly: "off",
-      eqeqeq: "off",
-
-      // Disable rules that conflict with TypeScript
-      "no-undef": "off",
-      "no-unused-vars": "off",
-      "no-console": "off", // We use console for logging
-    },
+      // Allow require() for .node modules (NAPI bindings)
+      '@typescript-eslint/no-var-requires': 'off',
+      // Allow any type for NAPI bindings
+      '@typescript-eslint/no-explicit-any': 'warn',
+      // Prefer const assertions for type safety
+      'prefer-const': 'error',
+      // Disallow console.log in favor of structured logging
+      'no-console': ['error', { allow: ['warn', 'error'] }]
+    }
   },
   {
-    files: ["**/*.js"],
+    files: ['scripts/**/*.js', 'eslint.config.js'],
     languageOptions: {
       ecmaVersion: 2022,
-      sourceType: "module",
-    },
-    rules: {
-      "no-unused-vars": [
-        "error",
-        {
-          argsIgnorePattern: "^_",
-          varsIgnorePattern: "^_",
-        },
-      ],
-      "no-debugger": "error",
-      "no-var": "error",
-      "prefer-const": "error",
-    },
+      sourceType: 'module'
+    }
   },
   {
     ignores: [
-      "dist/**/*",
-      "node_modules/**/*",
-      "dashboard/dist/**/*",
-      "coverage/**/*",
-      "*.config.js",
-      "vite.config.ts",
-    ],
-  },
+      'dist/**/*',
+      'node_modules/**/*',
+      'module-sentinel-rust/**/*',
+      '*.node',
+      'coverage/**/*'
+    ]
+  }
 ];

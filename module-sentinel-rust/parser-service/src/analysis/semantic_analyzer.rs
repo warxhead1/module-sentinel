@@ -286,11 +286,21 @@ impl SemanticAnalyzer {
                 "High code duplication detected ({:.1}%). Consider extracting common functionality into shared modules.",
                 code_reuse_percentage
             ));
+        } else if code_reuse_percentage > 0.0 {
+            recommendations.push(format!(
+                "Low code duplication detected ({:.1}%). Good code organization.",
+                code_reuse_percentage
+            ));
         }
         
         if duplicate_groups.len() > 10 {
             recommendations.push(format!(
                 "Found {} groups of duplicate code. Review these for refactoring opportunities.",
+                duplicate_groups.len()
+            ));
+        } else if duplicate_groups.len() > 0 {
+            recommendations.push(format!(
+                "Found {} groups of duplicate code. Consider consolidating if appropriate.",
                 duplicate_groups.len()
             ));
         }
@@ -301,6 +311,20 @@ impl SemanticAnalyzer {
                     "Strong {} pattern detected across {} symbols. Consider creating an abstraction.",
                     pattern.pattern_type, pattern.symbols.len()
                 ));
+            } else if pattern.confidence > 0.3 && pattern.symbols.len() >= 2 {
+                recommendations.push(format!(
+                    "Detected {} pattern across {} symbols with {:.1}% confidence.",
+                    pattern.pattern_type, pattern.symbols.len(), pattern.confidence * 100.0
+                ));
+            }
+        }
+        
+        // Always provide basic recommendations if nothing else is found
+        if recommendations.is_empty() {
+            if total_symbols > 0 {
+                recommendations.push("Code analysis completed. Consider adding more structured patterns for better maintainability.".to_string());
+            } else {
+                recommendations.push("No symbols found for analysis.".to_string());
             }
         }
         

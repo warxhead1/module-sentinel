@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use serde::{Serialize, Deserialize};
 
 use crate::database::{SemanticDeduplicator, DuplicateGroup};
 use crate::parsers::tree_sitter::{CodeEmbedder, Symbol};
@@ -73,11 +74,11 @@ pub struct CachedSemanticDeduplicator {
     stats: Arc<RwLock<CacheStatistics>>,
 }
 
-#[derive(Debug, Clone)]
-struct CachedSymbolData {
-    normalized_signature: String,
-    embedding_hash: u64,
-    similarity_features: Vec<f32>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedSymbolData {
+    pub normalized_signature: String,
+    pub embedding_hash: u64,
+    pub similarity_features: Vec<f32>,
 }
 
 impl CachedSemanticDeduplicator {
@@ -350,6 +351,96 @@ impl CachedSemanticDeduplicator {
         stats.cache_evictions += total_removed;
         
         total_removed
+    }
+    
+    /// Populate similarity cache from loaded entries
+    pub async fn populate_similarity_cache(&self, entries: Vec<((String, String), f32)>) -> Result<u64> {
+        let mut cache = self.similarity_cache.write().await;
+        let mut loaded_count = 0;
+        
+        for ((symbol1_id, symbol2_id), score) in entries {
+            // Don't exceed max cache size
+            if cache.len() >= self.config.max_similarity_cache_size {
+                break;
+            }
+            
+            cache.put((symbol1_id, symbol2_id), CacheEntry::new(score));
+            loaded_count += 1;
+        }
+        
+        // Update statistics to reflect pre-loaded cache
+        let mut stats = self.stats.write().await;
+        stats.cache_insertions += loaded_count;
+        
+        Ok(loaded_count)
+    }
+    
+    /// Populate symbol cache from loaded entries
+    pub async fn populate_symbol_cache(&self, entries: Vec<(String, CachedSymbolData)>) -> Result<u64> {
+        let mut cache = self.symbol_cache.write().await;
+        let mut loaded_count = 0;
+        
+        for (symbol_id, data) in entries {
+            // Don't exceed max cache size
+            if cache.len() >= self.config.max_symbol_cache_size {
+                break;
+            }
+            
+            cache.put(symbol_id, CacheEntry::new(data));
+            loaded_count += 1;
+        }
+        
+        // Update statistics to reflect pre-loaded cache
+        let mut stats = self.stats.write().await;
+        stats.cache_insertions += loaded_count;
+        
+        Ok(loaded_count)
+    }
+    
+    /// Populate duplicate groups cache from loaded entries
+    pub async fn populate_groups_cache(&self, entries: Vec<(String, Vec<DuplicateGroup>)>) -> Result<u64> {
+        let mut cache = self.groups_cache.write().await;
+        let mut loaded_count = 0;
+        
+        for (hash, groups) in entries {
+            // Don't exceed max cache size (arbitrary limit of 1000 for groups)
+            if cache.len() >= 1000 {
+                break;
+            }
+            
+            cache.put(hash, CacheEntry::new(groups));
+            loaded_count += 1;
+        }
+        
+        // Update statistics to reflect pre-loaded cache
+        let mut stats = self.stats.write().await;
+        stats.cache_insertions += loaded_count;
+        
+        Ok(loaded_count)
+    }
+    
+    /// Extract similarity cache entries for persistence
+    pub async fn extract_similarity_cache(&self) -> Vec<((String, String), f32, u64)> {
+        let cache = self.similarity_cache.read().await;
+        cache.iter()
+            .map(|((s1, s2), entry)| ((s1.clone(), s2.clone()), entry.value, entry.access_count))
+            .collect()
+    }
+    
+    /// Extract symbol cache entries for persistence
+    pub async fn extract_symbol_cache(&self) -> Vec<(String, CachedSymbolData, u64)> {
+        let cache = self.symbol_cache.read().await;
+        cache.iter()
+            .map(|(id, entry)| (id.clone(), entry.value.clone(), entry.access_count))
+            .collect()
+    }
+    
+    /// Extract duplicate groups cache entries for persistence
+    pub async fn extract_groups_cache(&self) -> Vec<(String, Vec<DuplicateGroup>, u64)> {
+        let cache = self.groups_cache.read().await;
+        cache.iter()
+            .map(|(hash, entry)| (hash.clone(), entry.value.clone(), entry.access_count))
+            .collect()
     }
     
     // Helper methods

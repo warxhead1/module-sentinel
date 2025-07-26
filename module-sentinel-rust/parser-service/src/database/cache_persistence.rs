@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use crate::database::{
     orm::{Database, QueryBuilder, Model, DatabaseValue},
-    cache::{CachedSemanticDeduplicator, CacheStatistics},
+    cache::{CachedSemanticDeduplicator, CacheStatistics, lru_cache::CachedSymbolData},
     DuplicateGroup,
 };
 
@@ -183,12 +183,121 @@ impl CachePersistenceManager {
         // Get cache statistics to determine what to persist
         let stats = self.cache.get_cache_statistics().await;
         
-        // Persist high-value cache entries (frequently accessed)
-        // This is a placeholder - in a real implementation, we'd access the internal
-        // cache structures and persist the most valuable entries
-        
         println!("Cache persistence: {:.2}% hit rate", 
                  stats.similarity_cache_hit_rate * 100.0);
+        
+        // Extract cache entries from all cache types
+        let similarity_entries = self.cache.extract_similarity_cache().await;
+        let symbol_entries = self.cache.extract_symbol_cache().await;
+        let group_entries = self.cache.extract_groups_cache().await;
+        
+        let mut total_persisted = 0;
+        
+        // Persist similarity cache entries
+        for ((symbol1, symbol2), score, access_count) in similarity_entries {
+            // Only persist frequently accessed entries
+            if access_count < 2 {
+                continue;
+            }
+            
+            let cache_key = format!("{}:{}", symbol1, symbol2);
+            let cached_value = serde_json::to_string(&score)?;
+            
+            let entry = CacheEntry {
+                cache_key,
+                cache_type: "similarity".to_string(),
+                cached_value,
+                access_count: access_count as i64,
+                last_accessed: chrono::Utc::now().to_rfc3339(),
+                expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                ..Default::default()
+            };
+            
+            if let Err(e) = self.upsert_cache_entry(entry).await {
+                eprintln!("Failed to persist similarity cache entry: {}", e);
+            } else {
+                total_persisted += 1;
+            }
+        }
+        
+        // Persist symbol cache entries
+        for (symbol_id, data, access_count) in symbol_entries {
+            // Only persist frequently accessed entries
+            if access_count < 2 {
+                continue;
+            }
+            
+            let cached_value = serde_json::to_string(&data)?;
+            
+            let entry = CacheEntry {
+                cache_key: symbol_id,
+                cache_type: "symbol".to_string(),
+                cached_value,
+                access_count: access_count as i64,
+                last_accessed: chrono::Utc::now().to_rfc3339(),
+                expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                ..Default::default()
+            };
+            
+            if let Err(e) = self.upsert_cache_entry(entry).await {
+                eprintln!("Failed to persist symbol cache entry: {}", e);
+            } else {
+                total_persisted += 1;
+            }
+        }
+        
+        // Persist duplicate group cache entries
+        for (hash, groups, access_count) in group_entries {
+            // Only persist frequently accessed entries
+            if access_count < 2 {
+                continue;
+            }
+            
+            let cached_value = serde_json::to_string(&groups)?;
+            
+            let entry = CacheEntry {
+                cache_key: hash,
+                cache_type: "duplicate_group".to_string(),
+                cached_value,
+                access_count: access_count as i64,
+                last_accessed: chrono::Utc::now().to_rfc3339(),
+                expires_at: (chrono::Utc::now() + chrono::Duration::hours(24)).to_rfc3339(),
+                ..Default::default()
+            };
+            
+            if let Err(e) = self.upsert_cache_entry(entry).await {
+                eprintln!("Failed to persist duplicate group cache entry: {}", e);
+            } else {
+                total_persisted += 1;
+            }
+        }
+        
+        println!("Persisted {} cache entries to database", total_persisted);
+        
+        Ok(())
+    }
+    
+    /// Helper method to upsert a cache entry
+    async fn upsert_cache_entry(&self, entry: CacheEntry) -> Result<()> {
+        // Try to update existing entry first
+        let existing = self.db.find_all(
+            QueryBuilder::<CacheEntry>::new()
+                .where_eq("cache_key", entry.cache_key.clone())
+                .where_eq("cache_type", entry.cache_type.clone())
+                .limit(1)
+        ).await?;
+        
+        if let Some(mut existing_entry) = existing.into_iter().next() {
+            // Update existing entry
+            existing_entry.cached_value = entry.cached_value;
+            existing_entry.access_count = entry.access_count;
+            existing_entry.last_accessed = entry.last_accessed;
+            existing_entry.expires_at = entry.expires_at;
+            self.db.update(&existing_entry).await?;
+        } else {
+            // Insert new entry
+            self.db.insert(entry).await?;
+        }
         
         Ok(())
     }
@@ -205,8 +314,70 @@ impl CachePersistenceManager {
         
         println!("Loaded {} cache entries from database", recent_entries.len());
         
-        // TODO: Deserialize and populate the actual cache structures
-        // This would require access to the internal cache implementation
+        // Group entries by cache type
+        let mut similarity_entries = Vec::new();
+        let mut symbol_entries = Vec::new();
+        let mut group_entries = Vec::new();
+        
+        for entry in recent_entries {
+            match entry.cache_type.as_str() {
+                "similarity" => {
+                    // Parse cache key format: "file::symbol1:file::symbol2" -> split on last ':'
+                    if let Some(last_colon_pos) = entry.cache_key.rfind(':') {
+                        let symbol1 = &entry.cache_key[..last_colon_pos];
+                        let symbol2 = &entry.cache_key[last_colon_pos + 1..];
+                        
+                        // Try to parse as float directly (not JSON)
+                        if let Ok(score) = entry.cached_value.parse::<f32>() {
+                            similarity_entries.push(((symbol1.to_string(), symbol2.to_string()), score));
+                        } else if let Ok(score) = serde_json::from_str::<f32>(&entry.cached_value) {
+                            similarity_entries.push(((symbol1.to_string(), symbol2.to_string()), score));
+                        } else {
+                            eprintln!("Failed to parse similarity score from: {}", entry.cached_value);
+                        }
+                    } else {
+                        eprintln!("Invalid cache key format: {}", entry.cache_key);
+                    }
+                }
+                "symbol" => {
+                    if let Ok(data) = serde_json::from_str::<CachedSymbolData>(&entry.cached_value) {
+                        symbol_entries.push((entry.cache_key, data));
+                    }
+                }
+                "duplicate_group" => {
+                    if let Ok(groups) = serde_json::from_str::<Vec<DuplicateGroup>>(&entry.cached_value) {
+                        group_entries.push((entry.cache_key, groups));
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Populate the actual cache structures
+        let mut total_loaded = 0;
+        
+        println!("Attempting to populate caches: {} similarity, {} symbol, {} group entries", 
+                 similarity_entries.len(), symbol_entries.len(), group_entries.len());
+        
+        if !similarity_entries.is_empty() {
+            let loaded = self.cache.populate_similarity_cache(similarity_entries).await?;
+            println!("Populated {} similarity cache entries", loaded);
+            total_loaded += loaded;
+        }
+        
+        if !symbol_entries.is_empty() {
+            let loaded = self.cache.populate_symbol_cache(symbol_entries).await?;
+            println!("Populated {} symbol cache entries", loaded);
+            total_loaded += loaded;
+        }
+        
+        if !group_entries.is_empty() {
+            let loaded = self.cache.populate_groups_cache(group_entries).await?;
+            println!("Populated {} duplicate group cache entries", loaded);
+            total_loaded += loaded;
+        }
+        
+        println!("Total cache entries populated: {}", total_loaded);
         
         Ok(())
     }

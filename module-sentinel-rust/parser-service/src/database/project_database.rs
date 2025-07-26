@@ -31,7 +31,11 @@ impl ProjectDatabase {
         Self::create_schema(&db).await?;
         
         // Initialize your advanced caching system
+        #[cfg(feature = "ml")]
         let embedder = Arc::new(CodeEmbedder::load(&ParserLanguage::Rust).await?);
+        #[cfg(not(feature = "ml"))]
+        let embedder = Arc::new(CodeEmbedder::mock_for_testing(&ParserLanguage::Rust).await?);
+        
         let symbol_cache = Arc::new(CachedSemanticDeduplicator::new(
             embedder,
             CacheConfig {
@@ -45,11 +49,20 @@ impl ProjectDatabase {
         let bloom_filter = SymbolBloomFilter::new(100000, 0.01)?; // 100K symbols, 1% false positive
         
         // Initialize cache persistence
-        let cache_persistence = CachePersistenceManager::new(
+        let cache_persistence = match CachePersistenceManager::new(
             db.clone(),
             Arc::clone(&symbol_cache),
             300, // Persist every 5 minutes
-        ).await.ok().map(Arc::new);
+        ).await {
+            Ok(manager) => {
+                println!("Cache persistence manager initialized successfully");
+                Some(Arc::new(manager))
+            }
+            Err(e) => {
+                eprintln!("Failed to initialize cache persistence: {}", e);
+                None
+            }
+        };
         
         // Start persistence task if enabled
         if let Some(ref persistence) = cache_persistence {
@@ -352,6 +365,20 @@ impl ProjectDatabase {
         
         Ok(stored_symbols)
     }
+
+    /// Store a single UniversalSymbol directly
+    pub async fn store_universal_symbol(&self, symbol: &UniversalSymbol) -> Result<UniversalSymbol> {
+        // Insert the symbol directly
+        let inserted = self.db.insert(symbol.clone()).await?;
+        Ok(inserted)
+    }
+    
+    /// Store a single UniversalRelationship directly
+    pub async fn store_universal_relationship(&self, relationship: &UniversalRelationship) -> Result<UniversalRelationship> {
+        // Insert the relationship directly
+        let inserted = self.db.insert(relationship.clone()).await?;
+        Ok(inserted)
+    }
     
     /// Find duplicates across the entire project using your advanced deduplication
     pub async fn find_duplicates_across_project(&self, project_id: i32) -> Result<Vec<crate::database::DuplicateGroup>> {
@@ -494,6 +521,50 @@ impl ProjectDatabase {
         let mut all_relationships = outgoing;
         all_relationships.extend(incoming);
         Ok(all_relationships)
+    }
+
+    /// Get all relationships for a project
+    pub async fn get_all_relationships(&self, project_id: i32) -> Result<Vec<UniversalRelationship>> {
+        self.db.find_all(
+            QueryBuilder::<UniversalRelationship>::new()
+                .where_eq("project_id", project_id)
+        ).await
+    }
+
+    /// Get symbol count for a project
+    pub async fn get_symbol_count(&self, project_id: i32) -> Result<usize> {
+        let count = self.db.count(
+            QueryBuilder::<UniversalSymbol>::new()
+                .where_eq("project_id", project_id)
+        ).await?;
+        
+        Ok(count as usize)
+    }
+
+    /// Simple symbol search by name pattern
+    pub async fn search_symbols_simple(&self, query: &str, project_id: i32, limit: usize) -> Result<Vec<UniversalSymbol>> {
+        let mut query_builder = QueryBuilder::<UniversalSymbol>::new()
+            .where_eq("project_id", project_id)
+            .limit(limit as i64);
+        
+        // If query is not empty, add name filter
+        if !query.is_empty() {
+            // For now, use a simple contains search
+            // In a real implementation, we'd use SQLite's LIKE or FTS
+            let symbols = self.db.find_all(query_builder).await?;
+            
+            // Filter in memory for now (not ideal for large datasets)
+            let filtered: Vec<UniversalSymbol> = symbols.into_iter()
+                .filter(|s| s.name.to_lowercase().contains(&query.to_lowercase()) ||
+                           s.qualified_name.to_lowercase().contains(&query.to_lowercase()))
+                .take(limit)
+                .collect();
+            
+            Ok(filtered)
+        } else {
+            // Return all symbols up to limit
+            self.db.find_all(query_builder).await
+        }
     }
     
     /// Get project statistics

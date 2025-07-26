@@ -5,24 +5,25 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "module-sentinel-mcp": "dist/index.js",
-    "module-sentinel-config": "dist/cli/config-manager.js"
+    "module-sentinel-mcp": "dist/index.js"
   },
   "scripts": {
     "build": "npm run build:rust && tsc && npm run build:dashboard",
-    "build:rust": "napi build --platform --release --pipe \"prettier -w\"",
-    "build:rust:debug": "napi build --platform --pipe \"prettier -w\"",
+    "build:rust": "node scripts/build-napi.js",
     "build:dashboard": "vite build",
-    "dev": "npm run build && concurrently --names \"TSC,SERVER\" --prefix-colors \"blue,green\" \"tsc --watch\" \"npm run dev:server\"",
-    "dev:server": "sleep 2 && NODE_ENV=development tsx --watch src/dashboard-server.ts",
-    "start:mcp": "npm run build && node dist/index.js",
+    "dev": "tsx --watch src/dashboard-server.ts",
+    "start": "npm run build && node dist/index.js",
     "start:dashboard": "npm run build && tsx src/dashboard-server.ts",
-    "lint": "eslint --config eslint.config.js src/**/*.ts --ignore-pattern 'src/**/*.test.ts'",
-    "lint:fix": "eslint --config eslint.config.js src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --fix",
-    "lint:check": "eslint --config eslint.config.js src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --max-warnings 0",
+    "lint": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts'",
+    "lint:fix": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --fix",
+    "lint:check": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist dashboard/dist *.node",
-    "prepare": "husky"
+    "clean": "rm -rf dist *.node",
+    "prepare": "husky",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:ci": "jest --ci --coverage --maxWorkers=2"
   },
   "lint-staged": {
     "*.{ts,tsx}": [
@@ -31,42 +32,34 @@
     ]
   },
   "dependencies": {
-    "@esbuild-kit/core-utils": "^3.3.2",
-    "@esbuild-kit/esm-loader": "^2.6.5",
     "@modelcontextprotocol/sdk": "^1.17.0",
-    "better-sqlite3": "^11.10.0",
-    "bloom-filters": "^3.0.4",
     "d3": "^7.9.0",
-    "dotenv": "^17.2.0",
-    "glob": "^11.0.0",
-    "zod": "^3.23.8"
+    "dotenv": "^17.2.0"
   },
   "devDependencies": {
+    "@babel/core": "^7.28.0",
+    "@babel/preset-env": "^7.28.0",
+    "@babel/preset-typescript": "^7.27.1",
     "@napi-rs/cli": "^2.18.0",
-    "@types/better-sqlite3": "^7.6.13",
+    "@testing-library/jest-dom": "^6.6.3",
     "@types/d3": "^7.4.3",
+    "@types/jest": "^30.0.0",
     "@types/node": "^22.5.0",
     "@typescript-eslint/eslint-plugin": "^8.38.0",
     "@typescript-eslint/parser": "^8.38.0",
-    "@vitejs/plugin-legacy": "^7.0.1",
-    "concurrently": "^9.2.0",
+    "babel-jest": "^30.0.5",
     "eslint": "^9.31.0",
-    "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-node": "^11.1.0",
-    "eslint-plugin-promise": "^7.2.1",
     "husky": "^9.1.7",
+    "jest": "^30.0.5",
+    "jest-environment-jsdom": "^30.0.5",
     "lint-staged": "^16.1.2",
-    "prettier": "^3.0.0",
+    "ts-jest": "^29.4.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
-    "vite": "^7.0.5",
-    "vite-plugin-eslint": "^1.8.1"
+    "vite": "^7.0.5"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "overrides": {
-    "esbuild": "^0.25.8"
   },
   "napi": {
     "name": "module-sentinel-rust",

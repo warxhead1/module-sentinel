@@ -1,0 +1,35 @@
+[package]
+name = "module-sentinel-rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Module Sentinel Team"]
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# NAPI-RS for Node.js bindings
+napi = { version = "2.16", default-features = false, features = ["napi4", "async"] }
+napi-derive = "2.16"
+
+# Core parser service
+module-sentinel-parser = { path = "../parser-service" }
+
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+# Serialization for efficient data transfer
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+napi-build = "2.1"

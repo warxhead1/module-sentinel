@@ -1,3 +1,10 @@
-pub mod parsing_service;
+pub mod unified_parsing_service;
 
-pub use parsing_service::{ParsingService, ParsedProject, ParsingConfig, FileParseResult, ChangedFile};
+// Use the unified parsing service as the default
+pub use unified_parsing_service::{
+    UnifiedParsingService as ParsingService, 
+    UnifiedParsedProject as ParsedProject, 
+    UnifiedParsingConfig as ParsingConfig, 
+    UnifiedFileParseResult as FileParseResult,
+    FileChange as ChangedFile,
+};

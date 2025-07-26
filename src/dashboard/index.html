@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Module Sentinel - Code Intelligence Dashboard</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root {
+            --primary-bg: #0a0a0f;
+            --secondary-bg: #1a1a2e;
+            --accent-bg: #16213e;
+            --text-primary: #e0e6ed;
+            --text-secondary: #a0a6ad;
+            --accent-blue: #3b82f6;
+            --accent-green: #10b981;
+            --accent-orange: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-purple: #8b5cf6;
+            --border-color: #374151;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--primary-bg);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-areas: 
+                "sidebar header header"
+                "sidebar main-view detail-panel";
+            grid-template-columns: 280px 1fr 320px;
+            grid-template-rows: 60px 1fr;
+            height: 100vh;
+            gap: 1px;
+            background: var(--border-color);
+        }
+
+        .header {
+            grid-area: header;
+            background: var(--secondary-bg);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+
+        .project-info {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .project-name {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .sidebar {
+            grid-area: sidebar;
+            background: var(--secondary-bg);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .perspective-tabs {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 16px 12px;
+        }
+
+        .perspective-tab {
+            padding: 12px 16px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            text-align: left;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .perspective-tab:hover {
+            background: var(--accent-bg);
+            color: var(--text-primary);
+        }
+
+        .perspective-tab.active {
+            background: var(--accent-blue);
+            color: white;
+        }
+
+        .perspective-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.7;
+        }
+
+        .main-view {
+            grid-area: main-view;
+            background: var(--primary-bg);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .detail-panel {
+            grid-area: detail-panel;
+            background: var(--secondary-bg);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .panel-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .panel-content {
+            padding: 16px;
+            flex: 1;
+        }
+
+        /* Visualization Containers */
+        .view-container {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+        }
+
+        .view-container.active {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Network Graph Styles */
+        .network-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        .node {
+            cursor: pointer;
+        }
+
+        .node circle {
+            stroke-width: 2;
+            transition: all 0.2s ease;
+        }
+
+        .node:hover circle {
+            stroke-width: 3;
+            filter: brightness(1.2);
+        }
+
+        .node text {
+            font-size: 11px;
+            text-anchor: middle;
+            fill: var(--text-primary);
+            pointer-events: none;
+        }
+
+        .link {
+            stroke: var(--text-secondary);
+            stroke-opacity: 0.6;
+            stroke-width: 1;
+        }
+
+        .link.dependency {
+            stroke: var(--accent-blue);
+        }
+
+        .link.inheritance {
+            stroke: var(--accent-green);
+        }
+
+        .link.call {
+            stroke: var(--accent-orange);
+        }
+
+        /* Complexity Heatmap */
+        .complexity-grid {
+            display: grid;
+            gap: 2px;
+            padding: 20px;
+        }
+
+        .complexity-cell {
+            aspect-ratio: 1;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: 500;
+        }
+
+        .complexity-cell:hover {
+            transform: scale(1.1);
+            z-index: 10;
+        }
+
+        /* Flow Analysis */
+        .flow-diagram {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .flow-node {
+            fill: var(--secondary-bg);
+            stroke: var(--accent-blue);
+            stroke-width: 2;
+            rx: 4;
+        }
+
+        .flow-edge {
+            stroke: var(--accent-blue);
+            stroke-width: 2;
+            fill: none;
+            marker-end: url(#arrowhead);
+        }
+
+        /* Search and Filters */
+        .search-container {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--accent-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 13px;
+        }
+
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .filter-group {
+            margin-top: 16px;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: block;
+        }
+
+        .filter-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .filter-chip {
+            padding: 4px 8px;
+            background: var(--accent-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .filter-chip:hover {
+            background: var(--accent-blue);
+        }
+
+        .filter-chip.active {
+            background: var(--accent-blue);
+            border-color: var(--accent-blue);
+        }
+
+        /* Metrics Cards */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .metric-card {
+            background: var(--accent-bg);
+            padding: 12px;
+            border-radius: 6px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+
+        .metric-label {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Loading and States */
+        .loading-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .loading-spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-blue);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .dashboard-grid {
+                grid-template-columns: 240px 1fr 280px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-grid {
+                grid-template-areas: 
+                    "header header"
+                    "main-view main-view";
+                grid-template-columns: 1fr;
+                grid-template-rows: 60px 1fr;
+            }
+            
+            .sidebar, .detail-panel {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-grid">
+        <header class="header">
+            <div class="logo">Module Sentinel</div>
+            <div class="project-info">
+                <span class="project-name" id="projectName">Loading project...</span>
+                <button class="perspective-tab" onclick="refreshData()">
+                    <span class="perspective-icon">🔄</span>
+                    Refresh
+                </button>
+            </div>
+        </header>
+
+        <aside class="sidebar">
+            <div class="search-container">
+                <input type="text" class="search-input" placeholder="Search symbols..." id="symbolSearch">
+                
+                <div class="filter-group">
+                    <label class="filter-label">Symbol Types</label>
+                    <div class="filter-options" id="symbolTypeFilters">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label class="filter-label">Languages</label>
+                    <div class="filter-options" id="languageFilters">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <nav class="perspective-tabs">
+                <button class="perspective-tab active" data-view="network">
+                    <span class="perspective-icon">🕸️</span>
+                    Relationship Network
+                </button>
+                <button class="perspective-tab" data-view="complexity">
+                    <span class="perspective-icon">🎯</span>
+                    Complexity Analysis
+                </button>
+                <button class="perspective-tab" data-view="ecosystem">
+                    <span class="perspective-icon">🦠</span>
+                    Living Ecosystem
+                </button>
+                <button class="perspective-tab" data-view="flow">
+                    <span class="perspective-icon">🌊</span>
+                    Control Flow
+                </button>
+                <button class="perspective-tab" data-view="liquid">
+                    <span class="perspective-icon">💧</span>
+                    Liquid Flow
+                </button>
+                <button class="perspective-tab" data-view="architecture">
+                    <span class="perspective-icon">🏗️</span>
+                    Architecture Map
+                </button>
+                <button class="perspective-tab" data-view="dependencies">
+                    <span class="perspective-icon">🔗</span>
+                    Dependency Graph
+                </button>
+                <button class="perspective-tab" data-view="timeline">
+                    <span class="perspective-icon">📊</span>
+                    Evolution Timeline
+                </button>
+                <button class="perspective-tab" data-view="hotspots">
+                    <span class="perspective-icon">🔥</span>
+                    Change Hotspots
+                </button>
+            </nav>
+        </aside>
+
+        <main class="main-view">
+            <!-- Network View -->
+            <div class="view-container active" id="networkView">
+                <div class="network-container" id="networkContainer"></div>
+            </div>
+
+            <!-- Complexity View -->
+            <div class="view-container" id="complexityView">
+                <div class="complexity-grid" id="complexityGrid"></div>
+            </div>
+
+            <!-- Living Code Ecosystem View -->
+            <div class="view-container" id="ecosystemView">
+                <div class="ecosystem-container" id="ecosystemContainer">
+                    <div class="ecosystem-controls" style="position: absolute; top: 10px; left: 10px; z-index: 100;">
+                        <button id="playPauseBtn" style="background: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">▶️ Play</button>
+                        <button id="resetBtn" style="background: var(--accent-orange); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">🔄 Reset</button>
+                    </div>
+                    <canvas id="ecosystemCanvas" style="width: 100%; height: 100%; background: var(--primary-bg);"></canvas>
+                </div>
+            </div>
+
+            <!-- Flow View -->
+            <div class="view-container" id="flowView">
+                <svg class="flow-diagram" id="flowDiagram">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" 
+                               refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="var(--accent-blue)" />
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+
+            <!-- Liquid Flow View -->
+            <div class="view-container" id="liquidView">
+                <div class="liquid-flow-container" id="liquidFlowContainer">
+                    <div class="flow-controls" style="position: absolute; top: 10px; left: 10px; z-index: 100;">
+                        <button id="liquidPlayPauseBtn" style="background: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">▶️ Flow</button>
+                        <button id="liquidResetBtn" style="background: var(--accent-orange); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">🔄 Reset</button>
+                        <span style="color: var(--text-secondary); font-size: 12px;">Viscosity: <span id="viscosityDisplay">0.38</span></span>
+                    </div>
+                    <canvas id="liquidFlowCanvas" style="width: 100%; height: 100%; background: linear-gradient(45deg, #0a0a0f 0%, #1a1a2e 100%);"></canvas>
+                </div>
+            </div>
+
+            <!-- Other views... -->
+            <div class="view-container" id="architectureView">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <div>Building architecture visualization...</div>
+                </div>
+            </div>
+
+            <div class="view-container" id="dependenciesView">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <div>Analyzing dependencies...</div>
+                </div>
+            </div>
+
+            <div class="view-container" id="timelineView">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <div>Loading evolution data...</div>
+                </div>
+            </div>
+
+            <div class="view-container" id="hotspotsView">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <div>Detecting change patterns...</div>
+                </div>
+            </div>
+        </main>
+
+        <aside class="detail-panel">
+            <div class="panel-header" id="panelHeader">Symbol Details</div>
+            <div class="panel-content">
+                <div class="metrics-grid" id="metricsGrid">
+                    <!-- Populated by JS -->
+                </div>
+                <div id="detailContent">
+                    <p style="color: var(--text-secondary); font-size: 13px;">
+                        Select a symbol or component to view detailed analysis
+                    </p>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+</html>

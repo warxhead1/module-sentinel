@@ -63,11 +63,24 @@ impl PatternDetector {
                     Regex::new(r"(?i)shared").unwrap(),
                 ],
                 signature_patterns: vec![
-                    Regex::new(r"static.*Self").unwrap(),
-                    Regex::new(r"&'static").unwrap(),
+                    // Classic singleton patterns
+                    Regex::new(r"&'static\s+Self").unwrap(),
+                    Regex::new(r"&'static.*Self").unwrap(),
+                    // Modern Rust singleton patterns
+                    Regex::new(r"Arc<Mutex<.*>>").unwrap(),
+                    Regex::new(r"Arc<RwLock<.*>>").unwrap(),
+                    Regex::new(r"Arc<.*>").unwrap(),
+                    // Lazy initialization patterns
+                    Regex::new(r"Lazy<.*>").unwrap(),
+                    Regex::new(r"OnceLock<.*>").unwrap(),
+                    Regex::new(r"OnceCell<.*>").unwrap(),
                 ],
-                context_hints: vec!["once".to_string(), "lazy_static".to_string()],
-                min_confidence: 0.5,  // Lowered from 0.7 to match actual patterns
+                context_hints: vec![
+                    "OnceLock".to_string(), "OnceCell".to_string(), "Lazy".to_string(),
+                    "static".to_string(), "INSTANCE".to_string(), "Mutex".to_string(),
+                    "get_or_init".to_string(), "lazy_static".to_string()
+                ],
+                min_confidence: 0.5,
             },
         ]);
         
@@ -80,14 +93,30 @@ impl PatternDetector {
                     Regex::new(r"(?i)make").unwrap(),
                     Regex::new(r"(?i)build").unwrap(),
                     Regex::new(r"(?i)factory").unwrap(),
+                    Regex::new(r"(?i)new").unwrap(),
+                    Regex::new(r"(?i)construct").unwrap(),
                 ],
                 signature_patterns: vec![
-                    Regex::new(r"->.*Box<").unwrap(),
+                    // Trait object factories
+                    Regex::new(r"->.*Box<dyn.*>").unwrap(),
+                    Regex::new(r"->.*Box<.*>").unwrap(),
+                    // Result-wrapped factories
+                    Regex::new(r"->.*Result<Box<.*>").unwrap(),
+                    Regex::new(r"->.*Result<.*>").unwrap(),
+                    // Impl trait factories
                     Regex::new(r"->.*impl\s+").unwrap(),
-                    Regex::new(r"new.*->.*Self").unwrap(),
+                    // Generic factories
+                    Regex::new(r"->.*Arc<dyn.*>").unwrap(),
+                    Regex::new(r"->.*Rc<dyn.*>").unwrap(),
+                    // Constructor patterns
+                    Regex::new(r"fn\s+new.*->.*Self").unwrap(),
                 ],
-                context_hints: vec!["trait object".to_string()],
-                min_confidence: 0.6,
+                context_hints: vec![
+                    "dyn".to_string(), "trait".to_string(), "Box".to_string(),
+                    "match".to_string(), "Error".to_string(), "protocol".to_string(),
+                    "type".to_string()
+                ],
+                min_confidence: 0.25,
             },
         ]);
         
@@ -162,7 +191,7 @@ impl PatternDetector {
                     Regex::new(r"#\[tokio::test\]").unwrap(),
                 ],
                 context_hints: vec!["assert".to_string(), "expect".to_string()],
-                min_confidence: 0.9,
+                min_confidence: 0.4,
             },
         ]);
         
@@ -282,52 +311,82 @@ impl PatternDetector {
     fn check_symbol_against_rule(&self, symbol: &Symbol, rule: &PatternRule) -> (bool, Vec<String>, f32) {
         let mut evidence = Vec::new();
         let mut score = 0.0;
-        let mut checks = 0.0;
+        let mut max_possible_score = 0.0;
         
         debug!("Checking symbol '{}' against rule '{}'", symbol.name, rule.name);
         debug!("  Symbol signature: '{}'", symbol.signature);
         
-        // Check name patterns
-        for pattern in &rule.name_patterns {
-            checks += 1.0;
-            let matches = pattern.is_match(&symbol.name);
-            debug!("  Name pattern '{}' matches '{}': {}", pattern.as_str(), symbol.name, matches);
-            if matches {
-                score += 1.0;
-                evidence.push(format!("Name '{}' matches pattern '{}'", symbol.name, pattern.as_str()));
-            }
-        }
-        
-        // Check signature patterns
+        // Check signature patterns (highest weight - most definitive)
         for pattern in &rule.signature_patterns {
-            checks += 1.0;
+            max_possible_score += 1.0; // Full weight for signature patterns
             let matches = pattern.is_match(&symbol.signature);
             debug!("  Signature pattern '{}' matches '{}': {}", pattern.as_str(), symbol.signature, matches);
             if matches {
                 score += 1.0;
                 evidence.push(format!("Signature matches pattern '{}'", pattern.as_str()));
+                break; // Only count the first signature match to avoid inflating score
             }
         }
         
-        // Check context hints in the signature
+        // Check name patterns (medium weight - good indicators)
+        for pattern in &rule.name_patterns {
+            max_possible_score += 0.6; // Reduced weight for name patterns
+            let matches = pattern.is_match(&symbol.name);
+            debug!("  Name pattern '{}' matches '{}': {}", pattern.as_str(), symbol.name, matches);
+            if matches {
+                score += 0.6;
+                evidence.push(format!("Name '{}' matches pattern '{}'", symbol.name, pattern.as_str()));
+                break; // Only count the first name match
+            }
+        }
+        
+        // Check context hints (low weight - supporting evidence)
+        let mut context_matches = 0;
         for hint in &rule.context_hints {
-            checks += 0.5; // Context hints are worth less
             let in_sig = symbol.signature.contains(hint);
             let in_name = symbol.name.contains(hint);
             debug!("  Context hint '{}' in signature: {}, in name: {}", hint, in_sig, in_name);
             if in_sig || in_name {
-                score += 0.5;
+                context_matches += 1;
                 evidence.push(format!("Contains context hint '{}'", hint));
             }
         }
         
-        let confidence = if checks > 0.0 { score / checks } else { 0.0 };
+        // Add context score (cap at 0.4 to prevent overwhelming other factors)
+        if context_matches > 0 {
+            let context_score = (context_matches as f32 * 0.1).min(0.4);
+            score += context_score;
+            max_possible_score += 0.4;
+        } else {
+            max_possible_score += 0.4; // Always include potential context score
+        }
+        
+        let confidence = if max_possible_score > 0.0 { 
+            self.apply_confidence_curve(score / max_possible_score)
+        } else { 
+            0.0 
+        };
+        
         let matches = confidence >= rule.min_confidence;
         
-        debug!("  Final: score={}, checks={}, confidence={}, min_confidence={}, matches={}", 
-               score, checks, confidence, rule.min_confidence, matches);
+        debug!("  Weighted: score={:.2}, max_possible={:.2}, raw_confidence={:.2}, final_confidence={:.2}, matches={}", 
+               score, max_possible_score, score / max_possible_score.max(0.001), confidence, matches);
         
         (matches, evidence, confidence)
+    }
+    
+    /// Apply confidence curve to amplify strong matches and dampen weak ones
+    fn apply_confidence_curve(&self, raw_confidence: f32) -> f32 {
+        if raw_confidence > 0.7 {
+            // Strong evidence gets boosted: 70%+ becomes 80%+
+            0.8 + (raw_confidence - 0.7) * 0.6
+        } else if raw_confidence > 0.4 {
+            // Moderate evidence gets slight boost: 40-70% gets 10% boost
+            raw_confidence * 1.1
+        } else {
+            // Weak evidence gets dampened: <40% gets reduced
+            raw_confidence * 0.7
+        }
     }
     
     /// Analyze patterns in code snippets (for real code testing)

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "parser-service",
     "shared-types",
+    "napi-bindings",
 ]
 
 [workspace.package]
