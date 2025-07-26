@@ -11,10 +11,6 @@ build/
 *.js.map
 *.d.ts.map
 
-# until we have rust going
-module-sentinel-rust
-DEPRECATION_PLAN.md
-
 # Package archives
 *.tgz
 
@@ -97,3 +93,8 @@ scripts/debug-*.ts
 scripts/namespace-*.ts
 scripts/query-*.ts
 scripts/verify-*.ts
+
+# Rust build artifacts
+target/
+Cargo.lock
+*.pdb
