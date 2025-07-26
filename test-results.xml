@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Module Sentinel Test Suite" tests="35" passed="34" failures="0" skipped="1" time="86.534">
-  <testsuite name="Module Sentinel" tests="35" passed="34" failures="0" skipped="1" time="86.534">
+<testsuites name="Module Sentinel Test Suite" tests="35" passed="34" failures="0" skipped="1" time="88.953">
+  <testsuite name="Module Sentinel" tests="35" passed="34" failures="0" skipped="1" time="88.953">
     <testcase classname="ASTGenerationTest" name="ASTGenerationTest" time="undefined">
     </testcase>
     <testcase classname="DrizzleOrmTest" name="testProjectOperations" time="6">
     </testcase>
-    <testcase classname="DrizzleOrmTest" name="testLanguageOperations" time="5">
+    <testcase classname="DrizzleOrmTest" name="testLanguageOperations" time="4">
     </testcase>
     <testcase classname="DrizzleOrmTest" name="testSymbolOperations" time="7">
     </testcase>
@@ -21,32 +21,32 @@
     </testcase>
     <testcase classname="NamespaceParsingSimpleTest" name="namespace_extraction" time="0">
     </testcase>
-    <testcase classname="NamespaceParsingSimpleTest" name="real_file_namespace_parsing" time="4">
+    <testcase classname="NamespaceParsingSimpleTest" name="real_file_namespace_parsing" time="3">
     </testcase>
-    <testcase classname="RelationshipExtractionTest" name="pattern_based_inheritance_extraction" time="7">
+    <testcase classname="RelationshipExtractionTest" name="pattern_based_inheritance_extraction" time="6">
     </testcase>
     <testcase classname="RelationshipExtractionTest" name="pattern_based_function_call_extraction" time="8">
     </testcase>
-    <testcase classname="ComprehensiveAPITest" name="testProjectsEndpoint" time="12">
+    <testcase classname="ComprehensiveAPITest" name="testProjectsEndpoint" time="13">
     </testcase>
     <testcase classname="ComprehensiveAPITest" name="testLanguagesEndpoint" time="3">
     </testcase>
-    <testcase classname="ComprehensiveAPITest" name="testStatsEndpoint" time="3">
+    <testcase classname="ComprehensiveAPITest" name="testStatsEndpoint" time="10">
     </testcase>
     <testcase classname="ComprehensiveAPITest" name="testNamespacesEndpoint" time="2">
     </testcase>
-    <testcase classname="ComprehensiveAPITest" name="testModulesEndpoint" time="36">
+    <testcase classname="ComprehensiveAPITest" name="testModulesEndpoint" time="39">
     </testcase>
-    <testcase classname="ComprehensiveAPITest" name="testRelationshipsEndpoint" time="7">
+    <testcase classname="ComprehensiveAPITest" name="testRelationshipsEndpoint" time="5">
     </testcase>
-    <testcase classname="ComprehensiveAPITest" name="testSymbolsEndpoint" time="4">
+    <testcase classname="ComprehensiveAPITest" name="testSymbolsEndpoint" time="3">
     </testcase>
     <testcase classname="ControlFlowAnalysisTest" name="testSerializeToStringControlFlow" time="0">
       <skipped/>
     </testcase>
-    <testcase classname="MemberAccessTrackingTest" name="member_access_tracking" time="4">
+    <testcase classname="MemberAccessTrackingTest" name="member_access_tracking" time="3">
     </testcase>
-    <testcase classname="MemberAccessDeepDiveTest" name="member_access_deep_dive" time="111">
+    <testcase classname="MemberAccessDeepDiveTest" name="member_access_deep_dive" time="108">
     </testcase>
     <testcase classname="TypeScriptEdgeCasesTest" name="Arrow Functions in Object Literals" time="5">
     </testcase>
@@ -56,21 +56,21 @@
     </testcase>
     <testcase classname="TypeScriptEdgeCasesTest" name="Complex Destructuring" time="1">
     </testcase>
-    <testcase classname="TypeScriptEdgeCasesTest" name="Full Edge Cases File" time="15">
+    <testcase classname="TypeScriptEdgeCasesTest" name="Full Edge Cases File" time="14">
     </testcase>
     <testcase classname="CppParserIssuesTest" name="Basic Inheritance Detection" time="7">
     </testcase>
-    <testcase classname="CppParserIssuesTest" name="Override Method Detection" time="5">
+    <testcase classname="CppParserIssuesTest" name="Override Method Detection" time="4">
     </testcase>
-    <testcase classname="CppParserIssuesTest" name="Control Flow Block Detection" time="20">
+    <testcase classname="CppParserIssuesTest" name="Control Flow Block Detection" time="19">
     </testcase>
     <testcase classname="CppParserIssuesTest" name="Lambda Expression Detection" time="3">
     </testcase>
-    <testcase classname="CppParserIssuesTest" name="Template Specialization Detection" time="3">
+    <testcase classname="CppParserIssuesTest" name="Template Specialization Detection" time="4">
     </testcase>
-    <testcase classname="CppParserIssuesTest" name="Include Directive Detection" time="2">
+    <testcase classname="CppParserIssuesTest" name="Include Directive Detection" time="1">
     </testcase>
-    <testcase classname="CppParserIssuesTest" name="Function Complexity and Metrics" time="14">
+    <testcase classname="CppParserIssuesTest" name="Function Complexity and Metrics" time="15">
     </testcase>
   </testsuite>
 </testsuites>

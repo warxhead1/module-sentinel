@@ -11,7 +11,7 @@ import {
   projects, 
   languages, 
   universalSymbols 
-} from '../../dist/database/schema/universal.js';
+} from '../../src/database/drizzle/schema.js';
 
 export class DrizzleOrmTest {
   private db: Database.Database;
@@ -47,8 +47,8 @@ export class DrizzleOrmTest {
         displayName: 'Drizzle Test Project',
         description: 'A test project for unit testing Drizzle ORM',
         rootPath: '/test/drizzle-project',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         isActive: true
       }).returning();
       
