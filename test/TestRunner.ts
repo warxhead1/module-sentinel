@@ -3,10 +3,10 @@
 import { UniversalIndexer } from "../dist/indexing/universal-indexer.js";
 import { EventEmitter } from "events";
 import * as path from "path";
-import * as fs from "fs/promises";
+// import * as fs from "fs/promises";
 import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import { sql } from "drizzle-orm";
+// import { drizzle } from "drizzle-orm/better-sqlite3";
+// import { sql } from "drizzle-orm";
 import { JUnitReporter, TestResult } from "./helpers/JUnitReporter";
 import { DatabaseConfig } from "../dist/config/database-config.js";
 import { DatabaseInitializer } from "../dist/database/database-initializer.js";

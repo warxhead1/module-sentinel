@@ -199,7 +199,7 @@ export class CppPatternAnalyzer {
     filePath: string,
     currentNamespace: string | undefined,
     currentClass: string | undefined,
-    context: CppVisitorContext
+    _context: CppVisitorContext
   ): Promise<SymbolInfo[]> {
     const symbols: SymbolInfo[] = [];
 
@@ -248,7 +248,7 @@ export class CppPatternAnalyzer {
     filePath: string,
     currentNamespace: string | undefined,
     currentClass: string | undefined,
-    context: CppVisitorContext
+    _context: CppVisitorContext
   ): Promise<RelationshipInfo[]> {
     const relationships: RelationshipInfo[] = [];
 
@@ -544,13 +544,13 @@ export class CppPatternAnalyzer {
     return symbols;
   }
 
-  private extractTemplateSymbols(line: string, lineNumber: number, filePath: string, currentNamespace?: string): SymbolInfo[] {
+  private extractTemplateSymbols(line: string, _lineNumber: number, _filePath: string, _currentNamespace?: string): SymbolInfo[] {
     const symbols: SymbolInfo[] = [];
 
     for (const pattern of this.patterns.symbols.template) {
       const match = line.match(pattern);
       if (match) {
-        const [, templateParams] = match;
+        const [, _templateParams] = match;
         
         // Template declarations don't create separate symbols
         // They modify the next symbol to be a template
@@ -693,7 +693,7 @@ export class CppPatternAnalyzer {
 
   // Pattern detection methods
 
-  private detectPatternsInLine(line: string, lineNumber: number, symbols: SymbolInfo[]): PatternInfo[] {
+  private detectPatternsInLine(line: string, lineNumber: number, _symbols: SymbolInfo[]): PatternInfo[] {
     const patterns: PatternInfo[] = [];
 
     // RAII pattern detection
@@ -711,7 +711,7 @@ export class CppPatternAnalyzer {
     return patterns;
   }
 
-  private detectComplexPatterns(symbols: SymbolInfo[], relationships: RelationshipInfo[]): PatternInfo[] {
+  private detectComplexPatterns(symbols: SymbolInfo[], _relationships: RelationshipInfo[]): PatternInfo[] {
     const patterns: PatternInfo[] = [];
 
     // Singleton pattern detection
@@ -764,7 +764,7 @@ export class CppPatternAnalyzer {
     return null;
   }
 
-  private updateClassContext(line: string, classStack: string[], braceDepth: number): { isEntering: boolean } | null {
+  private updateClassContext(line: string, classStack: string[], _braceDepth: number): { isEntering: boolean } | null {
     const classMatch = line.match(/^\s*(?:export\s+)?(?:template\s*<[^>]+>\s*)?(class|struct)\s+(\w+)/);
     if (classMatch) {
       const className = classMatch[2];

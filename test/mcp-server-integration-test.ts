@@ -7,7 +7,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import * as schema from "../src/database/drizzle/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const logger = createLogger("MCPServerIntegrationTest");
@@ -296,7 +296,7 @@ TEST_CONSTANT = 42
       try {
         await fs.unlink(this.testDbPath);
         logger.info("Test database cleaned up");
-      } catch (error) {
+      } catch (_error) {
         // Ignore if file doesn't exist
       }
     }

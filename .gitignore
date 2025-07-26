@@ -12,6 +12,7 @@ build/
 
 # until we have rust going
 module-sentinel-rust
+DEPRECATION_PLAN.md
 
 # Package archives
 *.tgz
