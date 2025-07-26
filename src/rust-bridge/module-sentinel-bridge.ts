@@ -79,9 +79,8 @@ export class ModuleSentinelBridge {
     try {
       const bindings = await loadRustBindings();
       
-      // Create Rust instance
-      const ModuleSentinel = bindings.ModuleSentinel as unknown as new (projectPath: string) => Promise<ModuleSentinelInstance>;
-      this.rustInstance = await new ModuleSentinel(this.projectPath);
+      // Create Rust instance using factory method
+      this.rustInstance = await (bindings as any).ModuleSentinel.new(this.projectPath);
       
       // Initialize parsing service (unsafe call required for NAPI)
       await this.rustInstance!.initialize();
