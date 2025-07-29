@@ -1,6 +1,5 @@
 use anyhow::Result;
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
 use lru::LruCache;
 use std::num::NonZeroUsize;
@@ -9,6 +8,9 @@ use serde::{Serialize, Deserialize};
 use crate::database::{SemanticDeduplicator, DuplicateGroup};
 use crate::parsers::tree_sitter::{CodeEmbedder, Symbol};
 use crate::database::cache::cache_stats::CacheStatistics;
+
+#[cfg(feature = "ml")]
+use crate::parsers::tree_sitter::ml_integration::{ComponentReusePredictor, UserIntent};
 
 /// Configuration for the LRU cache system
 #[derive(Debug, Clone)]
@@ -72,6 +74,10 @@ pub struct CachedSemanticDeduplicator {
     
     // Statistics tracking
     stats: Arc<RwLock<CacheStatistics>>,
+    
+    // ML-based component reuse predictor (when ML feature is enabled)
+    #[cfg(feature = "ml")]
+    reuse_predictor: Arc<RwLock<ComponentReusePredictor>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +104,8 @@ impl CachedSemanticDeduplicator {
             symbol_cache: Arc::new(RwLock::new(LruCache::new(symbol_cache_size))),
             groups_cache: Arc::new(RwLock::new(LruCache::new(groups_cache_size))),
             stats: Arc::new(RwLock::new(CacheStatistics::default())),
+            #[cfg(feature = "ml")]
+            reuse_predictor: Arc::new(RwLock::new(ComponentReusePredictor::new())),
         })
     }
     
@@ -473,5 +481,121 @@ impl CachedSemanticDeduplicator {
         // Use cached similarity score
         let score = self.similarity_score(symbol1, symbol2).await?;
         Ok(score > 0.7) // Use a reasonable threshold
+    }
+    
+    /// Initialize ML-based component reuse predictor with existing symbols (when ML feature is enabled)
+    #[cfg(feature = "ml")]
+    pub async fn initialize_ml_predictor(&self, symbols: &[Symbol]) -> Result<()> {
+        let mut predictor = self.reuse_predictor.write().await;
+        predictor.index_existing_components(symbols);
+        Ok(())
+    }
+    
+    /// Get component reuse recommendations based on user intent (when ML feature is enabled)
+    #[cfg(feature = "ml")]
+    pub async fn get_reuse_recommendations(&self, intent: &UserIntent) -> Result<Vec<crate::parsers::tree_sitter::ml_integration::ReuseRecommendation>> {
+        let predictor = self.reuse_predictor.read().await;
+        Ok(predictor.predict_component_reuse(intent))
+    }
+    
+    /// Enhance cache with ML predictions for better performance (when ML feature is enabled)
+    #[cfg(feature = "ml")]
+    pub async fn ml_enhance_cache(&self, symbols: &[Symbol]) -> Result<()> {
+        // Pre-populate cache with ML-predicted similar symbol pairs
+        let predictor = self.reuse_predictor.read().await;
+        let mut enhanced_pairs = 0;
+        
+        for symbol in symbols {
+            // Create a mock user intent from the symbol to get recommendations
+            let intent = UserIntent {
+                functionality_category: self.extract_functionality_category(symbol),
+                required_capabilities: self.extract_capabilities(symbol),
+                context_description: format!("Working with {}", symbol.name),
+            };
+            
+            let recommendations = predictor.predict_component_reuse(&intent);
+            
+            // Pre-cache similarity scores for recommended pairs
+            for recommendation in recommendations {
+                if recommendation.relevance_score > 0.7 {
+                    // Pre-compute and cache similarity for this pair
+                    if let Some(other_symbol) = symbols.iter().find(|s| s.id == recommendation.existing_component_id) {
+                        let cache_key = self.create_cache_key(&symbol.id, &other_symbol.id);
+                        
+                        // Check if not already cached
+                        let similarity_cache = self.similarity_cache.read().await;
+                        if !similarity_cache.contains(&cache_key) {
+                            drop(similarity_cache);
+                            
+                            // Compute and cache
+                            let score = self.inner.similarity_score(symbol, other_symbol).await?;
+                            let mut cache = self.similarity_cache.write().await;
+                            cache.put(cache_key, CacheEntry::new(score));
+                            enhanced_pairs += 1;
+                        }
+                    }
+                }
+            }
+        }
+        
+        tracing::info!("ML-enhanced cache with {} pre-computed similarity pairs", enhanced_pairs);
+        Ok(())
+    }
+    
+    /// Extract functionality category from symbol for ML processing
+    #[cfg(feature = "ml")]
+    fn extract_functionality_category(&self, symbol: &Symbol) -> String {
+        let name_lower = symbol.name.to_lowercase();
+        let sig_lower = symbol.signature.to_lowercase();
+        
+        if name_lower.contains("database") || sig_lower.contains("db") || sig_lower.contains("query") {
+            "database".to_string()
+        } else if name_lower.contains("http") || name_lower.contains("api") || sig_lower.contains("request") {
+            "http_client".to_string()
+        } else if name_lower.contains("auth") || sig_lower.contains("login") || sig_lower.contains("token") {
+            "authentication".to_string()
+        } else if name_lower.contains("log") || sig_lower.contains("debug") || sig_lower.contains("info") {
+            "logging".to_string()
+        } else if name_lower.contains("file") || sig_lower.contains("read") || sig_lower.contains("write") {
+            "file_processing".to_string()
+        } else {
+            "general".to_string()
+        }
+    }
+    
+    /// Extract capabilities from symbol for ML processing
+    #[cfg(feature = "ml")]
+    fn extract_capabilities(&self, symbol: &Symbol) -> Vec<String> {
+        let mut capabilities = Vec::new();
+        let name_lower = symbol.name.to_lowercase();
+        let sig_lower = symbol.signature.to_lowercase();
+        
+        // Add capability tags based on symbol characteristics
+        if sig_lower.contains("async") || sig_lower.contains("await") {
+            capabilities.push("async".to_string());
+        }
+        if sig_lower.contains("error") || sig_lower.contains("result") {
+            capabilities.push("error_handling".to_string());
+        }
+        if name_lower.contains("config") || sig_lower.contains("options") {
+            capabilities.push("configurable".to_string());
+        }
+        if sig_lower.contains("serialize") || sig_lower.contains("deserialize") {
+            capabilities.push("serialization".to_string());
+        }
+        if name_lower.contains("test") || sig_lower.contains("test") {
+            capabilities.push("testing".to_string());
+        }
+        
+        capabilities
+    }
+    
+    /// Create cache key for similarity pairs
+    fn create_cache_key(&self, id1: &str, id2: &str) -> (String, String) {
+        if id1 < id2 {
+            (id1.to_string(), id2.to_string())
+        } else {
+            (id2.to_string(), id1.to_string())
+        }
     }
 }

@@ -1,5 +1,4 @@
 use tokio;
-use anyhow::Result;
 use std::sync::Arc;
 
 use module_sentinel_parser::database::SemanticDeduplicator;
@@ -27,6 +26,8 @@ fn create_test_symbol_with_embedding(
         duplicate_of: None,
         confidence_score: None,
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 

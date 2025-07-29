@@ -1,0 +1,50 @@
+warning: field `model` is never read
+warning: field `sessions` is never read
+warning: methods `get_model_config` and `get_model_path` are never used
+warning: fields `identifier_regex`, `number_regex`, and `string_regex` are never read
+warning: field `config` is never read
+warning: field `target_false_positive_rate` is never read
+warning: field `embedder` is never read
+warning: field `pattern_id` is never read
+warning: fields `parse_cache` and `embedding_cache` are never read
+warning: fields `tree_hash`, `confidence`, `embeddings`, and `timestamp` are never read
+warning: fields `caller`, `callee`, and `location` are never read
+warning: fields `base_type`, `constraints`, and `confidence` are never read
+warning: multiple methods are never used
+warning: `module-sentinel-parser` (lib) generated 13 warnings
+warning: unused import: `Language`
+  = note: `#[warn(unused_imports)]` on by default
+warning: `module-sentinel-parser` (bin "test_real_models") generated 1 warning (run `cargo fix --bin "test_real_models"` to apply 1 suggestion)
+warning: unused import: `ErrorType`
+     = note: `#[warn(unused_imports)]` on by default
+warning: unused import: `ErrorType`
+warning: unused variable: `parsing_service`
+     = note: `#[warn(unused_variables)]` on by default
+warning: `module-sentinel-rust` (lib) generated 3 warnings (run `cargo fix --lib -p module-sentinel-rust` to apply 2 suggestions)
+warning: unused import: `error`
+  = note: `#[warn(unused_imports)]` on by default
+warning: unused import: `ParseError as TreeSitterParseError`
+warning: unused imports: `ErrorContext`, `ErrorPredictor`, `ErrorRecoveryEngine`, and `RecoverySuggestion`
+warning: unused import: `ast_converter::AstConverter`
+warning: unused imports: `AbstractionLevel`, `ComplexityMetrics`, `ComponentReusePredictor`, `ComponentSignature`, `EmbeddingStats`, `ErrorPredictor as MLErrorPredictor`, `ExtensionAssessment`, `FunctionalityPattern`, `IntentFeatures`, `QualityIssue`, `ReuseRecommendation`, `SyntaxPredictor`, and `UserIntent`
+warning: unused imports: `ModelConfig` and `ModelManager`
+warning: unused import: `tokenizer::CodeTokenizer`
+warning: unused imports: `Language`, `ParseError`, `ParseResult`, and `TreeSitterParser`
+warning: unused import: `crate::database::ParseResults`
+warning: unused imports: `CacheDistribution`, `CacheLevel`, `HierarchicalCacheConfig`, and `HierarchicalCachedDeduplicator`
+warning: unused imports: `PredictiveCacheConfig`, `PredictiveCacheStats`, and `PredictiveCachedDeduplicator`
+warning: unused imports: `DatabaseValue`, `Database`, `Model`, and `QueryBuilder`
+warning: unused imports: `FileIndex`, `Language`, `Project`, `UniversalRelationship`, and `UniversalSymbol`
+warning: unused imports: `CriticalPath`, `DataFlow`, `DeepFlow`, and `SymbolCall`
+warning: unused imports: `ProjectDatabase` and `ProjectStats`
+warning: unused imports: `AIFeedback`, `EvolvingPattern`, `PatternMatch`, `PatternType`, `SemanticPatternEngine`, `ValidationPriority`, and `ValidationResult`
+warning: unused imports: `AccuracyTracker`, `AdaptiveSimilarityEngine`, `AlgorithmWeights`, `FeatureVector`, and `LearnedSimilarity`
+warning: unused imports: `AIFeedbackIntegration`, `AIValidationResponse`, `AIValidationService`, `FeedbackProcessor`, and `ValidationQueue`
+warning: unused imports: `BloomFilterStats`, `SymbolBloomFilter`, and `SymbolKey`
+warning: unused imports: `DeduplicationInsights`, `DeduplicationStrategy`, and `SimilarityThresholds`
+warning: unused imports: `CacheEntry`, `CachePersistenceManager`, and `CachePersistenceStats`
+warning: unused import: `EmbeddingManager`
+warning: unused imports: `SearchResult` and `SemanticSearchEngine`
+warning: unused imports: `CaptureProcessor`, `PatternMatch`, `PatternSet`, and `Pattern`
+warning: unused import: `language_definition::LanguageDefinition`
+warning: `module-sentinel-parser` (bin "module-sentinel-parser") generated 25 warnings

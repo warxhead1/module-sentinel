@@ -103,6 +103,8 @@ async fn test_duplicate_groups_caching() -> Result<()> {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     };
     
     let mut similarity_scores = HashMap::new();
@@ -116,7 +118,6 @@ async fn test_duplicate_groups_caching() -> Result<()> {
             similarity_scores,
             group_confidence: 0.95,
             deduplication_strategy: DeduplicationStrategy::AutoMerge,
-            detected_at: chrono::Utc::now(),
         },
     ];
     

@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     
     // Parse the entire project
     info!("🔍 Starting project analysis...");
-    let analysis_result = parsing_service.parse_project(project_dir, "microservices-demo").await?;
+    let analysis_result = parsing_service.parse_project(project_dir, "microservices-demo", false).await?;
     
     let parse_duration = start_time.elapsed();
     

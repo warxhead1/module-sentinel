@@ -4,7 +4,7 @@ use tempfile::TempDir;
 use std::sync::Arc;
 
 use module_sentinel_parser::{
-    database::{ProjectDatabase, ProjectStats},
+    database::ProjectDatabase,
     parsers::tree_sitter::{Symbol, Language as ParserLanguage, CodeEmbedder},
 };
 
@@ -26,6 +26,8 @@ fn create_test_symbols() -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: Some(0.95),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
         Symbol {
             id: "helper_fn".to_string(),
@@ -42,6 +44,8 @@ fn create_test_symbols() -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: Some(0.88),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
         Symbol {
             id: "config_struct".to_string(),
@@ -58,6 +62,8 @@ fn create_test_symbols() -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: Some(0.99),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
         // Add a similar symbol to test deduplication
         Symbol {
@@ -75,6 +81,8 @@ fn create_test_symbols() -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: Some(0.99),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
     ]
 }
@@ -192,12 +200,9 @@ async fn test_find_duplicates_with_advanced_caching() -> Result<()> {
     // Find duplicates using advanced semantic deduplication
     let duplicates = project_db.find_duplicates_across_project(project_id).await?;
     
-    // Should find at least one duplicate group (the Config struct appears twice)
-    println!("Found {} duplicate groups", duplicates.len());
-    
     // The exact number depends on your semantic similarity thresholds
     // This test mainly ensures the deduplication pipeline works without errors
-    assert!(duplicates.len() >= 0); // Should work without crashing
+    println!("Successfully found {} duplicate groups", duplicates.len());
     
     Ok(())
 }
@@ -503,6 +508,8 @@ async fn test_concurrent_project_operations() -> Result<()> {
                     duplicate_of: None,
                     confidence_score: Some(0.9),
                     similar_symbols: vec![],
+                    semantic_tags: None,
+                    intent: None,
                 }
             ];
             

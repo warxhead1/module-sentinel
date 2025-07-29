@@ -1,4 +1,4 @@
-use module_sentinel_parser::analysis::{PatternDetector, PatternCategory};
+// Pattern detection imports removed as they were unused
 use module_sentinel_parser::parsers::tree_sitter::{Symbol, Language as ParserLanguage};
 
 fn create_test_symbol(name: &str, signature: &str) -> Symbol {
@@ -17,6 +17,8 @@ fn create_test_symbol(name: &str, signature: &str) -> Symbol {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 

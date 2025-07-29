@@ -2,7 +2,7 @@
  * Simplified tests for ModuleSentinelBridge
  */
 
-import { ModuleSentinelBridge, quickSearch, quickAnalyze, checkRustBindings } from '../module-sentinel-bridge';
+import { ModuleSentinelBridge, quick_search as quickSearch, quick_analyze as quickAnalyze, check_rust_bindings as checkRustBindings } from '../module-sentinel-bridge';
 import * as path from 'path';
 
 // Mock the logger

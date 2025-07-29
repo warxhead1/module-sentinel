@@ -1,4 +1,4 @@
-use module_sentinel_parser::patterns::{Pattern, PatternSet, LanguageDefinition, PatternEngine};
+use module_sentinel_parser::patterns::{Pattern, LanguageDefinition, PatternEngine};
 use std::collections::HashMap;
 
 #[test]

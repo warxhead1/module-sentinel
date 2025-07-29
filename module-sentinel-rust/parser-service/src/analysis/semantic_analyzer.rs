@@ -8,7 +8,7 @@ use crate::database::{
     cache::CachedSemanticDeduplicator, DuplicateGroup,
     ProjectDatabase,
 };
-use crate::parsers::tree_sitter::{Symbol, CodeEmbedder, Language as ParserLanguage};
+use crate::parsers::tree_sitter::{Symbol, CodeEmbedder};
 
 /// The main semantic analyzer that orchestrates all analysis components
 pub struct SemanticAnalyzer {
@@ -99,7 +99,7 @@ impl SemanticAnalyzer {
         info!("Analyzing file: {}", file_path);
         
         let symbols = self.project_db.get_symbols_in_file(project_id, file_path).await?;
-        let parser_symbols = self.convert_to_parser_symbols(&symbols);
+        let parser_symbols = self.convert_to_parser_symbols(&symbols).await?;
         
         // Find duplicates within the file
         let duplicate_groups = self.deduplicator.find_duplicates(&parser_symbols).await?;
@@ -165,26 +165,40 @@ impl SemanticAnalyzer {
                 .where_eq("project_id", project_id)
         ).await?;
         
-        Ok(self.convert_to_parser_symbols(&universal_symbols))
+        self.convert_to_parser_symbols(&universal_symbols).await
     }
     
-    fn convert_to_parser_symbols(&self, universal_symbols: &[crate::database::models::UniversalSymbol]) -> Vec<Symbol> {
-        universal_symbols.iter().map(|s| Symbol {
-            id: s.qualified_name.clone(),
-            name: s.name.clone(),
-            signature: s.signature.clone().unwrap_or_default(),
-            language: ParserLanguage::Rust, // TODO: Map from language_id
-            file_path: s.file_path.clone(),
-            start_line: s.line as u32,
-            end_line: s.end_line.unwrap_or(s.line) as u32,
-            embedding: None,
-            semantic_hash: None,
-            normalized_name: s.name.to_lowercase(),
-            context_embedding: None,
-            duplicate_of: None,
-            confidence_score: Some(s.confidence as f32),
-            similar_symbols: vec![],
-        }).collect()
+    async fn convert_to_parser_symbols(&self, universal_symbols: &[crate::database::models::UniversalSymbol]) -> Result<Vec<Symbol>> {
+        let mut result = Vec::new();
+        
+        for s in universal_symbols {
+            let language = self.project_db.map_language_id_to_parser_language(s.language_id).await?;
+            
+            // Parse semantic tags and intent from database
+            let semantic_tags: Option<Vec<String>> = s.semantic_tags.as_ref()
+                .and_then(|tags_json| serde_json::from_str(tags_json).ok());
+            
+            result.push(Symbol {
+                id: s.qualified_name.clone(),
+                name: s.name.clone(),
+                signature: s.signature.clone().unwrap_or_default(),
+                language,
+                file_path: s.file_path.clone(),
+                start_line: s.line as u32,
+                end_line: s.end_line.unwrap_or(s.line) as u32,
+                embedding: None,
+                semantic_hash: None,
+                normalized_name: s.name.to_lowercase(),
+                context_embedding: None,
+                duplicate_of: None,
+                confidence_score: Some(s.confidence as f32),
+                similar_symbols: vec![],
+                semantic_tags,
+                intent: s.intent.clone(),
+            });
+        }
+        
+        Ok(result)
     }
     
     async fn detect_patterns(&self, symbols: &[Symbol]) -> Result<Vec<PatternAnalysis>> {
@@ -345,6 +359,14 @@ mod tests {
     
     #[tokio::test]
     async fn test_semantic_analyzer_creation() {
-        // Test will be implemented
+        use tempfile::TempDir;
+        use crate::parsers::tree_sitter::{CodeEmbedder, Language};
+        
+        let temp_dir = TempDir::new().unwrap();
+        let project_db = Arc::new(ProjectDatabase::new(temp_dir.path()).await.unwrap());
+        let embedder = Arc::new(CodeEmbedder::load(&Language::Rust).await.unwrap());
+        
+        let analyzer = SemanticAnalyzer::new(embedder, project_db).await;
+        assert!(analyzer.is_ok(), "SemanticAnalyzer should be created successfully");
     }
 }

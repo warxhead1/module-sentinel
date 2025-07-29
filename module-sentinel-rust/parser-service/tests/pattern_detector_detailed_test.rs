@@ -17,6 +17,8 @@ fn create_test_symbol(name: &str, signature: &str) -> Symbol {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 

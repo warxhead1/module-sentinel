@@ -1,6 +1,5 @@
 use tokio;
 use anyhow::Result;
-use tempfile::TempDir;
 use std::sync::Arc;
 use std::fs;
 use std::path::Path;
@@ -11,6 +10,7 @@ use module_sentinel_parser::{
     database::ProjectDatabase,
     parsers::tree_sitter::{CodeEmbedder, Language as ParserLanguage},
 };
+
 
 /// Create test files with real code patterns
 async fn setup_test_project(temp_dir: &Path) -> Result<()> {
@@ -328,7 +328,7 @@ async fn test_pattern_detection_on_real_code() -> Result<()> {
     let parsing_service = Arc::new(ParsingService::new(project_db, ParsingConfig::default()).await?);
     
     // Parse the project - this should create the project in the database
-    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Create pattern detector
     let detector = PatternDetector::new();
@@ -360,6 +360,8 @@ async fn test_pattern_detection_on_real_code() -> Result<()> {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect();
     
@@ -426,7 +428,7 @@ async fn test_duplicate_detection_on_real_code() -> Result<()> {
     let parsing_service = Arc::new(ParsingService::new(project_db, ParsingConfig::default()).await?);
     
     // Parse the project
-    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Create a new database instance for analysis
     let query_db = Arc::new(ProjectDatabase::new(temp_dir.path()).await?);
@@ -470,6 +472,8 @@ async fn test_duplicate_detection_on_real_code() -> Result<()> {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect();
     
@@ -507,7 +511,7 @@ async fn test_similarity_calculation_on_real_code() -> Result<()> {
     let parsing_service = Arc::new(ParsingService::new(project_db, ParsingConfig::default()).await?);
     
     // Parse the project
-    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Create a new database instance for analysis
     let query_db = Arc::new(ProjectDatabase::new(temp_dir.path()).await?);
@@ -541,8 +545,16 @@ async fn test_similarity_calculation_on_real_code() -> Result<()> {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect();
+    
+    // Test semantic analysis functionality
+    if !parser_symbols.is_empty() {
+        let semantic_results = analyzer.analyze_symbols(&parser_symbols).await?;
+        assert!(!semantic_results.is_empty(), "Semantic analysis should produce results");
+    }
     
     // Test direct similarity calculation
     let calc = SimilarityCalculator::new();
@@ -583,7 +595,7 @@ async fn test_full_project_analysis() -> Result<()> {
     let parsing_service = Arc::new(ParsingService::new(project_db, ParsingConfig::default()).await?);
     
     // Parse the project
-    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Create a new database instance for analysis
     let query_db = Arc::new(ProjectDatabase::new(temp_dir.path()).await?);
@@ -629,6 +641,8 @@ async fn test_full_project_analysis() -> Result<()> {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect();
     
@@ -715,7 +729,7 @@ fn check_user_info(info: &UserInfo) -> Result<(), Error> {
     let parsing_service = Arc::new(ParsingService::new(project_db, ParsingConfig::default()).await?);
     
     // Parse the project
-    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    let parsed_result = parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Create a new database instance for analysis
     let query_db = Arc::new(ProjectDatabase::new(temp_dir.path()).await?);

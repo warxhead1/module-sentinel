@@ -243,7 +243,11 @@ pub struct UniversalSymbol {
     pub is_abstract: bool,
     pub language_features: Option<String>, // JSON object of language-specific features
     pub semantic_tags: Option<String>, // JSON array of semantic tags
+    pub intent: Option<String>, // Inferred intent/purpose of the symbol
     pub confidence: f64,
+    pub embedding: Option<String>, // JSON array of f32 values (768-dim vector)
+    pub embedding_model: Option<String>, // Model used: "codebert-base" or "feature-v1"
+    pub embedding_version: Option<i32>, // Version for future migrations
     pub created_at: String,
     pub updated_at: String,
 }
@@ -272,7 +276,11 @@ impl Default for UniversalSymbol {
             is_abstract: false,
             language_features: None,
             semantic_tags: None,
+            intent: None,
             confidence: 1.0,
+            embedding: None,
+            embedding_model: None,
+            embedding_version: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
         }
@@ -294,7 +302,8 @@ impl Model for UniversalSymbol {
         vec!["id", "project_id", "language_id", "name", "qualified_name", "kind", "file_path", 
              "line", "column", "end_line", "end_column", "return_type", "signature", "visibility", 
              "namespace", "parent_symbol_id", "is_exported", "is_async", "is_abstract", 
-             "language_features", "semantic_tags", "confidence", "created_at", "updated_at"]
+             "language_features", "semantic_tags", "intent", "confidence", "embedding", 
+             "embedding_model", "embedding_version", "created_at", "updated_at"]
     }
     
     fn to_field_values(&self) -> HashMap<String, DatabaseValue> {
@@ -320,7 +329,11 @@ impl Model for UniversalSymbol {
         values.insert("is_abstract".to_string(), DatabaseValue::Integer(if self.is_abstract { 1 } else { 0 }));
         values.insert("language_features".to_string(), self.language_features.clone().into());
         values.insert("semantic_tags".to_string(), self.semantic_tags.clone().into());
+        values.insert("intent".to_string(), self.intent.clone().into());
         values.insert("confidence".to_string(), DatabaseValue::Real(self.confidence));
+        values.insert("embedding".to_string(), self.embedding.clone().into());
+        values.insert("embedding_model".to_string(), self.embedding_model.clone().into());
+        values.insert("embedding_version".to_string(), self.embedding_version.map(|v| v as i64).into());
         values.insert("created_at".to_string(), self.created_at.clone().into());
         values.insert("updated_at".to_string(), self.updated_at.clone().into());
         values
@@ -421,10 +434,30 @@ impl Model for UniversalSymbol {
                 Some(DatabaseValue::Null) => None,
                 _ => None,
             },
+            intent: match values.get("intent") {
+                Some(DatabaseValue::Text(s)) => Some(s.clone()),
+                Some(DatabaseValue::Null) => None,
+                _ => None,
+            },
             confidence: match values.get("confidence") {
                 Some(DatabaseValue::Real(r)) => *r,
                 Some(DatabaseValue::Integer(i)) => *i as f64,
                 _ => 1.0,
+            },
+            embedding: match values.get("embedding") {
+                Some(DatabaseValue::Text(s)) => Some(s.clone()),
+                Some(DatabaseValue::Null) => None,
+                _ => None,
+            },
+            embedding_model: match values.get("embedding_model") {
+                Some(DatabaseValue::Text(s)) => Some(s.clone()),
+                Some(DatabaseValue::Null) => None,
+                _ => None,
+            },
+            embedding_version: match values.get("embedding_version") {
+                Some(DatabaseValue::Integer(i)) => Some(*i as i32),
+                Some(DatabaseValue::Null) => None,
+                _ => None,
             },
             created_at: match values.get("created_at") {
                 Some(DatabaseValue::Text(s)) => s.clone(),

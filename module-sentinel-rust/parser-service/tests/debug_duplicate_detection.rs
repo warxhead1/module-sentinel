@@ -19,6 +19,8 @@ async fn debug_duplicate_detection_similarity() {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     };
     
     let email_validator_2 = Symbol {
@@ -36,6 +38,8 @@ async fn debug_duplicate_detection_similarity() {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     };
     
     // Also test average calculators
@@ -54,6 +58,8 @@ async fn debug_duplicate_detection_similarity() {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     };
     
     let compute_mean = Symbol {
@@ -71,6 +77,8 @@ async fn debug_duplicate_detection_similarity() {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     };
     
     let calc = SimilarityCalculator::new();

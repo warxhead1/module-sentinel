@@ -104,7 +104,7 @@ export class FlowRoutes {
     const complete = logger.operation('getFlowSymbols', { filter, limit, offset });
 
     try {
-      const symbols = await this.flowService.getEnhancedSymbols({
+      const symbols = await this.flowService.get_enhanced_symbols({
         kind: filter as SymbolKind | undefined,
         limit
       });
@@ -142,7 +142,7 @@ export class FlowRoutes {
     const complete = logger.operation('getFlowRelationships', { type, includeMetrics });
 
     try {
-      const relationships = await this.flowService.getFlowRelationships(type || undefined);
+      const relationships = await this.flowService.get_flow_relationships(type || undefined);
 
       const response: FlowApiResponse<{ relationships: DataFlowRelationship[]; total: number; includeMetrics: boolean }> = {
         success: true,
@@ -169,7 +169,7 @@ export class FlowRoutes {
     const complete = logger.operation('getSystemMetrics');
 
     try {
-      const metrics = await this.flowService.calculateSystemMetrics();
+      const metrics = await this.flowService.calculate_system_metrics();
 
       const response: FlowApiResponse<SystemFlowMetrics> = {
         success: true,
@@ -200,7 +200,7 @@ export class FlowRoutes {
     const complete = logger.operation('getSymbolMetrics', { symbolId });
 
     try {
-      const symbols = await this.flowService.getEnhancedSymbols();
+      const symbols = await this.flowService.get_enhanced_symbols();
       const symbol = symbols.find(s => s.id === symbolId);
 
       if (!symbol) {
@@ -229,7 +229,7 @@ export class FlowRoutes {
     const complete = logger.operation('getBottlenecks');
 
     try {
-      const metrics = await this.flowService.calculateSystemMetrics();
+      const metrics = await this.flowService.calculate_system_metrics();
 
       const response: FlowApiResponse<{ bottlenecks: Bottleneck[]; total: number }> = {
         success: true,
@@ -255,7 +255,7 @@ export class FlowRoutes {
     const complete = logger.operation('getCriticalPaths');
 
     try {
-      const metrics = await this.flowService.calculateSystemMetrics();
+      const metrics = await this.flowService.calculate_system_metrics();
 
       const response: FlowApiResponse<{ criticalPaths: CriticalPath[]; total: number }> = {
         success: true,
@@ -281,7 +281,7 @@ export class FlowRoutes {
     const complete = logger.operation('getPredictions');
 
     try {
-      const metrics = await this.flowService.calculateSystemMetrics();
+      const metrics = await this.flowService.calculate_system_metrics();
 
       const response: FlowApiResponse<{ failureProbability: number; performanceTrend: Trend; optimizations: Optimization[] }> = {
         success: true,

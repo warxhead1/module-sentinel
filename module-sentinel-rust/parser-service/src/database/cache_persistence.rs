@@ -1,6 +1,5 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
@@ -118,6 +117,7 @@ pub struct CachePersistenceManager {
 
 impl CachePersistenceManager {
     /// Create a new cache persistence manager
+    #[allow(dead_code)]
     pub async fn new(
         db: Database, 
         cache: Arc<CachedSemanticDeduplicator>,
@@ -135,6 +135,7 @@ impl CachePersistenceManager {
     }
     
     /// Create the cache entries table
+    #[allow(dead_code)]
     async fn create_cache_table(db: &Database) -> Result<()> {
         db.migrate(r#"
             CREATE TABLE IF NOT EXISTS cache_entries (
@@ -161,6 +162,7 @@ impl CachePersistenceManager {
     }
     
     /// Start the background persistence task
+    #[allow(dead_code)]
     pub async fn start_persistence_task(self: Arc<Self>) {
         let manager = Arc::clone(&self);
         tokio::spawn(async move {
@@ -179,6 +181,7 @@ impl CachePersistenceManager {
     }
     
     /// Persist current cache state to database
+    #[allow(dead_code)]
     pub async fn persist_cache_to_db(&self) -> Result<()> {
         // Get cache statistics to determine what to persist
         let stats = self.cache.get_cache_statistics().await;
@@ -278,6 +281,7 @@ impl CachePersistenceManager {
     }
     
     /// Helper method to upsert a cache entry
+    #[allow(dead_code)]
     async fn upsert_cache_entry(&self, entry: CacheEntry) -> Result<()> {
         // Try to update existing entry first
         let existing = self.db.find_all(
@@ -303,6 +307,7 @@ impl CachePersistenceManager {
     }
     
     /// Load cache from database on startup
+    #[allow(dead_code)]
     pub async fn load_cache_from_db(&self) -> Result<()> {
         // Load recent, frequently accessed cache entries
         let recent_entries = self.db.find_all(
@@ -383,6 +388,7 @@ impl CachePersistenceManager {
     }
     
     /// Store a similarity score in the cache
+    #[allow(dead_code)]
     pub async fn store_similarity_score(&self, symbol1_id: &str, symbol2_id: &str, score: f32) -> Result<()> {
         let cache_key = format!("{}:{}", symbol1_id, symbol2_id);
         let cached_value = serde_json::to_string(&score)?;
@@ -417,6 +423,7 @@ impl CachePersistenceManager {
     }
     
     /// Retrieve a similarity score from the cache
+    #[allow(dead_code)]
     pub async fn get_similarity_score(&self, symbol1_id: &str, symbol2_id: &str) -> Result<Option<f32>> {
         let cache_key = format!("{}:{}", symbol1_id, symbol2_id);
         
@@ -443,6 +450,7 @@ impl CachePersistenceManager {
     }
     
     /// Store duplicate groups in the cache
+    #[allow(dead_code)]
     pub async fn store_duplicate_groups(&self, project_id: i32, groups: &[DuplicateGroup]) -> Result<()> {
         let cache_key = format!("project_duplicates:{}", project_id);
         let cached_value = serde_json::to_string(&groups)?;
@@ -478,6 +486,7 @@ impl CachePersistenceManager {
     }
     
     /// Retrieve duplicate groups from the cache
+    #[allow(dead_code)]
     pub async fn get_duplicate_groups(&self, project_id: i32) -> Result<Option<Vec<DuplicateGroup>>> {
         let cache_key = format!("project_duplicates:{}", project_id);
         
@@ -504,6 +513,7 @@ impl CachePersistenceManager {
     }
     
     /// Clean up expired cache entries
+    #[allow(dead_code)]
     pub async fn cleanup_expired_entries(&self) -> Result<()> {
         // Delete entries that have expired
         let expired_count = self.db.execute(
@@ -541,6 +551,7 @@ impl CachePersistenceManager {
     }
     
     /// Get cache statistics including persistence info
+    #[allow(dead_code)]
     pub async fn get_persistence_stats(&self) -> Result<CachePersistenceStats> {
         let total_entries = self.db.count(QueryBuilder::<CacheEntry>::new()).await?;
         

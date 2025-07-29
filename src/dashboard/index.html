@@ -3,23 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Module Sentinel - Code Intelligence Dashboard</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <title>Module Sentinel - Code Intelligence Visualization</title>
     <style>
-        :root {
-            --primary-bg: #0a0a0f;
-            --secondary-bg: #1a1a2e;
-            --accent-bg: #16213e;
-            --text-primary: #e0e6ed;
-            --text-secondary: #a0a6ad;
-            --accent-blue: #3b82f6;
-            --accent-green: #10b981;
-            --accent-orange: #f59e0b;
-            --accent-red: #ef4444;
-            --accent-purple: #8b5cf6;
-            --border-color: #374151;
-        }
-
         * {
             margin: 0;
             padding: 0;
@@ -27,524 +12,324 @@
         }
 
         body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--primary-bg);
-            color: var(--text-primary);
-            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a0a;
+            color: #e0e0e0;
             overflow: hidden;
-        }
-
-        .dashboard-grid {
-            display: grid;
-            grid-template-areas: 
-                "sidebar header header"
-                "sidebar main-view detail-panel";
-            grid-template-columns: 280px 1fr 320px;
-            grid-template-rows: 60px 1fr;
+            width: 100vw;
             height: 100vh;
-            gap: 1px;
-            background: var(--border-color);
         }
 
-        .header {
-            grid-area: header;
-            background: var(--secondary-bg);
+        #app {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            height: 48px;
+            background: #111;
+            border-bottom: 1px solid #333;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 1px solid var(--border-color);
+            padding: 0 20px;
+            z-index: 100;
         }
 
-        .logo {
+        #header h1 {
             font-size: 18px;
-            font-weight: 600;
-            color: var(--accent-blue);
+            font-weight: 500;
+            color: #00ff88;
+            margin-right: 20px;
         }
 
-        .project-info {
+        #status {
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: 10px;
+            margin-left: auto;
         }
 
-        .project-name {
-            font-size: 14px;
-            color: var(--text-secondary);
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #ff4444;
         }
 
-        .sidebar {
-            grid-area: sidebar;
-            background: var(--secondary-bg);
+        .status-indicator.connected {
+            background: #00ff88;
+        }
+
+        #main-container {
+            flex: 1;
             display: flex;
-            flex-direction: column;
-            overflow-y: auto;
-        }
-
-        .perspective-tabs {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 16px 12px;
-        }
-
-        .perspective-tab {
-            padding: 12px 16px;
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            text-align: left;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .perspective-tab:hover {
-            background: var(--accent-bg);
-            color: var(--text-primary);
-        }
-
-        .perspective-tab.active {
-            background: var(--accent-blue);
-            color: white;
-        }
-
-        .perspective-icon {
-            width: 16px;
-            height: 16px;
-            opacity: 0.7;
-        }
-
-        .main-view {
-            grid-area: main-view;
-            background: var(--primary-bg);
             position: relative;
             overflow: hidden;
         }
 
-        .detail-panel {
-            grid-area: detail-panel;
-            background: var(--secondary-bg);
+        #canvas-container {
+            flex: 1;
+            position: relative;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(17, 17, 17, 0.9);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            backdrop-filter: blur(10px);
+            z-index: 10;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .control-label {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .control-toggle {
+            display: flex;
+            gap: 10px;
+        }
+
+        .toggle-btn {
+            padding: 6px 12px;
+            border: 1px solid #333;
+            background: transparent;
+            color: #e0e0e0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .toggle-btn:hover {
+            border-color: #00ff88;
+        }
+
+        .toggle-btn.active {
+            background: #00ff88;
+            color: #000;
+            border-color: #00ff88;
+        }
+
+        #insight-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            max-height: calc(100% - 40px);
+            background: rgba(17, 17, 17, 0.95);
+            border: 1px solid #333;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            overflow: hidden;
             display: flex;
             flex-direction: column;
-            overflow-y: auto;
+            transform: translateX(340px);
+            transition: transform 0.3s ease;
+            z-index: 10;
+        }
+
+        #insight-panel.visible {
+            transform: translateX(0);
         }
 
         .panel-header {
-            padding: 16px;
-            border-bottom: 1px solid var(--border-color);
+            padding: 15px;
+            border-bottom: 1px solid #333;
             font-size: 14px;
             font-weight: 500;
         }
 
         .panel-content {
-            padding: 16px;
             flex: 1;
+            overflow-y: auto;
+            padding: 15px;
         }
 
-        /* Visualization Containers */
-        .view-container {
-            width: 100%;
-            height: 100%;
+        #ai-helper {
             position: absolute;
-            top: 0;
-            left: 0;
-            opacity: 0;
-            transform: translateY(20px);
-            transition: all 0.3s ease;
-        }
-
-        .view-container.active {
-            opacity: 1;
-            transform: translateY(0);
-        }
-
-        /* Network Graph Styles */
-        .network-container {
-            width: 100%;
-            height: 100%;
-        }
-
-        .node {
-            cursor: pointer;
-        }
-
-        .node circle {
-            stroke-width: 2;
-            transition: all 0.2s ease;
-        }
-
-        .node:hover circle {
-            stroke-width: 3;
-            filter: brightness(1.2);
-        }
-
-        .node text {
-            font-size: 11px;
-            text-anchor: middle;
-            fill: var(--text-primary);
-            pointer-events: none;
-        }
-
-        .link {
-            stroke: var(--text-secondary);
-            stroke-opacity: 0.6;
-            stroke-width: 1;
-        }
-
-        .link.dependency {
-            stroke: var(--accent-blue);
-        }
-
-        .link.inheritance {
-            stroke: var(--accent-green);
-        }
-
-        .link.call {
-            stroke: var(--accent-orange);
-        }
-
-        /* Complexity Heatmap */
-        .complexity-grid {
-            display: grid;
-            gap: 2px;
-            padding: 20px;
-        }
-
-        .complexity-cell {
-            aspect-ratio: 1;
-            border-radius: 2px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            font-weight: 500;
-        }
-
-        .complexity-cell:hover {
-            transform: scale(1.1);
+            bottom: 20px;
+            right: 20px;
+            width: 320px;
+            background: rgba(17, 17, 17, 0.95);
+            border: 1px solid #333;
+            border-radius: 8px;
+            backdrop-filter: blur(10px);
+            padding: 15px;
             z-index: 10;
         }
 
-        /* Flow Analysis */
-        .flow-diagram {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-        }
-
-        .flow-node {
-            fill: var(--secondary-bg);
-            stroke: var(--accent-blue);
-            stroke-width: 2;
-            rx: 4;
-        }
-
-        .flow-edge {
-            stroke: var(--accent-blue);
-            stroke-width: 2;
-            fill: none;
-            marker-end: url(#arrowhead);
-        }
-
-        /* Search and Filters */
-        .search-container {
-            padding: 12px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .search-input {
-            width: 100%;
-            padding: 8px 12px;
-            background: var(--accent-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            color: var(--text-primary);
+        .ai-suggestion {
+            padding: 10px;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            border-radius: 4px;
+            margin-bottom: 10px;
             font-size: 13px;
         }
 
-        .search-input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .filter-group {
-            margin-top: 16px;
-        }
-
-        .filter-label {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-bottom: 8px;
-            display: block;
-        }
-
-        .filter-options {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-        }
-
-        .filter-chip {
-            padding: 4px 8px;
-            background: var(--accent-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 12px;
-            font-size: 11px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .filter-chip:hover {
-            background: var(--accent-blue);
-        }
-
-        .filter-chip.active {
-            background: var(--accent-blue);
-            border-color: var(--accent-blue);
-        }
-
-        /* Metrics Cards */
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .metric-card {
-            background: var(--accent-bg);
-            padding: 12px;
-            border-radius: 6px;
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
             text-align: center;
-        }
-
-        .metric-value {
-            font-size: 20px;
-            font-weight: 600;
-            color: var(--accent-blue);
-        }
-
-        .metric-label {
-            font-size: 11px;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-
-        /* Loading and States */
-        .loading-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            flex-direction: column;
-            gap: 16px;
+            z-index: 1000;
         }
 
         .loading-spinner {
-            width: 32px;
-            height: 32px;
-            border: 3px solid var(--border-color);
-            border-top-color: var(--accent-blue);
+            width: 40px;
+            height: 40px;
+            border: 3px solid #333;
+            border-top: 3px solid #00ff88;
             border-radius: 50%;
             animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
-        /* Responsive */
-        @media (max-width: 1200px) {
-            .dashboard-grid {
-                grid-template-columns: 240px 1fr 280px;
-            }
+        .error-message {
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid #ff4444;
+            color: #ff4444;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px;
+            text-align: center;
         }
 
-        @media (max-width: 768px) {
-            .dashboard-grid {
-                grid-template-areas: 
-                    "header header"
-                    "main-view main-view";
-                grid-template-columns: 1fr;
-                grid-template-rows: 60px 1fr;
-            }
-            
-            .sidebar, .detail-panel {
-                display: none;
-            }
+        #stats {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(17, 17, 17, 0.9);
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 10px 15px;
+            font-size: 11px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            color: #888;
+            z-index: 10;
+        }
+
+        .stat-line {
+            margin-bottom: 3px;
+        }
+
+        .stat-value {
+            color: #00ff88;
+        }
+
+        /* Hide scrollbars but keep functionality */
+        .panel-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .panel-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .panel-content::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 3px;
+        }
+
+        .panel-content::-webkit-scrollbar-thumb:hover {
+            background: #444;
         }
     </style>
 </head>
 <body>
-    <div class="dashboard-grid">
-        <header class="header">
-            <div class="logo">Module Sentinel</div>
-            <div class="project-info">
-                <span class="project-name" id="projectName">Loading project...</span>
-                <button class="perspective-tab" onclick="refreshData()">
-                    <span class="perspective-icon">🔄</span>
-                    Refresh
-                </button>
+    <div id="app">
+        <header id="header">
+            <h1>Module Sentinel</h1>
+            <div id="status">
+                <span class="status-text">Initializing WebGPU...</span>
+                <div class="status-indicator" id="status-indicator"></div>
             </div>
         </header>
 
-        <aside class="sidebar">
-            <div class="search-container">
-                <input type="text" class="search-input" placeholder="Search symbols..." id="symbolSearch">
-                
-                <div class="filter-group">
-                    <label class="filter-label">Symbol Types</label>
-                    <div class="filter-options" id="symbolTypeFilters">
-                        <!-- Populated by JS -->
+        <div id="main-container">
+            <div id="canvas-container">
+                <canvas id="render-canvas"></canvas>
+            </div>
+
+            <div id="controls">
+                <div class="control-group">
+                    <div class="control-label">Visualization Mode</div>
+                    <div class="control-toggle">
+                        <button class="toggle-btn active" data-mode="graph">Graph</button>
+                        <button class="toggle-btn" data-mode="flow">Flow</button>
+                        <button class="toggle-btn" data-mode="hybrid">Hybrid</button>
                     </div>
                 </div>
-
-                <div class="filter-group">
-                    <label class="filter-label">Languages</label>
-                    <div class="filter-options" id="languageFilters">
-                        <!-- Populated by JS -->
+                <div class="control-group">
+                    <div class="control-label">Data Layer</div>
+                    <div class="control-toggle">
+                        <button class="toggle-btn active" data-layer="symbols">Symbols</button>
+                        <button class="toggle-btn" data-layer="patterns">Patterns</button>
+                        <button class="toggle-btn" data-layer="quality">Quality</button>
                     </div>
                 </div>
             </div>
 
-            <nav class="perspective-tabs">
-                <button class="perspective-tab active" data-view="network">
-                    <span class="perspective-icon">🕸️</span>
-                    Relationship Network
-                </button>
-                <button class="perspective-tab" data-view="complexity">
-                    <span class="perspective-icon">🎯</span>
-                    Complexity Analysis
-                </button>
-                <button class="perspective-tab" data-view="ecosystem">
-                    <span class="perspective-icon">🦠</span>
-                    Living Ecosystem
-                </button>
-                <button class="perspective-tab" data-view="flow">
-                    <span class="perspective-icon">🌊</span>
-                    Control Flow
-                </button>
-                <button class="perspective-tab" data-view="liquid">
-                    <span class="perspective-icon">💧</span>
-                    Liquid Flow
-                </button>
-                <button class="perspective-tab" data-view="architecture">
-                    <span class="perspective-icon">🏗️</span>
-                    Architecture Map
-                </button>
-                <button class="perspective-tab" data-view="dependencies">
-                    <span class="perspective-icon">🔗</span>
-                    Dependency Graph
-                </button>
-                <button class="perspective-tab" data-view="timeline">
-                    <span class="perspective-icon">📊</span>
-                    Evolution Timeline
-                </button>
-                <button class="perspective-tab" data-view="hotspots">
-                    <span class="perspective-icon">🔥</span>
-                    Change Hotspots
-                </button>
-            </nav>
-        </aside>
-
-        <main class="main-view">
-            <!-- Network View -->
-            <div class="view-container active" id="networkView">
-                <div class="network-container" id="networkContainer"></div>
-            </div>
-
-            <!-- Complexity View -->
-            <div class="view-container" id="complexityView">
-                <div class="complexity-grid" id="complexityGrid"></div>
-            </div>
-
-            <!-- Living Code Ecosystem View -->
-            <div class="view-container" id="ecosystemView">
-                <div class="ecosystem-container" id="ecosystemContainer">
-                    <div class="ecosystem-controls" style="position: absolute; top: 10px; left: 10px; z-index: 100;">
-                        <button id="playPauseBtn" style="background: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">▶️ Play</button>
-                        <button id="resetBtn" style="background: var(--accent-orange); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer;">🔄 Reset</button>
-                    </div>
-                    <canvas id="ecosystemCanvas" style="width: 100%; height: 100%; background: var(--primary-bg);"></canvas>
+            <div id="insight-panel">
+                <div class="panel-header">
+                    <span id="insight-title">Select a symbol for details</span>
+                </div>
+                <div class="panel-content" id="insight-content">
+                    <!-- Dynamic content -->
                 </div>
             </div>
 
-            <!-- Flow View -->
-            <div class="view-container" id="flowView">
-                <svg class="flow-diagram" id="flowDiagram">
-                    <defs>
-                        <marker id="arrowhead" markerWidth="10" markerHeight="7" 
-                               refX="9" refY="3.5" orient="auto">
-                            <polygon points="0 0, 10 3.5, 0 7" fill="var(--accent-blue)" />
-                        </marker>
-                    </defs>
-                </svg>
-            </div>
-
-            <!-- Liquid Flow View -->
-            <div class="view-container" id="liquidView">
-                <div class="liquid-flow-container" id="liquidFlowContainer">
-                    <div class="flow-controls" style="position: absolute; top: 10px; left: 10px; z-index: 100;">
-                        <button id="liquidPlayPauseBtn" style="background: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">▶️ Flow</button>
-                        <button id="liquidResetBtn" style="background: var(--accent-orange); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-right: 8px;">🔄 Reset</button>
-                        <span style="color: var(--text-secondary); font-size: 12px;">Viscosity: <span id="viscosityDisplay">0.38</span></span>
-                    </div>
-                    <canvas id="liquidFlowCanvas" style="width: 100%; height: 100%; background: linear-gradient(45deg, #0a0a0f 0%, #1a1a2e 100%);"></canvas>
+            <div id="ai-helper">
+                <div class="control-label">AI Assistant Insights</div>
+                <div id="ai-suggestions">
+                    <!-- Dynamic AI suggestions -->
                 </div>
             </div>
 
-            <!-- Other views... -->
-            <div class="view-container" id="architectureView">
-                <div class="loading-container">
-                    <div class="loading-spinner"></div>
-                    <div>Building architecture visualization...</div>
-                </div>
+            <div id="stats">
+                <div class="stat-line">FPS: <span class="stat-value" id="fps">0</span></div>
+                <div class="stat-line">Symbols: <span class="stat-value" id="symbol-count">0</span></div>
+                <div class="stat-line">Relations: <span class="stat-value" id="relation-count">0</span></div>
+                <div class="stat-line">Renderer: <span class="stat-value" id="renderer-type">WebGPU</span></div>
             </div>
 
-            <div class="view-container" id="dependenciesView">
-                <div class="loading-container">
-                    <div class="loading-spinner"></div>
-                    <div>Analyzing dependencies...</div>
-                </div>
+            <div id="loading">
+                <div class="loading-spinner"></div>
+                <div>Initializing Code Intelligence...</div>
             </div>
-
-            <div class="view-container" id="timelineView">
-                <div class="loading-container">
-                    <div class="loading-spinner"></div>
-                    <div>Loading evolution data...</div>
-                </div>
-            </div>
-
-            <div class="view-container" id="hotspotsView">
-                <div class="loading-container">
-                    <div class="loading-spinner"></div>
-                    <div>Detecting change patterns...</div>
-                </div>
-            </div>
-        </main>
-
-        <aside class="detail-panel">
-            <div class="panel-header" id="panelHeader">Symbol Details</div>
-            <div class="panel-content">
-                <div class="metrics-grid" id="metricsGrid">
-                    <!-- Populated by JS -->
-                </div>
-                <div id="detailContent">
-                    <p style="color: var(--text-secondary); font-size: 13px;">
-                        Select a symbol or component to view detailed analysis
-                    </p>
-                </div>
-            </div>
-        </aside>
+        </div>
     </div>
 
-    <script type="module" src="main.js"></script>
+    <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

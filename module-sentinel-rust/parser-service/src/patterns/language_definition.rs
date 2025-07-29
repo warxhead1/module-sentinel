@@ -54,6 +54,39 @@ impl LanguageDefinition {
                     "class" => {
                         definition.patterns.class_patterns = Self::parse_patterns(value)?;
                     }
+                    "variable" => {
+                        definition.patterns.variable_patterns = Self::parse_patterns(value)?;
+                    }
+                    "import" => {
+                        definition.patterns.import_patterns = Self::parse_patterns(value)?;
+                    }
+                    "inheritance" => {
+                        definition.patterns.inheritance_patterns = Self::parse_patterns(value)?;
+                    }
+                    "call" => {
+                        definition.patterns.call_patterns = Self::parse_patterns(value)?;
+                    }
+                    "usage" => {
+                        definition.patterns.usage_patterns = Self::parse_patterns(value)?;
+                    }
+                    "api_calls" => {
+                        definition.patterns.api_patterns = Self::parse_patterns(value)?;
+                    }
+                    "websocket_patterns" => {
+                        definition.patterns.api_patterns.extend(Self::parse_patterns(value)?);
+                    }
+                    "subprocess_patterns" => {
+                        definition.patterns.subprocess_patterns = Self::parse_patterns(value)?;
+                    }
+                    "database_patterns" => {
+                        definition.patterns.api_patterns.extend(Self::parse_patterns(value)?);
+                    }
+                    "endpoint_definitions" => {
+                        definition.patterns.api_patterns.extend(Self::parse_patterns(value)?);
+                    }
+                    "ffi_patterns" => {
+                        definition.patterns.ffi_patterns = Self::parse_patterns(value)?;
+                    }
                     "class_with_interface" => {
                         // Handle composite pattern
                         if let Ok(composite) = Self::parse_composite_pattern(value) {
@@ -78,6 +111,21 @@ impl LanguageDefinition {
                     "api_calls" => {
                         definition.cross_language_patterns.api_patterns = 
                             Self::parse_cross_language_patterns(value)?;
+                    }
+                    "websocket" => {
+                        definition.cross_language_patterns.api_patterns.extend(
+                            Self::parse_cross_language_patterns(value)?
+                        );
+                    }
+                    "ffi_calls" => {
+                        definition.cross_language_patterns.api_patterns.extend(
+                            Self::parse_cross_language_patterns(value)?
+                        );
+                    }
+                    "database" => {
+                        definition.cross_language_patterns.api_patterns.extend(
+                            Self::parse_cross_language_patterns(value)?
+                        );
                     }
                     _ => {}
                 }

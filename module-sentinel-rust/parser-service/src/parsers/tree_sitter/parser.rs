@@ -24,12 +24,6 @@ pub struct ParseError {
     pub end_position: Point,
 }
 
-#[derive(Debug)]
-pub struct IncrementalEdit {
-    pub start_byte: usize,
-    pub old_end_byte: usize,
-    pub new_end_byte: usize,
-}
 
 impl TreeSitterParser {
     pub fn new(language: Language) -> Result<Self> {

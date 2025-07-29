@@ -22,6 +22,8 @@ async fn debug_factory_pattern_detection() {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
         Symbol {
             id: "make_connection".to_string(),
@@ -38,6 +40,8 @@ async fn debug_factory_pattern_detection() {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         },
     ];
     

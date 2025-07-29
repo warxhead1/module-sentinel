@@ -14,7 +14,10 @@ import type {
   SearchOptions,
   SimilarityResult,
   ParseResult,
-  UniversalRelationship
+  UniversalRelationship,
+  CodeQualityResult,
+  ComponentReuseRecommendation,
+  ErrorFixSuggestion
 } from '../types/rust-bindings.js';
 
 const logger = createLogger('RustBridge');
@@ -36,6 +39,13 @@ interface ModuleSentinelInstance {
   analyzePatterns(): Promise<AnalysisResult>;
   calculateSimilarity(symbol1Id: string, symbol2Id: string): Promise<SimilarityResult>;
   parseFile(filePath: string, language: Language): Promise<ParseResult>;
+  analyzeCodeQuality(filePath: string, language: Language, content: string, includeSuggestions?: boolean): Promise<CodeQualityResult>;
+  getAllRelationships(): Promise<UniversalRelationship[]>;
+  getSymbolRelationships(symbolId: string): Promise<UniversalRelationship[]>;
+  // ML-powered methods
+  findReusableComponents(functionalityDescription: string, requiredCapabilities: string[]): Promise<ComponentReuseRecommendation[]>;
+  getErrorFixSuggestions(filePath: string, errorMessage: string, errorLine: number, errorColumn: number): Promise<ErrorFixSuggestion[]>;
+  recordUserFix(errorMessage: string, errorLine: number, errorColumn: number, appliedFix: string, language: Language): Promise<void>;
 }
 
 // Import the Rust NAPI bindings
@@ -106,16 +116,16 @@ export class ModuleSentinelBridge {
   /**
    * Index a project for analysis
    */
-  async indexProject(options?: IndexingOptions): Promise<ProjectInfo> {
+  async index_project(options?: IndexingOptions): Promise<ProjectInfo> {
     this.ensureInitialized();
     
-    const complete = logger.operation('indexProject', { options });
+    const complete = logger.operation('index_project', { options });
     
     try {
       const result = await this.rustInstance!.indexProject(options || {});
       complete();
       logger.info('Project indexing completed', { 
-        symbolCount: result.symbol_count,
+        symbolCount: result.symbolCount,
         projectId: result.id 
       });
       return result;
@@ -128,10 +138,10 @@ export class ModuleSentinelBridge {
   /**
    * Search for symbols in the indexed project
    */
-  async searchSymbols(query: string, options?: SearchOptions): Promise<Symbol[]> {
+  async search_symbols(query: string, options?: SearchOptions): Promise<Symbol[]> {
     this.ensureInitialized();
     
-    const complete = logger.operation('searchSymbols', { query, options });
+    const complete = logger.operation('search_symbols', { query, options });
     
     try {
       const results = await this.rustInstance!.searchSymbols(query, options || {});
@@ -147,17 +157,17 @@ export class ModuleSentinelBridge {
   /**
    * Analyze patterns in the indexed project
    */
-  async analyzePatterns(): Promise<AnalysisResult> {
+  async analyze_patterns(): Promise<AnalysisResult> {
     this.ensureInitialized();
     
-    const complete = logger.operation('analyzePatterns');
+    const complete = logger.operation('analyze_patterns');
     
     try {
       const result = await this.rustInstance!.analyzePatterns();
       complete();
       logger.info('Pattern analysis completed', { 
-        patternsDetected: result.insights.patterns_detected,
-        symbolsAnalyzed: result.insights.total_symbols_analyzed 
+        patternsDetected: result.insights.patternsDetected,
+        symbolsAnalyzed: result.insights.totalSymbolsAnalyzed 
       });
       return result;
     } catch (error) {
@@ -169,7 +179,7 @@ export class ModuleSentinelBridge {
   /**
    * Calculate similarity between two symbols
    */
-  async calculateSimilarity(symbol1Id: string, symbol2Id: string): Promise<SimilarityResult> {
+  async calculate_similarity(symbol1Id: string, symbol2Id: string): Promise<SimilarityResult> {
     this.ensureInitialized();
     
     try {
@@ -177,7 +187,7 @@ export class ModuleSentinelBridge {
       logger.debug('Similarity calculation completed', { 
         symbol1Id, 
         symbol2Id, 
-        overallScore: result.overall_score 
+        overallScore: result.overallScore 
       });
       return result;
     } catch (error) {
@@ -189,10 +199,10 @@ export class ModuleSentinelBridge {
   /**
    * Parse a single file and return symbols
    */
-  async parseFile(filePath: string, language: Language): Promise<ParseResult> {
+  async parse_file(filePath: string, language: Language): Promise<ParseResult> {
     this.ensureInitialized();
     
-    const complete = logger.operation('parseFile', { filePath, language });
+    const complete = logger.operation('parse_file', { filePath, language });
     
     try {
       const result = await this.rustInstance!.parseFile(filePath, language);
@@ -200,7 +210,7 @@ export class ModuleSentinelBridge {
       logger.debug('File parsing completed', { 
         filePath, 
         symbolCount: result.symbols.length,
-        parseMethod: result.parse_method 
+        parseMethod: result.parseMethod 
       });
       return result;
     } catch (error) {
@@ -210,23 +220,129 @@ export class ModuleSentinelBridge {
   }
 
   /**
-   * Get symbol relationships from the project
+   * Analyze code quality for a specific file
    */
-  async getSymbolRelationships(): Promise<UniversalRelationship[]> {
+  async analyze_code_quality(filePath: string, language: Language, includeSuggestions?: boolean): Promise<CodeQualityResult> {
     this.ensureInitialized();
     
-    const complete = logger.operation('getSymbolRelationships');
+    const complete = logger.operation('analyze_code_quality', { filePath, language, includeSuggestions });
     
     try {
-      // In a real implementation, this would call the Rust API
-      // For now, return mock data to allow the build to succeed
-      const relationships: UniversalRelationship[] = [];
+      // Read the file content
+      const fs = await import('fs/promises');
+      const content = await fs.readFile(filePath, 'utf-8');
+      
+      const result = await this.rustInstance!.analyzeCodeQuality(filePath, language, content, includeSuggestions);
       complete();
-      logger.info('Symbol relationships retrieved', { count: relationships.length });
+      logger.debug('Code quality analysis completed', { 
+        filePath, 
+        overallScore: result.overallScore,
+        issuesFound: result.issues.length 
+      });
+      return result;
+    } catch (error) {
+      logger.error('Code quality analysis failed', error, { filePath, language });
+      throw error;
+    }
+  }
+
+  /**
+   * Get all symbol relationships from the project
+   */
+  async get_all_relationships(): Promise<UniversalRelationship[]> {
+    this.ensureInitialized();
+    
+    const complete = logger.operation('get_all_relationships');
+    
+    try {
+      const relationships = await this.rustInstance!.getAllRelationships();
+      complete();
+      logger.info('All relationships retrieved', { count: relationships.length });
       return relationships;
     } catch (error) {
-      logger.error('Failed to get symbol relationships', error);
+      logger.error('Failed to get all relationships', error);
       throw error;
+    }
+  }
+
+  /**
+   * Get relationships for a specific symbol
+   */
+  async get_symbol_relationships(symbolId: string): Promise<UniversalRelationship[]> {
+    this.ensureInitialized();
+    
+    const complete = logger.operation('get_symbol_relationships', { symbolId });
+    
+    try {
+      const relationships = await this.rustInstance!.getSymbolRelationships(symbolId);
+      complete();
+      logger.info('Symbol relationships retrieved', { symbolId, count: relationships.length });
+      return relationships;
+    } catch (error) {
+      logger.error('Failed to get symbol relationships', error, { symbolId });
+      throw error;
+    }
+  }
+
+  /**
+   * Find reusable components that match the intended functionality (ML-powered)
+   */
+  async find_reusable_components(functionalityDescription: string, requiredCapabilities: string[]): Promise<ComponentReuseRecommendation[]> {
+    this.ensureInitialized();
+    
+    const complete = logger.operation('find_reusable_components', { functionalityDescription, requiredCapabilities });
+    
+    try {
+      const recommendations = await this.rustInstance!.findReusableComponents(functionalityDescription, requiredCapabilities);
+      complete();
+      logger.info('Component reuse analysis completed', { 
+        functionalityDescription, 
+        recommendationCount: recommendations.length 
+      });
+      return recommendations;
+    } catch (error) {
+      logger.error('Component reuse analysis failed', error, { functionalityDescription });
+      throw error;
+    }
+  }
+
+  /**
+   * Get ML-powered fix suggestions for parse errors
+   */
+  async get_error_fix_suggestions(filePath: string, errorMessage: string, errorLine: number, errorColumn: number): Promise<ErrorFixSuggestion[]> {
+    this.ensureInitialized();
+    
+    const complete = logger.operation('get_error_fix_suggestions', { filePath, errorMessage, errorLine, errorColumn });
+    
+    try {
+      const suggestions = await this.rustInstance!.getErrorFixSuggestions(filePath, errorMessage, errorLine, errorColumn);
+      complete();
+      logger.info('Error fix suggestions generated', { 
+        filePath, 
+        suggestionCount: suggestions.length 
+      });
+      return suggestions;
+    } catch (error) {
+      logger.error('Error fix suggestion generation failed', error, { filePath, errorMessage });
+      throw error;
+    }
+  }
+
+  /**
+   * Record a user fix for ML training
+   */
+  async record_user_fix(errorMessage: string, errorLine: number, errorColumn: number, appliedFix: string, language: Language): Promise<void> {
+    this.ensureInitialized();
+    
+    const complete = logger.operation('record_user_fix', { errorMessage, appliedFix, language });
+    
+    try {
+      await this.rustInstance!.recordUserFix(errorMessage, errorLine, errorColumn, appliedFix, language);
+      complete();
+      logger.info('User fix recorded for ML training', { errorMessage, appliedFix });
+    } catch (error) {
+      logger.error('Failed to record user fix', error, { errorMessage, appliedFix });
+      // Don't throw - ML training errors shouldn't break the user flow
     }
   }
 
@@ -248,8 +364,8 @@ export class ModuleSentinelBridge {
 /**
  * Quick symbol search without creating a full bridge instance
  */
-export async function quickSearch(projectPath: string, query: string, limit?: number): Promise<Symbol[]> {
-  const complete = logger.operation('quickSearch', { projectPath, query, limit });
+export async function quick_search(projectPath: string, query: string, limit?: number): Promise<Symbol[]> {
+  const complete = logger.operation('quick_search', { projectPath, query, limit });
   
   try {
     const bindings = await loadRustBindings();
@@ -265,8 +381,8 @@ export async function quickSearch(projectPath: string, query: string, limit?: nu
 /**
  * Quick pattern analysis without full bridge setup
  */
-export async function quickAnalyze(projectPath: string): Promise<AnalysisResult> {
-  const complete = logger.operation('quickAnalyze', { projectPath });
+export async function quick_analyze(projectPath: string): Promise<AnalysisResult> {
+  const complete = logger.operation('quick_analyze', { projectPath });
   
   try {
     const bindings = await loadRustBindings();
@@ -282,7 +398,7 @@ export async function quickAnalyze(projectPath: string): Promise<AnalysisResult>
 /**
  * Check if Rust bindings are available
  */
-export async function checkRustBindings(): Promise<boolean> {
+export async function check_rust_bindings(): Promise<boolean> {
   try {
     await loadRustBindings();
     return true;
@@ -294,7 +410,7 @@ export async function checkRustBindings(): Promise<boolean> {
 /**
  * Get bridge health information
  */
-export async function getBridgeHealth(): Promise<{
+export async function get_bridge_health(): Promise<{
   rustBindingsAvailable: boolean;
   version?: string;
   error?: string;

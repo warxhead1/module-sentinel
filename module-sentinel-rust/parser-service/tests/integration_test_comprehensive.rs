@@ -1,17 +1,9 @@
 use tokio;
-use anyhow::Result;
 use std::sync::Arc;
 
 // Import all the components we need to test integration
-use module_sentinel_parser::database::{
-    SemanticDeduplicator, 
-    semantic_pattern_engine::SemanticPatternEngine,
-    adaptive_similarity_engine::AdaptiveSimilarityEngine,
-    bloom_filter::AdaptiveSymbolBloomFilter,
-};
-use module_sentinel_parser::parsers::tree_sitter::{
-    CodeEmbedder, Language, Symbol, SimilarityType
-};
+use module_sentinel_parser::database::SemanticDeduplicator;
+use module_sentinel_parser::parsers::tree_sitter::{CodeEmbedder, Language, Symbol};
 
 // Helper function to create test symbols with realistic properties
 fn create_realistic_symbol(
@@ -36,6 +28,8 @@ fn create_realistic_symbol(
         duplicate_of: None,
         confidence_score: None,
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 

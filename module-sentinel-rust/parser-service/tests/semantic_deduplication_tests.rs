@@ -1,11 +1,10 @@
 use tokio;
-use anyhow::Result;
 use std::sync::Arc;
 
 use module_sentinel_parser::database::semantic_deduplicator::{
-    SemanticDeduplicator, DuplicateGroup, DeduplicationStrategy, SimilarityThresholds
+    SemanticDeduplicator, DeduplicationStrategy
 };
-use module_sentinel_parser::database::bloom_filter::{SymbolBloomFilter, SymbolKey, BloomFilterStats};
+use module_sentinel_parser::database::bloom_filter::{SymbolBloomFilter, SymbolKey};
 use module_sentinel_parser::parsers::tree_sitter::{
     Language, CodeEmbedder, Symbol, SimilarityType
 };
@@ -32,6 +31,8 @@ fn create_test_symbol_with_embedding(
         duplicate_of: None,
         confidence_score: None,
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 
@@ -40,8 +41,10 @@ async fn test_semantic_deduplicator_creation() {
     let embedder = Arc::new(CodeEmbedder::load(&Language::Rust).await.unwrap());
     let deduplicator = SemanticDeduplicator::new(embedder).await.unwrap();
     
-    // Should create successfully
-    assert!(true);
+    // Should create successfully and be ready to process symbols
+    let empty_symbols: Vec<Symbol> = vec![];
+    let result = deduplicator.find_duplicates(&empty_symbols).await.unwrap();
+    assert_eq!(result.len(), 0, "Empty symbols should return no duplicates");
 }
 
 #[tokio::test]
@@ -173,14 +176,24 @@ async fn test_deduplication_with_different_similarity_levels() {
         // High similarity should be in the group
         assert!(group.duplicate_symbols.iter().any(|s| s.name == "process_data"));
         
-        // Check deduplication strategies
+        // Check deduplication strategies and similarity types
         for (symbol_id, similarity) in &group.similarity_scores {
-            if *similarity > 0.9 {
-                assert!(matches!(group.deduplication_strategy, DeduplicationStrategy::AutoMerge));
-            } else if *similarity > 0.7 {
-                // Could be AutoMerge or SuggestMerge depending on overall confidence
-                assert!(matches!(group.deduplication_strategy, 
-                    DeduplicationStrategy::AutoMerge | DeduplicationStrategy::SuggestMerge));
+            // Find the symbol in the duplicates
+            if let Some(duplicate) = group.duplicate_symbols.iter().find(|s| &s.id == symbol_id) {
+                // Check that similar_symbols are properly classified
+                if let Some(similar) = duplicate.similar_symbols.first() {
+                    if *similarity > 0.9 {
+                        assert!(matches!(similar.relationship_type, SimilarityType::ExactDuplicate | SimilarityType::SemanticDuplicate));
+                        assert!(matches!(group.deduplication_strategy, DeduplicationStrategy::AutoMerge));
+                    } else if *similarity > 0.7 {
+                        assert!(matches!(similar.relationship_type, SimilarityType::SemanticDuplicate | SimilarityType::FunctionalSimilar));
+                        // Could be AutoMerge or SuggestMerge depending on overall confidence
+                        assert!(matches!(group.deduplication_strategy, 
+                            DeduplicationStrategy::AutoMerge | DeduplicationStrategy::SuggestMerge));
+                    } else if *similarity > 0.5 {
+                        assert!(matches!(similar.relationship_type, SimilarityType::FunctionalSimilar | SimilarityType::NameSimilar));
+                    }
+                }
             }
         }
         
@@ -197,16 +210,16 @@ async fn test_merge_similar_symbols() {
     // Create symbols for merging
     let identical_embedding = vec![0.8, 0.1, 0.1, 0.0, 0.0];
     
-    let mut primary = create_test_symbol_with_embedding(
+    let primary = create_test_symbol_with_embedding(
         "calculateTotal", "fn(Vec<i32>) -> i32", Language::Rust, identical_embedding.clone()
     );
     let primary_id = primary.id.clone();
     
-    let mut duplicate1 = create_test_symbol_with_embedding(
+    let duplicate1 = create_test_symbol_with_embedding(
         "calc_total", "fn(Vec<i32>) -> i32", Language::Rust, identical_embedding.clone()
     );
     
-    let mut duplicate2 = create_test_symbol_with_embedding(
+    let duplicate2 = create_test_symbol_with_embedding(
         "computeTotal", "fn(Vec<i32>) -> i32", Language::Rust, identical_embedding
     );
     
@@ -256,16 +269,37 @@ async fn test_learning_from_corrections() {
         "Different data formats - JSON vs XML parsing have different semantics"
     ).await.unwrap();
     
-    // After learning, similar comparisons should have adjusted scores
+    // Check if we can retrieve the correction from history
+    let corrected_similarity = deduplicator.check_correction_history(&symbol1, &symbol2).await;
+    assert!(corrected_similarity.is_some());
+    assert_eq!(corrected_similarity.unwrap(), 0.2);
+    
+    // Verify that the initial similarity was higher than the corrected one
+    assert!(initial_similarity > 0.2, "Initial similarity should have been higher before correction");
+    
+    // Create more parsers to test pattern learning
     let symbol3 = create_test_symbol_with_embedding(
         "parseYaml", "fn(&str) -> Result<YamlValue>", Language::Rust, vec![0.65, 0.35, 0.0, 0.0, 0.0]
     );
     
-    let new_similarity = deduplicator.similarity_score(&symbol1, &symbol3).await.unwrap();
+    // Add another correction for YAML vs JSON
+    let yaml_json_similarity = deduplicator.similarity_score(&symbol1, &symbol3).await.unwrap();
+    deduplicator.learn_from_correction(
+        &symbol1, 
+        &symbol3, 
+        yaml_json_similarity,
+        0.2, // Also low similarity
+        "Different data formats - JSON vs YAML parsing have different semantics"
+    ).await.unwrap();
     
-    // The deduplicator should have learned that parse* functions with different formats are not similar
-    // This is a complex test that would require more sophisticated learning implementation
-    assert!(true); // Placeholder - in real implementation we'd verify learning occurred
+    // Check that we can retrieve the JSON-YAML correction
+    let yaml_json_check = deduplicator.check_correction_history(&symbol1, &symbol3).await;
+    assert!(yaml_json_check.is_some());
+    assert_eq!(yaml_json_check.unwrap(), 0.2);
+    
+    // Test that the similarity score now uses the corrected value
+    let new_json_xml_similarity = deduplicator.similarity_score(&symbol1, &symbol2).await.unwrap();
+    assert_eq!(new_json_xml_similarity, 0.2, "Should use corrected similarity from history");
 }
 
 #[tokio::test]
@@ -286,17 +320,20 @@ async fn test_deduplication_insights() {
         ),
     ];
     
-    let _duplicate_groups = deduplicator.find_duplicates(&symbols).await.unwrap();
+    let duplicate_groups = deduplicator.find_duplicates(&symbols).await.unwrap();
     
     // Get insights
-    let insights = deduplicator.get_deduplication_insights().await.unwrap();
+    let insights = deduplicator.get_deduplication_insights(&duplicate_groups).await;
     
     // Should have meaningful insights
-    assert!(insights.overall_accuracy >= 0.0 && insights.overall_accuracy <= 1.0);
-    assert!(insights.current_thresholds.high_confidence > insights.current_thresholds.medium_confidence);
-    assert!(insights.current_thresholds.medium_confidence > insights.current_thresholds.low_confidence);
-    assert!(insights.algorithm_weights.name_similarity >= 0.0);
-    assert!(insights.algorithm_weights.signature_similarity >= 0.0);
+    assert!(insights.total_duplicate_groups > 0);
+    // Verify that the sum of confidence groups equals total groups
+    assert_eq!(insights.total_duplicate_groups, 
+               insights.high_confidence_groups + insights.medium_confidence_groups + insights.low_confidence_groups);
+    // Verify insights provide useful breakdown
+    println!("Insights: {} total ({} high, {} medium, {} low confidence)", 
+             insights.total_duplicate_groups, insights.high_confidence_groups, 
+             insights.medium_confidence_groups, insights.low_confidence_groups);
 }
 
 #[tokio::test]

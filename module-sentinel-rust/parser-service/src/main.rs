@@ -1,21 +1,15 @@
 use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod ast;
-mod parsers;
-mod database;
-mod models;
-mod patterns;
-mod analyzers;
-mod config;
-
-use parsers::ParserManager;
-use database::DatabaseWriter;
-use patterns::PatternEngine;
-use config::PerfMode;
+use module_sentinel_parser::{
+    parsers::ParserManager,
+    database::DatabaseWriter,
+    patterns::PatternEngine,
+    config::PerfMode,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

@@ -29,6 +29,25 @@ impl CodeTokenizer {
         tokenizer.initialize_vocab();
         Ok(tokenizer)
     }
+    
+    /// Encode text into token IDs
+    pub fn encode(&self, text: &str) -> Vec<u32> {
+        let mut tokens = Vec::new();
+        
+        // Simple whitespace tokenization with vocabulary lookup
+        for word in text.split_whitespace() {
+            if let Some(&token_id) = self.vocab.get(word) {
+                tokens.push(token_id);
+            } else if let Some(&token_id) = self.special_tokens.get(word) {
+                tokens.push(token_id);
+            } else {
+                // Unknown token
+                tokens.push(1); // <UNK> token ID
+            }
+        }
+        
+        tokens
+    }
 
     fn initialize_vocab(&mut self) {
         // Common programming tokens
@@ -240,12 +259,63 @@ impl CodeTokenizer {
     fn remove_comments(&self, code: &str) -> String {
         self.comment_regex.replace_all(code, "").to_string()
     }
+    
+    /// Extract all identifiers from code using regex
+    pub fn extract_identifiers(&self, code: &str) -> Vec<String> {
+        self.identifier_regex
+            .find_iter(code)
+            .map(|m| m.as_str().to_string())
+            .collect()
+    }
+    
+    /// Extract all numbers from code using regex
+    pub fn extract_numbers(&self, code: &str) -> Vec<String> {
+        self.number_regex
+            .find_iter(code)
+            .map(|m| m.as_str().to_string())
+            .collect()
+    }
+    
+    /// Extract all string literals from code using regex
+    pub fn extract_strings(&self, code: &str) -> Vec<String> {
+        self.string_regex
+            .find_iter(code)
+            .map(|m| m.as_str().to_string())
+            .collect()
+    }
+    
+    /// Validate if a token is a valid identifier
+    pub fn is_valid_identifier(&self, token: &str) -> bool {
+        self.identifier_regex.is_match(token) && 
+        self.identifier_regex.find(token).map(|m| m.as_str() == token).unwrap_or(false)
+    }
+    
+    /// Validate if a token is a valid number
+    pub fn is_valid_number(&self, token: &str) -> bool {
+        self.number_regex.is_match(token) &&
+        self.number_regex.find(token).map(|m| m.as_str() == token).unwrap_or(false)
+    }
+    
+    /// Validate if a token is a valid string literal
+    pub fn is_valid_string(&self, token: &str) -> bool {
+        self.string_regex.is_match(token) &&
+        self.string_regex.find(token).map(|m| m.as_str() == token).unwrap_or(false)
+    }
 
     fn match_string_literal(&self, chars: &[char], pos: usize) -> Option<String> {
         if pos >= chars.len() {
             return None;
         }
         
+        // Use the regex for more robust string matching
+        let remaining: String = chars[pos..].iter().collect();
+        if let Some(mat) = self.string_regex.find(&remaining) {
+            if mat.start() == 0 {
+                return Some(mat.as_str().to_string());
+            }
+        }
+        
+        // Fallback to manual matching if regex doesn't match
         let quote_char = chars[pos];
         if quote_char != '"' && quote_char != '\'' {
             return None;
@@ -269,25 +339,19 @@ impl CodeTokenizer {
     }
 
     fn match_number(&self, chars: &[char], pos: usize) -> Option<String> {
-        if pos >= chars.len() || !chars[pos].is_ascii_digit() {
+        if pos >= chars.len() {
             return None;
         }
         
-        let mut end_pos = pos;
-        let mut has_dot = false;
-        
-        while end_pos < chars.len() {
-            if chars[end_pos].is_ascii_digit() {
-                end_pos += 1;
-            } else if chars[end_pos] == '.' && !has_dot {
-                has_dot = true;
-                end_pos += 1;
-            } else {
-                break;
+        // Use the regex for more robust number matching
+        let remaining: String = chars[pos..].iter().collect();
+        if let Some(mat) = self.number_regex.find(&remaining) {
+            if mat.start() == 0 {
+                return Some(mat.as_str().to_string());
             }
         }
         
-        Some(chars[pos..end_pos].iter().collect())
+        None
     }
 
     fn match_identifier(&self, chars: &[char], pos: usize) -> Option<String> {
@@ -295,22 +359,15 @@ impl CodeTokenizer {
             return None;
         }
         
-        let first_char = chars[pos];
-        if !first_char.is_alphabetic() && first_char != '_' {
-            return None;
-        }
-        
-        let mut end_pos = pos + 1;
-        while end_pos < chars.len() {
-            let ch = chars[end_pos];
-            if ch.is_alphanumeric() || ch == '_' {
-                end_pos += 1;
-            } else {
-                break;
+        // Use the regex for more robust identifier matching
+        let remaining: String = chars[pos..].iter().collect();
+        if let Some(mat) = self.identifier_regex.find(&remaining) {
+            if mat.start() == 0 {
+                return Some(mat.as_str().to_string());
             }
         }
         
-        Some(chars[pos..end_pos].iter().collect())
+        None
     }
 
     fn match_operator(&self, chars: &[char], pos: usize) -> Option<String> {
@@ -400,5 +457,63 @@ mod tests {
         let tokens = tokenizer.tokenize(code);
         
         assert!(tokens.iter().any(|t| t.starts_with("NUMBER_")));
+    }
+    
+    #[test]
+    fn test_extract_identifiers() {
+        let tokenizer = CodeTokenizer::new(&Language::Rust).unwrap();
+        let code = "let foo = bar + baz_123;";
+        let identifiers = tokenizer.extract_identifiers(code);
+        
+        assert!(identifiers.contains(&"foo".to_string()));
+        assert!(identifiers.contains(&"bar".to_string()));
+        assert!(identifiers.contains(&"baz_123".to_string()));
+    }
+    
+    #[test]
+    fn test_extract_numbers() {
+        let tokenizer = CodeTokenizer::new(&Language::Rust).unwrap();
+        let code = "let x = 42; let y = 3.14; let z = 0.5;";
+        let numbers = tokenizer.extract_numbers(code);
+        
+        assert!(numbers.contains(&"42".to_string()));
+        assert!(numbers.contains(&"3.14".to_string()));
+        assert!(numbers.contains(&"0.5".to_string()));
+    }
+    
+    #[test]
+    fn test_extract_strings() {
+        let tokenizer = CodeTokenizer::new(&Language::Rust).unwrap();
+        let code = r#"let s1 = "hello"; let s2 = 'world'; let s3 = "test";"#;
+        let strings = tokenizer.extract_strings(code);
+        
+        assert!(strings.contains(&r#""hello""#.to_string()));
+        assert!(strings.contains(&"'world'".to_string()));
+        assert!(strings.contains(&r#""test""#.to_string()));
+    }
+    
+    #[test]
+    fn test_validation_methods() {
+        let tokenizer = CodeTokenizer::new(&Language::Rust).unwrap();
+        
+        // Test identifier validation
+        assert!(tokenizer.is_valid_identifier("valid_name"));
+        assert!(tokenizer.is_valid_identifier("_underscore"));
+        assert!(tokenizer.is_valid_identifier("camelCase123"));
+        assert!(!tokenizer.is_valid_identifier("123invalid"));
+        assert!(!tokenizer.is_valid_identifier("invalid-name"));
+        
+        // Test number validation
+        assert!(tokenizer.is_valid_number("42"));
+        assert!(tokenizer.is_valid_number("3.14"));
+        assert!(tokenizer.is_valid_number("0.001"));
+        assert!(!tokenizer.is_valid_number("abc"));
+        assert!(!tokenizer.is_valid_number("12.34.56"));
+        
+        // Test string validation
+        assert!(tokenizer.is_valid_string(r#""hello world""#));
+        assert!(tokenizer.is_valid_string("'single quotes'"));
+        assert!(!tokenizer.is_valid_string("no quotes"));
+        assert!(!tokenizer.is_valid_string(r#""unclosed"#));
     }
 }

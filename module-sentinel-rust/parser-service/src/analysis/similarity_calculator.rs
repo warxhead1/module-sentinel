@@ -1,6 +1,3 @@
-use anyhow::Result;
-use std::collections::HashMap;
-use tracing::debug;
 
 use crate::parsers::tree_sitter::Symbol;
 
@@ -322,7 +319,7 @@ impl SimilarityCalculator {
         }
         
         // Check for generic types
-        if (norm1.contains('<') && norm2.contains('<')) {
+        if norm1.contains('<') && norm2.contains('<') {
             let base1 = norm1.split('<').next().unwrap_or(&norm1);
             let base2 = norm2.split('<').next().unwrap_or(&norm2);
             if base1 == base2 {
@@ -373,6 +370,8 @@ mod tests {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }
     

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "module-sentinel": {
+      "command": "node",
+      "args": [
+        "/home/warxh/cpp_mcp_master/module-sentinel/dist/index.js"
+      ],
+      "env": {
+        "MODULE_SENTINEL_PROJECT_PATH": "/home/warxh/cpp_mcp_master/module-sentinel"
+      }
+    }
+  }
+}

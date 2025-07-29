@@ -1,5 +1,3 @@
-use tokio;
-use anyhow::Result;
 use module_sentinel_parser::analysis::{PatternDetector, PatternCategory, SimilarityCalculator};
 use module_sentinel_parser::parsers::tree_sitter::{Symbol, Language as ParserLanguage};
 
@@ -19,6 +17,8 @@ fn create_test_symbol(name: &str, signature: &str, file_path: &str) -> Symbol {
         duplicate_of: None,
         confidence_score: Some(1.0),
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 

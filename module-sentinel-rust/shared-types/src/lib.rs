@@ -192,7 +192,7 @@ impl UniversalSymbolKind {
     
     /// Parse from database string representation
     pub fn from_db_string(s: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(&format!("\"{}\"", s))
+        serde_json::from_str(&format!("\"{s}\""))
     }
 }
 
@@ -207,7 +207,7 @@ impl UniversalRelationshipType {
     
     /// Parse from database string representation
     pub fn from_db_string(s: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(&format!("\"{}\"", s))
+        serde_json::from_str(&format!("\"{s}\""))
     }
 }
 

@@ -11,7 +11,8 @@ import {
   type FlowUpdate, 
   FlowUpdateType, 
   type SystemFlowMetrics,
-  type FlowAlert
+  type FlowAlert,
+  Trend
 } from '../types/flow-types';
 
 const logger = createLogger('FlowSSEService');
@@ -70,8 +71,13 @@ export class FlowSSEService {
     this.clients.set(clientId, client);
     logger.info('New SSE connection', { clientId });
 
-    // Send initial data
-    await this.sendInitialData(client);
+    // Send immediate connection confirmation
+    res.write(`data: {"type":"connected","clientId":"${clientId}"}\n\n`);
+
+    // Send initial data (non-blocking)
+    this.sendInitialData(client).catch(error => {
+      logger.error('Failed to send initial SSE data', error);
+    });
 
     // Handle client disconnect
     req.on('close', () => {
@@ -98,8 +104,13 @@ export class FlowSSEService {
    */
   private async sendInitialData(client: SSEClient): Promise<void> {
     try {
-      // Send current system metrics
-      const metrics = await this.flowService.calculateSystemMetrics();
+      // Send current system metrics with timeout
+      const metricsPromise = this.flowService.calculate_system_metrics();
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Metrics calculation timeout')), 5000)
+      );
+      
+      const metrics = await Promise.race([metricsPromise, timeoutPromise]) as any;
       
       const update: FlowUpdate = {
         timestamp: new Date().toISOString(),
@@ -110,7 +121,7 @@ export class FlowSSEService {
       this.sendToClient(client, update);
 
       // Send current relationships
-      const relationships = await this.flowService.getFlowRelationships();
+      const relationships = await this.flowService.get_flow_relationships();
       
       const relationshipUpdate: FlowUpdate = {
         timestamp: new Date().toISOString(),
@@ -120,7 +131,28 @@ export class FlowSSEService {
 
       this.sendToClient(client, relationshipUpdate);
     } catch (error) {
-      logger.error('Failed to send initial data', error);
+      logger.error('Failed to send initial SSE data', error);
+      // Send error notification to client
+      const errorUpdate: FlowUpdate = {
+        timestamp: new Date().toISOString(),
+        type: FlowUpdateType.MetricsUpdate,
+        metrics: {
+          systemPressure: 0,
+          flowEfficiency: 0,
+          averageLatency: 0,
+          errorRate: 1,
+          criticalPaths: [],
+          bottlenecks: [],
+          underutilizedPaths: [],
+          memoryPressure: 0,
+          cpuUtilization: 0,
+          ioWaitTime: 0,
+          failureProbability: 1,
+          performanceTrend: Trend.Degrading,
+          suggestedOptimizations: []
+        }
+      };
+      this.sendToClient(client, errorUpdate);
     }
   }
 
@@ -132,7 +164,7 @@ export class FlowSSEService {
 
     try {
       // Get current metrics
-      const metrics = await this.flowService.calculateSystemMetrics();
+      const metrics = await this.flowService.calculate_system_metrics();
       
       // Check for alerts
       const alerts = this.checkForAlerts(metrics);

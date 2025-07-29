@@ -1,7 +1,10 @@
 // Core ORM and database functionality
 pub mod orm;
 pub mod models;
+pub mod flow_models;
 pub mod project_database;
+pub mod embedding_manager;
+pub mod semantic_search;
 
 // Advanced analysis modules
 pub mod semantic_pattern_engine;
@@ -15,6 +18,7 @@ pub mod cache_persistence;
 // Export the beautiful ORM
 pub use orm::{Database, Model, QueryBuilder, DatabaseValue};
 pub use models::{Project, Language, UniversalSymbol, UniversalRelationship, FileIndex};
+pub use flow_models::{SymbolCall, DataFlow, CriticalPath, DeepFlow};
 pub use project_database::{ProjectDatabase, ProjectStats};
 
 // Export advanced analysis components
@@ -42,6 +46,14 @@ pub use semantic_deduplicator::{
 
 pub use cache_persistence::{
     CachePersistenceManager, CachePersistenceStats, CacheEntry
+};
+
+pub use embedding_manager::{
+    EmbeddingManager
+};
+
+pub use semantic_search::{
+    SemanticSearchEngine, SearchResult
 };
 
 // Compatibility with existing code

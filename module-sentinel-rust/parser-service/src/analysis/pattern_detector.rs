@@ -1,7 +1,6 @@
-use anyhow::Result;
 use std::collections::HashMap;
 use regex::Regex;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::parsers::tree_sitter::Symbol;
 
@@ -476,6 +475,8 @@ mod tests {
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: Some(vec!["singleton".to_string(), "factory".to_string()]),
+            intent: Some("provide_singleton_instance".to_string()),
         };
         
         let patterns = detector.detect_patterns(&[symbol]);

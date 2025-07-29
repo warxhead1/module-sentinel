@@ -5,6 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+name = "module_sentinel_parser"
+path = "src/lib.rs"
+
 [[bin]]
 name = "module-sentinel-parser"
 path = "src/main.rs"
@@ -76,17 +80,19 @@ edit-distance = "2.1"
 lru = "0.12"
 sha2 = "0.10"
 regex = "1.10"
+petgraph = "0.6"
 
 # ML Integration
 ort = { version = "2.0.0-rc.10", features = ["download-binaries"], optional = true }
 reqwest = { version = "0.11", features = ["json"], optional = true }
+ndarray = { version = "0.15", optional = true }
 
 # Local dependencies
 shared-types = { path = "../shared-types" }
 
 [features]
-default = []
-ml = ["ort", "reqwest"]
+default = ["ml"]
+ml = ["ort", "reqwest", "ndarray"]
 
 [dev-dependencies]
 tempfile = "3.15"

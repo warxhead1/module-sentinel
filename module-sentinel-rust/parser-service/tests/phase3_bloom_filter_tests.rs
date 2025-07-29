@@ -1,12 +1,11 @@
 use tokio;
-use anyhow::Result;
 use std::sync::Arc;
 use std::collections::HashSet;
 
 // Import the types we'll need to implement
 use module_sentinel_parser::database::bloom_filter::{
     AdaptiveSymbolBloomFilter, MemoryAwareBloomFilter, ConcurrentBloomFilter,
-    BloomFilterPerformanceStats, MemoryPressure, BloomFilterConfig
+    MemoryPressure
 };
 
 // Test helper functions

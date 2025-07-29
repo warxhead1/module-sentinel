@@ -1,0 +1,235 @@
+language: typescript
+version: "5.0"
+description: "TypeScript/JavaScript API and cross-language interaction patterns"
+
+patterns:
+  api_calls:
+    # Fetch API patterns
+    - query: |
+        (call_expression
+          function: (identifier) @func_name
+          arguments: (arguments 
+            (string) @endpoint
+            (object)? @options
+          )
+        ) @call
+        (#match? @func_name "^fetch$")
+      confidence: 0.95
+      captures:
+        func_name: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # Axios patterns
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @lib_name
+            property: (property_identifier) @method
+          )
+          arguments: (arguments 
+            (string) @endpoint
+            (object)? @config
+          )
+        ) @call
+        (#match? @lib_name "^axios$")
+      confidence: 0.95
+      captures:
+        lib_name: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # XMLHttpRequest patterns
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @xhr_obj
+            property: (property_identifier) @method
+          )
+          arguments: (arguments
+            (string) @http_method
+            (string) @endpoint
+          )
+        ) @call
+        (#match? @method "^open$")
+      confidence: 0.90
+      captures:
+        xhr_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        http_method: "ExtractString"
+        endpoint: "ExtractString"
+
+  websocket_patterns:
+    # WebSocket constructor
+    - query: |
+        (new_expression
+          constructor: (identifier) @constructor
+          arguments: (arguments
+            (string) @ws_url
+            (array)? @protocols
+          )
+        ) @ws_new
+        (#match? @constructor "^WebSocket$")
+      confidence: 0.95
+      captures:
+        constructor: "ExtractIdentifier"
+        ws_url: "ExtractString"
+        
+    # Socket.IO patterns
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @io_obj
+            property: (property_identifier) @method
+          )
+          arguments: (arguments 
+            (string) @server_url
+            (object)? @options
+          )
+        ) @call
+        (#match? @io_obj "^io$")
+        (#match? @method "^connect$")
+      confidence: 0.90
+      captures:
+        io_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        server_url: "ExtractString"
+
+  subprocess_patterns:
+    # Node.js child_process.spawn
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @cp_obj
+            property: (property_identifier) @method
+          )
+          arguments: (arguments
+            (string) @command
+            (array)? @args
+            (object)? @options
+          )
+        ) @call
+        (#match? @method "^(spawn|exec|execFile|fork)$")
+      confidence: 0.95
+      captures:
+        cp_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        command: "ExtractString"
+        
+    # Dynamic imports for cross-language modules
+    - query: |
+        (call_expression
+          function: (import) @import_func
+          arguments: (arguments
+            (string) @module_path
+          )
+        ) @call
+      confidence: 0.85
+      captures:
+        import_func: "ExtractIdentifier"
+        module_path: "ExtractString"
+
+  database_patterns:
+    # Prisma client calls
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (member_expression
+              object: (identifier) @client
+              property: (property_identifier) @model
+            )
+            property: (property_identifier) @operation
+          )
+          arguments: (arguments
+            (object)? @query_params
+          )
+        ) @call
+        (#match? @client "^(prisma|db)$")
+        (#match? @operation "^(findMany|findUnique|create|update|delete|findFirst)$")
+      confidence: 0.90
+      captures:
+        client: "ExtractIdentifier"
+        model: "ExtractIdentifier"
+        operation: "ExtractIdentifier"
+
+  endpoint_definitions:
+    # Express.js route definitions
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @app_obj
+            property: (property_identifier) @http_method
+          )
+          arguments: (arguments
+            (string) @route_path
+            (function_expression) @handler
+          )
+        ) @route_def
+        (#match? @http_method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.95
+      captures:
+        app_obj: "ExtractIdentifier"
+        http_method: "ExtractIdentifier"
+        route_path: "ExtractString"
+        
+    # Fastify route definitions
+    - query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @fastify_obj
+            property: (property_identifier) @method
+          )
+          arguments: (arguments
+            (object
+              (pair
+                key: (property_identifier) @route_key
+                value: (string) @route_path
+              )
+              (pair
+                key: (property_identifier) @handler_key
+                value: (function_expression) @handler
+              )
+            )
+          )
+        ) @route_def
+        (#match? @method "^route$")
+        (#match? @route_key "^url$")
+      confidence: 0.90
+      captures:
+        fastify_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        route_path: "ExtractString"
+
+cross_language_patterns:
+  api_calls:
+    # Generic HTTP patterns using string literals
+    - pattern: "(fetch|axios\\.(?:get|post|put|delete|patch))\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]"
+      confidence: 0.85
+      capture_groups:
+        1: "http_client"
+        2: "api_endpoint"
+        
+    # Environment-based API URLs
+    - pattern: "(?:process\\.env\\.|import\\.meta\\.env\\.)([A-Z_]+(?:URL|ENDPOINT|HOST))"
+      confidence: 0.80
+      capture_groups:
+        1: "env_api_config"
+        
+  subprocess:
+    # Node.js subprocess patterns
+    - pattern: "(?:spawn|exec|execFile)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]"
+      confidence: 0.90
+      capture_groups:
+        1: "subprocess_command"
+        
+  websocket:
+    # WebSocket connection patterns
+    - pattern: "new\\s+WebSocket\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]"
+      confidence: 0.90
+      capture_groups:
+        1: "websocket_url"
+        
+    # Socket.IO patterns
+    - pattern: "io(?:\\.connect)?\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]"
+      confidence: 0.85
+      capture_groups:
+        1: "socketio_url"

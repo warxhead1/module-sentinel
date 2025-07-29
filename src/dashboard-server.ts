@@ -1,9 +1,9 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import { readFile, stat } from 'fs/promises';
 import { extname, join } from 'path';
+import { createLogger } from './utils/logger';
 
-// Import Rust bindings via NAPI-RS
-import { ModuleSentinel } from '../module-sentinel-rust.node';
+// Import Rust bindings via bridge
 import { Language, IndexingOptions, SearchOptions } from './types/rust-bindings';
 import { FlowAnalysisService } from './services/flow-analysis.service';
 import { FlowRoutes } from './api/flow-routes';
@@ -19,7 +19,7 @@ export class DashboardServer {
   private server: ReturnType<typeof createServer>;
   private dashboardPath: string;
   private projectPath: string;
-  private moduleSentinel: ModuleSentinel | null = null;
+  private moduleSentinel: ModuleSentinelBridge | null = null;
   private flowService?: FlowAnalysisService;
   private flowRoutes?: FlowRoutes;
   private flowSSE?: FlowSSEService;
@@ -31,7 +31,12 @@ export class DashboardServer {
     debugMode?: boolean;
   }) {
     this.projectPath = options.projectPath;
-    this.dashboardPath = options.dashboardPath || join(__dirname, 'dashboard');
+    // When running with tsx, __dirname is src/, but built files are in dist/
+    // So we need to resolve the path relative to the project root
+    const projectRoot = join(__dirname, '..');
+    this.dashboardPath = options.dashboardPath || join(projectRoot, 'dist', 'dashboard');
+    const logger = createLogger('DashboardServer');
+    logger.info('Dashboard server serving files from:', { path: this.dashboardPath });
     
     // Create HTTP server
     this.server = createServer(this.handleRequest.bind(this));
@@ -45,7 +50,7 @@ export class DashboardServer {
    */
   private async initializeModuleSentinel(): Promise<void> {
     try {
-      this.moduleSentinel = await ModuleSentinel.new(this.projectPath);
+      this.moduleSentinel = new ModuleSentinelBridge(this.projectPath);
       await this.moduleSentinel.initialize();
       
       // Initialize flow analysis services
@@ -56,7 +61,12 @@ export class DashboardServer {
       this.flowSSE = new FlowSSEService(this.flowService);
       this.flowSSE.initialize();
     } catch (error) {
+      const logger = createLogger('DashboardServer');
+      logger.error('Failed to initialize dashboard services:', error);
       this.moduleSentinel = null;
+      this.flowService = undefined;
+      this.flowRoutes = undefined;
+      this.flowSSE = undefined;
     }
   }
 
@@ -108,7 +118,7 @@ export class DashboardServer {
       // Static files
       await this.handleStaticFile(req, res);
       
-    } catch (error) {
+    } catch (_error) {
       this.sendError(res, 500, 'Internal Server Error');
     }
   }
@@ -127,10 +137,31 @@ export class DashboardServer {
     }
 
     try {
-      // Handle flow SSE stream
-      if (url === '/api/flow/stream' && this.flowSSE) {
-        await this.flowSSE.handleConnection(req, res);
+      // Handle health check endpoint
+      if (url === '/api/health') {
+        this.sendJson(res, { 
+          status: 'ok', 
+          initialized: !!this.moduleSentinel,
+          services: {
+            flow: !!this.flowService,
+            sse: !!this.flowSSE
+          }
+        });
         return;
+      }
+      
+      
+      // Handle SSE endpoint (alias for flow/stream)
+      if (url === '/api/sse' || url === '/api/flow/stream') {
+        if (this.flowSSE) {
+          await this.flowSSE.handleConnection(req, res);
+          return;
+        } else {
+          const logger = createLogger('DashboardServer');
+          logger.error('FlowSSEService not initialized, cannot handle SSE connection');
+          this.sendError(res, 503, 'SSE service unavailable');
+          return;
+        }
       }
       
       // Handle flow routes
@@ -157,21 +188,38 @@ export class DashboardServer {
               fuzzyMatch: !query // Use fuzzy match when no specific query
             };
             
-            const symbols = await this.moduleSentinel.searchSymbols(query, searchOptions);
+            const symbols = await this.moduleSentinel.search_symbols(query, searchOptions);
             
-            const result = {
-              symbols: symbols,
-              total: symbols.length,
-              message: `Found ${symbols.length} symbols matching "${query}"`
-            };
-            
-            // Found symbols
-            this.sendJson(res, { success: true, data: result });
-          } catch (error) {
+            // Return symbols array directly for dashboard
+            this.sendJson(res, symbols);
+          } catch (_error) {
             this.sendFallbackSymbols(res, query, kind, limit);
           }
         } else {
           this.sendFallbackSymbols(res, query, kind, limit);
+        }
+        
+      } else if (url.match(/^\/api\/symbols\/([^/]+)\/relations$/)) {
+        // Handle individual symbol relations endpoint
+        const symbolId = url.match(/^\/api\/symbols\/([^/]+)\/relations$/)?.[1];
+        if (symbolId) {
+          // Decode the symbol ID
+          const decodedSymbolId = decodeURIComponent(symbolId);
+          
+          if (this.moduleSentinel) {
+            try {
+              const relationships = await this.moduleSentinel.get_symbol_relationships(decodedSymbolId);
+              this.sendJson(res, relationships);
+            } catch (_error) {
+              const logger = createLogger('DashboardServer');
+              logger.error('Failed to get relationships for symbol:', { decodedSymbolId, error: _error });
+              this.sendJson(res, []);
+            }
+          } else {
+            this.sendJson(res, []);
+          }
+        } else {
+          this.sendError(res, 400, 'Invalid symbol ID');
         }
         
       } else if (url.startsWith('/api/project/index')) {
@@ -206,10 +254,10 @@ export class DashboardServer {
               excludePatterns: ['node_modules', '.git', 'target', 'dist', 'build']
             };
             
-            const indexResult = await this.moduleSentinel.indexProject(indexingOptions);
+            const indexResult = await this.moduleSentinel.index_project(indexingOptions);
             
             this.sendJson(res, { success: true, data: indexResult });
-          } catch (error) {
+          } catch (_error) {
             this.sendFallbackIndexResult(res, force, languages);
           }
         } else {
@@ -235,24 +283,296 @@ export class DashboardServer {
         if (this.moduleSentinel) {
           try {
             // Run pattern analysis using real Rust analyzer
-            const analysisResult = await this.moduleSentinel.analyzePatterns();
+            const analysisResult = await this.moduleSentinel.analyze_patterns();
             
             this.sendJson(res, { success: true, data: analysisResult });
-          } catch (error) {
+          } catch (_error) {
             this.sendFallbackAnalysis(res);
           }
         } else {
           this.sendFallbackAnalysis(res);
         }
         
+      } else if (url.startsWith('/api/analysis/quality')) {
+        // Code Quality Analysis API
+        const filePath = body.filePath;
+        const language = body.language || 'Rust';
+        
+        if (this.moduleSentinel && filePath) {
+          try {
+            // TODO: Implement analyzeCodeQuality in NAPI bindings
+            // const qualityResult = await this.moduleSentinel.analyzeCodeQuality(filePath, language);
+            
+            // For now, use parse file to provide quality insights
+            const parseResult = await this.moduleSentinel.parse_file(filePath, language as Language);
+            
+            const qualityMetrics = {
+              file: filePath,
+              language: language,
+              symbolCount: parseResult.symbols.length,
+              confidence: parseResult.confidence,
+              errors: parseResult.errors,
+              complexity: {
+                functions: parseResult.symbols.filter(s => s.signature.includes('fn ') || s.signature.includes('function')).length,
+                largeFunctions: parseResult.symbols.filter(s => s.signature.length > 100).length,
+                averageSignatureLength: parseResult.symbols.reduce((sum, s) => sum + s.signature.length, 0) / parseResult.symbols.length
+              },
+              suggestions: [
+                'Consider breaking down functions with signatures longer than 100 characters',
+                'Add comprehensive error handling where needed',
+                'Run full pattern analysis for design pattern insights'
+              ]
+            };
+            
+            this.sendJson(res, { success: true, data: qualityMetrics });
+          } catch (error) {
+            this.sendJson(res, { success: false, error: `Quality analysis failed: ${error}` });
+          }
+        } else {
+          this.sendJson(res, { success: false, error: 'File path required for quality analysis' });
+        }
+
+      } else if (url.startsWith('/api/analysis/duplicates')) {
+        // Duplicate Detection API
+        const minSimilarity = parseFloat(body.minSimilarity || '0.8');
+        const includeCrossLanguage = body.includeCrossLanguage !== false;
+        
+        if (this.moduleSentinel) {
+          try {
+            // Get patterns analysis which includes duplicate detection
+            const analysisResult = await this.moduleSentinel.analyze_patterns();
+            
+            const duplicateAnalysis = {
+              threshold: minSimilarity,
+              crossLanguage: includeCrossLanguage,
+              totalSymbols: analysisResult.symbolCount,
+              duplicateGroups: analysisResult.insights.duplicateCount,
+              reusePercentage: analysisResult.insights.codeReusePercentage,
+              patterns: analysisResult.patterns.map(pattern => ({
+                category: pattern.category,
+                symbolCount: pattern.symbols.length,
+                confidence: pattern.confidence,
+                evidence: pattern.evidence,
+                isDuplicate: pattern.symbols.length > 1 && pattern.confidence > minSimilarity
+              }))
+            };
+            
+            this.sendJson(res, { success: true, data: duplicateAnalysis });
+          } catch (error) {
+            this.sendJson(res, { success: false, error: `Duplicate analysis failed: ${error}` });
+          }
+        } else {
+          this.sendJson(res, { success: false, error: 'Module Sentinel not initialized' });
+        }
+
+      } else if (url.startsWith('/api/analysis/complexity')) {
+        // Complexity Metrics API
+        const filePath = body.filePath;
+        const threshold = parseInt(body.threshold || '10');
+        
+        if (this.moduleSentinel) {
+          try {
+            if (filePath) {
+              // Analyze specific file
+              const parseResult = await this.moduleSentinel.parse_file(filePath, 'auto' as Language);
+              
+              const complexityData = {
+                file: filePath,
+                threshold: threshold,
+                metrics: {
+                  symbolCount: parseResult.symbols.length,
+                  averageSignatureLength: parseResult.symbols.reduce((sum, s) => sum + s.signature.length, 0) / parseResult.symbols.length,
+                  complexFunctions: parseResult.symbols.filter(s => s.signature.length > threshold * 5).length
+                },
+                symbols: parseResult.symbols
+                  .filter(s => s.signature.length > threshold * 3)
+                  .slice(0, 20)
+                  .map(symbol => ({
+                    name: symbol.name,
+                    line: symbol.startLine,
+                    complexity: symbol.signature.length,
+                    isComplex: symbol.signature.length > threshold * 5,
+                    signature: symbol.signature.substring(0, 100) + (symbol.signature.length > 100 ? '...' : '')
+                  }))
+              };
+              
+              this.sendJson(res, { success: true, data: complexityData });
+            } else {
+              // Analyze entire project
+              const analysisResult = await this.moduleSentinel.analyze_patterns();
+              
+              const projectComplexity = {
+                threshold: threshold,
+                overview: {
+                  totalSymbols: analysisResult.symbolCount,
+                  patternsDetected: analysisResult.patterns.length,
+                  averageSimilarity: analysisResult.insights.averageSimilarity,
+                  codeReuse: analysisResult.insights.codeReusePercentage
+                },
+                patterns: analysisResult.patterns.map(pattern => ({
+                  category: pattern.category,
+                  symbolCount: pattern.symbols.length,
+                  confidence: pattern.confidence,
+                  isComplex: pattern.symbols.length > threshold
+                })),
+                recommendations: analysisResult.insights.recommendations
+              };
+              
+              this.sendJson(res, { success: true, data: projectComplexity });
+            }
+          } catch (error) {
+            this.sendJson(res, { success: false, error: `Complexity analysis failed: ${error}` });
+          }
+        } else {
+          this.sendJson(res, { success: false, error: 'Module Sentinel not initialized' });
+        }
+
+      } else if (url.startsWith('/api/analysis/component-reuse')) {
+        // Component Reuse Prediction API
+        const { functionalityCategory, requiredCapabilities, contextDescription } = body;
+        
+        if (this.moduleSentinel && functionalityCategory && requiredCapabilities) {
+          try {
+            // Search for existing components that might be reusable
+            const searchQuery = `${functionalityCategory} ${requiredCapabilities.join(' ')}`;
+            const searchOptions: SearchOptions = { 
+              limit: 50, 
+              includePrivate: true,
+              fuzzyMatch: true
+            };
+            
+            const symbols = await this.moduleSentinel.search_symbols(searchQuery, searchOptions);
+            
+            // Filter and score potential matches
+            const relevantSymbols = symbols
+              .filter((symbol: any) => {
+                const name = symbol.name.toLowerCase();
+                const signature = symbol.signature.toLowerCase();
+                return requiredCapabilities.some((cap: string) => 
+                  name.includes(cap.toLowerCase()) || signature.includes(cap.toLowerCase())
+                );
+              })
+              .map((symbol: any) => {
+                const matchScore = requiredCapabilities.reduce((score: number, cap: string) => {
+                  const name = symbol.name.toLowerCase();
+                  const signature = symbol.signature.toLowerCase();
+                  if (name.includes(cap.toLowerCase())) score += 0.4;
+                  if (signature.includes(cap.toLowerCase())) score += 0.3;
+                  return score;
+                }, 0);
+                
+                return {
+                  ...symbol,
+                  relevanceScore: Math.min(matchScore, 1.0),
+                  suggestedUsage: matchScore > 0.7 ? 'Direct usage' : 
+                                 matchScore > 0.4 ? 'Extension needed' : 'Adaptation required'
+                };
+              })
+              .filter((symbol: any) => symbol.relevanceScore > 0.3)
+              .sort((a: any, b: any) => b.relevanceScore - a.relevanceScore)
+              .slice(0, 10);
+            
+            const reuseAnalysis = {
+              functionality: functionalityCategory,
+              capabilities: requiredCapabilities,
+              context: contextDescription,
+              foundComponents: relevantSymbols.length,
+              recommendations: relevantSymbols.length > 0 ? 
+                'Consider extending existing components instead of building new ones' :
+                'No suitable components found. Design for future reusability.',
+              components: relevantSymbols
+            };
+            
+            this.sendJson(res, { success: true, data: reuseAnalysis });
+          } catch (error) {
+            this.sendJson(res, { success: false, error: `Component reuse analysis failed: ${error}` });
+          }
+        } else {
+          this.sendJson(res, { success: false, error: 'functionalityCategory and requiredCapabilities required' });
+        }
+
+      } else if (url.startsWith('/api/analysis/insights')) {
+        // Comprehensive Project Insights API
+        const includeRecommendations = body.includeRecommendations !== false;
+        const focusAreas = body.focusAreas || ['complexity', 'duplicates', 'patterns', 'quality'];
+        
+        if (this.moduleSentinel) {
+          try {
+            const analysisResult = await this.moduleSentinel.analyze_patterns();
+            
+            const insights: any = {
+              overview: {
+                totalSymbols: analysisResult.symbolCount,
+                patternsDetected: analysisResult.patterns.length,
+                duplicateCount: analysisResult.insights.duplicateCount,
+                codeReusePercentage: analysisResult.insights.codeReusePercentage,
+                averageSimilarity: analysisResult.insights.averageSimilarity
+              }
+            };
+            
+            if (focusAreas.includes('patterns')) {
+              insights.patterns = {
+                detected: analysisResult.patterns.length,
+                categories: [...new Set(analysisResult.patterns.map(p => p.category))],
+                averageConfidence: analysisResult.patterns.reduce((sum, p) => sum + p.confidence, 0) / analysisResult.patterns.length,
+                details: analysisResult.patterns
+              };
+            }
+            
+            if (focusAreas.includes('duplicates')) {
+              insights.duplicates = {
+                groups: analysisResult.insights.duplicateCount,
+                reusePercentage: analysisResult.insights.codeReusePercentage,
+                similarityScore: analysisResult.insights.averageSimilarity,
+                potentialSavings: `${(analysisResult.insights.codeReusePercentage * 0.3).toFixed(1)}% development time`
+              };
+            }
+            
+            if (focusAreas.includes('complexity')) {
+              const complexPatterns = analysisResult.patterns.filter(p => p.symbols.length > 5);
+              insights.complexity = {
+                totalSymbols: analysisResult.symbolCount,
+                complexPatterns: complexPatterns.length,
+                maintainability: analysisResult.insights.averageSimilarity > 0.3 ? 'Good' : 'Needs attention',
+                hotspots: complexPatterns.map(p => ({ category: p.category, symbolCount: p.symbols.length }))
+              };
+            }
+            
+            if (focusAreas.includes('quality')) {
+              insights.quality = {
+                patternConsistency: analysisResult.patterns.length > 0 ? 'Good' : 'Could improve',
+                architectureMaturity: analysisResult.insights.patternsDetected > 3 ? 'Advanced' : 'Developing',
+                refactoringOpportunities: analysisResult.insights.duplicateCount > 0 ? 'Available' : 'Clean'
+              };
+            }
+            
+            if (includeRecommendations) {
+              insights.recommendations = analysisResult.insights.recommendations;
+            }
+            
+            insights.nextSteps = [
+              'Use symbol search to find specific components',
+              'Run quality analysis on complex files',
+              'Check component reuse before building new features',
+              'Review duplicate groups for optimization opportunities'
+            ];
+            
+            this.sendJson(res, { success: true, data: insights });
+          } catch (error) {
+            this.sendJson(res, { success: false, error: `Insights analysis failed: ${error}` });
+          }
+        } else {
+          this.sendJson(res, { success: false, error: 'Module Sentinel not initialized' });
+        }
+
       } else if (url.startsWith('/api/symbols/relationships')) {
         if (this.moduleSentinel) {
           try {
             // Get real symbol relationships
-            const relationshipsResult = await this.moduleSentinel.getSymbolRelationships();
+            const relationshipsResult = await this.moduleSentinel.get_all_relationships();
             
             this.sendJson(res, { success: true, data: { relationships: relationshipsResult } });
-          } catch (error) {
+          } catch (_error) {
             // Enhanced relationship data for revolutionary visualizations (fallback)
             const relationships = [
             {
@@ -589,6 +909,8 @@ export class DashboardServer {
     }
 
     const fullPath = join(this.dashboardPath, filePath);
+    const logger = createLogger('DashboardServer');
+    logger.debug('Serving static file:', { fullPath });
 
     try {
       // Check if file exists
@@ -596,12 +918,28 @@ export class DashboardServer {
       
       // Read and serve file
       const content = await readFile(fullPath);
-      const contentType = this.getContentType(extname(filePath));
+      const ext = extname(filePath);
+      const contentType = this.getContentType(ext);
+      const logger = createLogger('DashboardServer');
+      logger.debug('File details', { filePath, ext, contentType });
       
-      res.writeHead(200, {
+      // Add cache control headers to prevent browser caching issues
+      const headers: any = {
         'Content-Type': contentType,
         'Content-Length': content.length
-      });
+      };
+      
+      // For JavaScript files, disable caching to ensure updates are loaded
+      if (contentType === 'application/javascript') {
+        headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+        headers['Pragma'] = 'no-cache';
+        headers['Expires'] = '0';
+      } else {
+        // For other assets, use moderate caching
+        headers['Cache-Control'] = 'public, max-age=3600';
+      }
+      
+      res.writeHead(200, headers);
       res.end(content);
       
     } catch {
@@ -646,6 +984,8 @@ export class DashboardServer {
     const types: Record<string, string> = {
       '.html': 'text/html',
       '.js': 'application/javascript',
+      '.ts': 'application/javascript', // Serve TypeScript as JavaScript for module loading
+      '.mjs': 'application/javascript',
       '.css': 'text/css',
       '.json': 'application/json',
       '.png': 'image/png',
@@ -686,7 +1026,7 @@ export class DashboardServer {
     res.end(message);
   }
 
-  private sendFallbackSymbols(res: ServerResponse, query: string, kind: string | undefined, limit: number): void {
+  private sendFallbackSymbols(res: ServerResponse, _query: string, _kind: string | undefined, _limit: number): void {
     const fallbackSymbols = [
       { id: 'fb-sym-1', name: 'fallbackSymbol1', signature: '()', language: Language.TypeScript, file_path: 'fallback.ts', start_line: 1, end_line: 1, normalized_name: 'fallbacksymbol1' },
       { id: 'fb-sym-2', name: 'fallbackSymbol2', signature: '(arg: string)', language: Language.JavaScript, file_path: 'fallback.js', start_line: 5, end_line: 7, normalized_name: 'fallbacksymbol2' },
@@ -694,7 +1034,7 @@ export class DashboardServer {
     this.sendJson(res, { success: true, data: { symbols: fallbackSymbols, total: fallbackSymbols.length, message: 'Fallback symbols due to ModuleSentinel unavailability or error' } });
   }
 
-  private sendFallbackIndexResult(res: ServerResponse, force: boolean, languages: string[]): void {
+  private sendFallbackIndexResult(res: ServerResponse, _force: boolean, _languages: string[]): void {
     const fallbackIndexResult = {
       symbol_count: 0,
       message: 'Fallback index result due to ModuleSentinel unavailability or error',
@@ -730,7 +1070,8 @@ if (require.main === module) {
   });
 
   // Start server
-  dashboardServer.start(port).catch(console.error);
+  const logger = createLogger('DashboardServer');
+  dashboardServer.start(port).catch(error => logger.error('Failed to start dashboard server:', error));
 
   // Handle graceful shutdown
   const shutdown = async () => {

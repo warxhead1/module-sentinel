@@ -1,16 +1,11 @@
 use tokio;
-use anyhow::Result;
 use std::sync::Arc;
-use std::collections::HashSet;
 
 // Import the types we'll need to implement for Phase 3.2
-use module_sentinel_parser::database::{
-    cache::{
-        CachedSemanticDeduplicator, CacheConfig, 
-        HierarchicalCachedDeduplicator, HierarchicalCacheConfig, CacheLevel,
-        PredictiveCachedDeduplicator, PredictiveCacheConfig,
-        CacheStatistics, CacheDistribution, PredictiveCacheStats
-    }
+use module_sentinel_parser::database::cache::{
+    CachedSemanticDeduplicator, CacheConfig, 
+    HierarchicalCachedDeduplicator, HierarchicalCacheConfig, CacheLevel,
+    PredictiveCachedDeduplicator, PredictiveCacheConfig
 };
 use module_sentinel_parser::parsers::tree_sitter::{CodeEmbedder, Language, Symbol};
 
@@ -36,6 +31,8 @@ fn create_test_symbol_set(count: usize) -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: None,
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect()
 }
@@ -56,6 +53,8 @@ fn create_test_symbol(name: &str) -> Symbol {
         duplicate_of: None,
         confidence_score: None,
         similar_symbols: vec![],
+        semantic_tags: None,
+        intent: None,
     }
 }
 
@@ -76,6 +75,8 @@ fn create_symbols_with_pattern(pattern: &str, count: usize) -> Vec<Symbol> {
             duplicate_of: None,
             confidence_score: None,
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect()
 }
@@ -164,25 +165,10 @@ async fn test_predictive_cache_preloading() {
     // Create training symbols with _impl pattern - more diverse set
     let mut training_symbols = Vec::new();
     
-    // Add service implementations
-    for i in 0..20 {
-        training_symbols.push(create_test_symbol(&format!("user_service_impl_{}", i)));
-        training_symbols.push(create_test_symbol(&format!("order_service_impl_{}", i)));
-        training_symbols.push(create_test_symbol(&format!("payment_service_impl_{}", i)));
-    }
-    
-    // Add repository implementations  
-    for i in 0..20 {
-        training_symbols.push(create_test_symbol(&format!("user_repository_impl_{}", i)));
-        training_symbols.push(create_test_symbol(&format!("order_repository_impl_{}", i)));
-        training_symbols.push(create_test_symbol(&format!("payment_repository_impl_{}", i)));
-    }
-    
-    // Add controller implementations
-    for i in 0..20 {
-        training_symbols.push(create_test_symbol(&format!("user_controller_impl_{}", i)));
-        training_symbols.push(create_test_symbol(&format!("order_controller_impl_{}", i)));
-    }
+    // Use the create_symbols_with_pattern helper function to create consistent pattern-based symbols
+    training_symbols.extend(create_symbols_with_pattern("_service_impl", 20));
+    training_symbols.extend(create_symbols_with_pattern("_repository_impl", 20));
+    training_symbols.extend(create_symbols_with_pattern("_controller_impl", 20));
     
     // Train predictor with this diverse set
     deduplicator.train_prediction_model(&training_symbols).await.unwrap();
@@ -197,6 +183,9 @@ async fn test_predictive_cache_preloading() {
     
     // This should trigger predictive preloading
     let similar = deduplicator.find_similar_symbols(&target_symbol, &context_symbols).await.unwrap();
+    
+    // Verify we found some similar symbols
+    assert!(!similar.is_empty(), "Should find similar symbols based on pattern matching");
     
     // Check initial cache stats after find_similar_symbols
     let cache_stats = deduplicator.get_predictive_cache_stats().await;
@@ -256,8 +245,6 @@ async fn test_cache_performance_under_memory_pressure() {
     let duration = start.elapsed();
     
     println!("Large dataset processed in {:?}", duration);
-    
-    let cache_stats = deduplicator.get_cache_statistics().await;
     
     // Simulate memory pressure to trigger evictions
     let evicted_count = deduplicator.simulate_memory_pressure().await;
@@ -345,7 +332,7 @@ async fn test_cache_coherency_across_concurrent_operations() {
 async fn test_adaptive_cache_sizing() {
     // Test that cache sizes adapt based on usage patterns
     
-    let mut deduplicator = CachedSemanticDeduplicator::new(
+    let deduplicator = CachedSemanticDeduplicator::new(
         Arc::new(CodeEmbedder::load(&Language::Rust).await.unwrap()),
         CacheConfig {
             max_similarity_cache_size: 1000,

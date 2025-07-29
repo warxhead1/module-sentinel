@@ -1,11 +1,10 @@
 use tokio;
 use anyhow::Result;
 use tempfile::TempDir;
-use std::path::Path;
 use std::sync::Arc;
 
 use module_sentinel_parser::database::{
-    orm::{Database, QueryBuilder, Model, DatabaseValue},
+    orm::{Database, QueryBuilder, DatabaseValue},
     models::{Project, Language, UniversalSymbol, UniversalRelationship, FileIndex},
 };
 
@@ -635,9 +634,24 @@ async fn test_database_value_conversions() {
         _ => panic!("Float conversion failed"),
     }
     
+    match double_val {
+        DatabaseValue::Real(f) if (f - 3.14).abs() < 0.001 => {},
+        _ => panic!("Double conversion failed"),
+    }
+    
     match string_val {
         DatabaseValue::Text(s) if s == "test" => {},
         _ => panic!("String conversion failed"),
+    }
+    
+    match owned_string_val {
+        DatabaseValue::Text(s) if s == "test" => {},
+        _ => panic!("Owned string conversion failed"),
+    }
+    
+    match bytes_val {
+        DatabaseValue::Blob(b) if b == vec![1, 2, 3] => {},
+        _ => panic!("Bytes conversion failed"),
     }
     
     match none_val {

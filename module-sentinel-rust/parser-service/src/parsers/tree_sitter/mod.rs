@@ -3,9 +3,10 @@ mod language;
 mod error_recovery;
 mod ast_converter;
 // mod intelligent_parser;
-mod ml_integration;
+pub mod ml_integration;
 mod model_manager;
 mod tokenizer;
+pub mod global_model_cache;
 
 pub use parser::{TreeSitterParser, ParseResult, ParseError as TreeSitterParseError};
 pub use language::Language;
@@ -34,6 +35,10 @@ pub struct Symbol {
     pub duplicate_of: Option<String>,
     pub confidence_score: Option<f32>,
     pub similar_symbols: Vec<SimilarSymbol>,
+    
+    // ML-enhanced fields
+    pub semantic_tags: Option<Vec<String>>,  // Tags like "http_handler", "database_query", "auth_check"
+    pub intent: Option<String>,              // Inferred purpose like "fetch_user_data", "validate_input"
 }
 
 // Define SimilarSymbol with correct structure
@@ -89,9 +94,28 @@ pub enum ErrorType {
     UnexpectedToken(String),
     IncompleteConstruct(String),
     SemanticError(String),
+    UnknownError(String),
 }
-pub use ml_integration::{SyntaxPredictor, CodeEmbedder};
+
+// Always export CodeEmbedder - either ML version or mock version
+pub use ml_integration::CodeEmbedder;
+
+// Export ML integration types when feature is enabled
+#[cfg(feature = "ml")]
+pub use ml_integration::{
+    ErrorPredictor as MLErrorPredictor, ComponentReusePredictor, SyntaxPredictor,
+    // Export the data structures so they're not "dead code"
+    UserIntent, ComponentSignature, FunctionalityPattern, 
+    AbstractionLevel, ReuseRecommendation, ExtensionAssessment,
+    QualityIssue, ComplexityMetrics, IntentFeatures, EmbeddingStats,
+};
+
+// Export model manager and tokenizer
 pub use model_manager::{ModelManager, ModelConfig};
 pub use tokenizer::CodeTokenizer;
 
-// Types are already defined and exported above
+// Export global model cache
+pub use global_model_cache::{
+    initialize_global_cache, get_cached_model, 
+    get_cache_stats, CacheStats
+};

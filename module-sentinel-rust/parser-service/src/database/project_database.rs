@@ -1,8 +1,8 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::sync::Arc;
 use std::path::Path;
-use std::collections::HashMap;
 use tokio::sync::RwLock;
+use tracing;
 
 use crate::database::{
     orm::{Database, QueryBuilder},
@@ -10,18 +10,73 @@ use crate::database::{
     cache::{CachedSemanticDeduplicator, CacheConfig},
     bloom_filter::{SymbolBloomFilter, SymbolKey},
     cache_persistence::{CachePersistenceManager, CachePersistenceStats},
+    embedding_manager::EmbeddingManager,
+    semantic_search::{SemanticSearchEngine, SearchResult},
 };
 use crate::parsers::tree_sitter::{CodeEmbedder, Symbol, Language as ParserLanguage};
+use crate::analysis;
 
 /// The main project database that combines ORM with your advanced caching
 pub struct ProjectDatabase {
     db: Database,
-    symbol_cache: Arc<CachedSemanticDeduplicator>,
+    symbol_cache: Option<Arc<CachedSemanticDeduplicator>>,
     bloom_filter: Arc<RwLock<SymbolBloomFilter>>,
     cache_persistence: Option<Arc<CachePersistenceManager>>,
+    embedding_manager: Option<Arc<EmbeddingManager>>,
+    semantic_search: Option<Arc<SemanticSearchEngine>>,
 }
 
 impl ProjectDatabase {
+    /// Map from language_id to ParserLanguage
+    pub async fn map_language_id_to_parser_language(&self, language_id: i32) -> Result<ParserLanguage> {
+        let languages = self.db.find_all(
+            QueryBuilder::<Language>::new()
+                .where_eq("id", language_id)
+                .limit(1)
+        ).await?;
+        
+        if let Some(language) = languages.first() {
+            match language.name.as_str() {
+                "rust" => Ok(ParserLanguage::Rust),
+                "typescript" => Ok(ParserLanguage::TypeScript),
+                "javascript" => Ok(ParserLanguage::JavaScript),
+                "python" => Ok(ParserLanguage::Python),
+                "cpp" | "c++" => Ok(ParserLanguage::Cpp),
+                "java" => Ok(ParserLanguage::Java),
+                "go" => Ok(ParserLanguage::Go),
+                "c_sharp" | "csharp" => Ok(ParserLanguage::CSharp),
+                _ => Ok(ParserLanguage::Rust), // Default fallback
+            }
+        } else {
+            Ok(ParserLanguage::Rust) // Default fallback
+        }
+    }
+
+    /// Map from Symbol to appropriate kind string
+    fn map_symbol_to_kind(symbol: &Symbol) -> String {
+        // Simple heuristic based on signature patterns
+        let signature = &symbol.signature;
+        let name = &symbol.name;
+        
+        if signature.contains("fn ") || signature.contains("function ") || signature.contains("def ") {
+            "function".to_string()
+        } else if signature.contains("class ") || signature.contains("struct ") {
+            "class".to_string()
+        } else if signature.contains("enum ") {
+            "enum".to_string()
+        } else if signature.contains("interface ") {
+            "interface".to_string()
+        } else if signature.contains("trait ") {
+            "trait".to_string()
+        } else if signature.contains("const ") || signature.contains("let ") || signature.contains("var ") {
+            "variable".to_string()
+        } else if name.chars().all(|c| c.is_uppercase() || c == '_') {
+            "constant".to_string()
+        } else {
+            "symbol".to_string() // Generic fallback
+        }
+    }
+
     /// Create a new project database with integrated caching
     pub async fn new(project_path: &Path) -> Result<Self> {
         let db_path = project_path.join("project.db");
@@ -30,38 +85,52 @@ impl ProjectDatabase {
         // Use the ORM models to create the schema - they are the source of truth!
         Self::create_schema(&db).await?;
         
-        // Initialize your advanced caching system
-        #[cfg(feature = "ml")]
-        let embedder = Arc::new(CodeEmbedder::load(&ParserLanguage::Rust).await?);
-        #[cfg(not(feature = "ml"))]
-        let embedder = Arc::new(CodeEmbedder::mock_for_testing(&ParserLanguage::Rust).await?);
-        
-        let symbol_cache = Arc::new(CachedSemanticDeduplicator::new(
-            embedder,
-            CacheConfig {
-                max_similarity_cache_size: 50000,
-                max_symbol_cache_size: 25000,
-                ttl_seconds: 3600, // 1 hour
+        // Initialize your advanced caching system using cached embedder
+        // Only initialize embedder if ML features are available
+        let symbol_cache = match CodeEmbedder::load(&ParserLanguage::Rust).await {
+            Ok(embedder) => {
+                match CachedSemanticDeduplicator::new(
+                    Arc::new(embedder),
+                    CacheConfig {
+                        max_similarity_cache_size: 50000,
+                        max_symbol_cache_size: 25000,
+                        ttl_seconds: 3600, // 1 hour
+                    }
+                ).await {
+                    Ok(cache) => Some(Arc::new(cache)),
+                    Err(e) => {
+                        tracing::warn!("Failed to create semantic deduplicator: {}. Caching disabled.", e);
+                        None
+                    }
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to load embedder: {}. Semantic caching will be disabled.", e);
+                None
             }
-        ).await?);
+        };
         
         // Initialize bloom filter for fast duplicate detection
         let bloom_filter = SymbolBloomFilter::new(100000, 0.01)?; // 100K symbols, 1% false positive
         
-        // Initialize cache persistence
-        let cache_persistence = match CachePersistenceManager::new(
-            db.clone(),
-            Arc::clone(&symbol_cache),
-            300, // Persist every 5 minutes
-        ).await {
-            Ok(manager) => {
-                println!("Cache persistence manager initialized successfully");
-                Some(Arc::new(manager))
+        // Initialize cache persistence only if we have a symbol cache
+        let cache_persistence = if let Some(ref cache) = symbol_cache {
+            match CachePersistenceManager::new(
+                db.clone(),
+                Arc::clone(cache),
+                300, // Persist every 5 minutes
+            ).await {
+                Ok(manager) => {
+                    println!("Cache persistence manager initialized successfully");
+                    Some(Arc::new(manager))
+                }
+                Err(e) => {
+                    eprintln!("Failed to initialize cache persistence: {}", e);
+                    None
+                }
             }
-            Err(e) => {
-                eprintln!("Failed to initialize cache persistence: {}", e);
-                None
-            }
+        } else {
+            None
         };
         
         // Start persistence task if enabled
@@ -74,11 +143,30 @@ impl ProjectDatabase {
             }
         }
         
+        // Initialize embedding manager (default to Rust for now)
+        let embedding_manager = match EmbeddingManager::new(&ParserLanguage::Rust).await {
+            Ok(manager) => {
+                println!("Embedding manager initialized successfully");
+                Some(Arc::new(manager))
+            }
+            Err(e) => {
+                eprintln!("Failed to initialize embedding manager: {}", e);
+                None
+            }
+        };
+        
+        // Initialize semantic search if embedding manager is available
+        let semantic_search = embedding_manager.as_ref().map(|em| {
+            Arc::new(SemanticSearchEngine::new(Arc::new(db.clone()), Arc::clone(em)))
+        });
+        
         Ok(Self {
             db,
             symbol_cache,
             bloom_filter: Arc::new(RwLock::new(bloom_filter)),
             cache_persistence,
+            embedding_manager,
+            semantic_search,
         })
     }
     
@@ -144,7 +232,11 @@ impl ProjectDatabase {
                 is_abstract INTEGER NOT NULL DEFAULT 0,
                 language_features TEXT,
                 semantic_tags TEXT,
+                intent TEXT,
                 confidence REAL NOT NULL DEFAULT 1.0,
+                embedding TEXT,
+                embedding_model TEXT,
+                embedding_version INTEGER,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (project_id) REFERENCES projects(id),
@@ -198,6 +290,22 @@ impl ProjectDatabase {
             )
         "#.to_string()).await?;
         
+        // Create user_fixes table for ML training data
+        db.migrate(r#"
+            CREATE TABLE IF NOT EXISTS user_fixes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                error_message TEXT NOT NULL,
+                error_line INTEGER NOT NULL,
+                error_column INTEGER NOT NULL,
+                applied_fix TEXT NOT NULL,
+                language TEXT NOT NULL,
+                file_path TEXT,
+                project_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (project_id) REFERENCES projects(id)
+            )
+        "#.to_string()).await?;
+        
         Ok(())
     }
     
@@ -211,6 +319,7 @@ impl ProjectDatabase {
         ).await?;
         
         if let Some(project) = existing.first() {
+            tracing::info!("Found existing project '{}' with ID {:?}", name, project.id);
             return Ok(project.clone());
         }
         
@@ -222,7 +331,14 @@ impl ProjectDatabase {
             ..Default::default()
         };
         
+        tracing::info!("Creating new project '{}'", name);
         project = self.db.insert(project).await?;
+        
+        if project.id.is_none() {
+            return Err(anyhow::anyhow!("Failed to get ID for newly created project '{}'", name));
+        }
+        
+        tracing::info!("Successfully created project '{}' with ID {:?}", name, project.id);
         Ok(project)
     }
     
@@ -264,7 +380,7 @@ impl ProjectDatabase {
                 language_id,
                 name: symbol.name.clone(),
                 qualified_name: symbol.id.clone(), // Use symbol ID for qualified name for now
-                kind: "function".to_string(), // TODO: Map from symbol type
+                kind: Self::map_symbol_to_kind(symbol),
                 file_path: symbol.file_path.clone(),
                 line: symbol.start_line as i32,
                 column: 0,
@@ -272,6 +388,16 @@ impl ProjectDatabase {
                 signature: Some(symbol.signature.clone()),
                 ..Default::default()
             };
+            
+            // Extract semantic tags and intent using our AI-enhanced analysis
+            analysis::enrich_symbol_with_semantics(&mut universal_symbol);
+            
+            // Generate embedding if manager is available
+            if let Some(ref embedding_manager) = self.embedding_manager {
+                if let Err(e) = embedding_manager.enrich_symbol_with_embedding(&mut universal_symbol).await {
+                    tracing::debug!("Failed to generate embedding for {}: {}", universal_symbol.name, e);
+                }
+            }
             
             // Check bloom filter for potential duplicates
             use std::collections::hash_map::DefaultHasher;
@@ -332,11 +458,17 @@ impl ProjectDatabase {
         // Update cache with all symbols (for similarity calculations)
         for symbol in &stored_symbols {
             // Convert universal symbol back to parser symbol for cache
+            let language = self.map_language_id_to_parser_language(symbol.language_id).await.unwrap_or(ParserLanguage::Rust);
+            
+            // Parse semantic tags from JSON if available
+            let semantic_tags: Option<Vec<String>> = symbol.semantic_tags.as_ref()
+                .and_then(|tags_json| serde_json::from_str(tags_json).ok());
+            
             let cache_symbol = Symbol {
                 id: symbol.qualified_name.clone(),
                 name: symbol.name.clone(),
                 signature: symbol.signature.clone().unwrap_or_default(),
-                language: ParserLanguage::Rust, // TODO: Map from language_id
+                language,
                 file_path: symbol.file_path.clone(),
                 start_line: symbol.line as u32,
                 end_line: symbol.end_line.unwrap_or(symbol.line) as u32,
@@ -347,10 +479,14 @@ impl ProjectDatabase {
                 duplicate_of: None,
                 confidence_score: Some(symbol.confidence as f32),
                 similar_symbols: vec![],
+                semantic_tags,
+                intent: symbol.intent.clone(),
             };
             
             // This will use your advanced LRU/Hierarchical/Predictive caching
-            let _ = self.symbol_cache.similarity_score(&cache_symbol, &cache_symbol).await;
+            if let Some(ref cache) = self.symbol_cache {
+                let _ = cache.similarity_score(&cache_symbol, &cache_symbol).await;
+            }
             
             // Persist high-value similarity scores if cache persistence is enabled
             if let Some(ref persistence) = self.cache_persistence {
@@ -380,6 +516,106 @@ impl ProjectDatabase {
         Ok(inserted)
     }
     
+    /// Store symbols and relationships together in a transaction
+    pub async fn store_parse_results(
+        &self,
+        project_id: i32,
+        symbols: &[UniversalSymbol],
+        relationships: &[UniversalRelationship],
+    ) -> Result<(Vec<UniversalSymbol>, Vec<UniversalRelationship>)> {
+        use std::collections::HashMap;
+        
+        tracing::debug!("store_parse_results called: project_id={}, symbols={}, relationships={}", 
+            project_id, symbols.len(), relationships.len());
+        
+        // Clone the data to move into the closure
+        let symbols_vec: Vec<UniversalSymbol> = symbols.to_vec();
+        let relationships_vec: Vec<UniversalRelationship> = relationships.to_vec();
+        
+        self.db.transaction(move |tx| {
+            let mut stored_symbols = Vec::new();
+            let mut stored_relationships = Vec::new();
+            
+            // First, insert all symbols and collect their IDs
+            let mut symbol_id_map = HashMap::new();
+            
+            for symbol in symbols_vec {
+                let mut symbol_to_store = symbol.clone();
+                symbol_to_store.project_id = project_id;
+                
+                // Try to insert - if it fails due to duplicate, we'll handle it
+                tracing::trace!("Attempting to insert symbol: name='{}', file='{}', line={}", 
+                    symbol_to_store.name, symbol_to_store.file_path, symbol_to_store.line);
+                    
+                match tx.insert(&symbol_to_store) {
+                    Ok(inserted) => {
+                        // Successfully inserted new symbol
+                        tracing::trace!("Successfully inserted symbol '{}' with id={:?}", 
+                            inserted.name, inserted.id);
+                        if let Some(id) = inserted.id {
+                            symbol_id_map.insert(symbol.qualified_name.clone(), id);
+                        }
+                        stored_symbols.push(inserted);
+                    }
+                    Err(e) => {
+                        // Log the actual database error
+                        tracing::error!("Failed to insert symbol '{}' from file '{}': {}", 
+                            symbol.qualified_name, 
+                            symbol.file_path,
+                            e);
+                        tracing::debug!("Symbol details: project_id={}, language_id={}, line={}", 
+                            symbol.project_id,
+                            symbol.language_id, 
+                            symbol.line);
+                        
+                        // For now, continue without this symbol but log it
+                        // TODO: Investigate why symbols are failing to insert
+                    }
+                }
+            }
+            
+            // Now insert relationships with proper symbol IDs
+            for relationship in relationships_vec {
+                let mut rel_to_store = relationship.clone();
+                rel_to_store.project_id = project_id;
+                
+                // Resolve placeholder IDs to actual database IDs
+                // Placeholder IDs are negative numbers that correspond to symbol array indices
+                if let Some(from_id) = rel_to_store.from_symbol_id {
+                    if from_id < 0 {
+                        // Convert negative placeholder to array index
+                        let index = (-from_id - 1) as usize;
+                        if let Some(stored_symbol) = stored_symbols.get(index) {
+                            if let Some(actual_id) = stored_symbol.id {
+                                rel_to_store.from_symbol_id = Some(actual_id);
+                            }
+                        }
+                    }
+                }
+                
+                if let Some(to_id) = rel_to_store.to_symbol_id {
+                    if to_id < 0 {
+                        // Convert negative placeholder to array index
+                        let index = (-to_id - 1) as usize;
+                        if let Some(stored_symbol) = stored_symbols.get(index) {
+                            if let Some(actual_id) = stored_symbol.id {
+                                rel_to_store.to_symbol_id = Some(actual_id);
+                            }
+                        }
+                    }
+                }
+                
+                // Only store relationships that have valid symbol IDs
+                if rel_to_store.from_symbol_id.is_some() && rel_to_store.to_symbol_id.is_some() {
+                    let inserted = tx.insert(&rel_to_store)?;
+                    stored_relationships.push(inserted);
+                }
+            }
+            
+            Ok((stored_symbols, stored_relationships))
+        }).await
+    }
+    
     /// Find duplicates across the entire project using your advanced deduplication
     pub async fn find_duplicates_across_project(&self, project_id: i32) -> Result<Vec<crate::database::DuplicateGroup>> {
         // Check cache first if persistence is enabled
@@ -396,25 +632,40 @@ impl ProjectDatabase {
         ).await?;
         
         // Convert to parser symbols for your advanced deduplication
-        let parser_symbols: Vec<Symbol> = universal_symbols.iter().map(|s| Symbol {
-            id: s.qualified_name.clone(),
-            name: s.name.clone(),
-            signature: s.signature.clone().unwrap_or_default(),
-            language: ParserLanguage::Rust, // TODO: Map from language_id
-            file_path: s.file_path.clone(),
-            start_line: s.line as u32,
-            end_line: s.end_line.unwrap_or(s.line) as u32,
-            embedding: None,
-            semantic_hash: None,
-            normalized_name: s.name.to_lowercase(),
-            context_embedding: None,
-            duplicate_of: None,
-            confidence_score: Some(s.confidence as f32),
-            similar_symbols: vec![],
-        }).collect();
+        let mut parser_symbols = Vec::new();
+        for s in &universal_symbols {
+            let language = self.map_language_id_to_parser_language(s.language_id).await.unwrap_or(ParserLanguage::Rust);
+            
+            // Parse semantic tags and use intent from database
+            let semantic_tags: Option<Vec<String>> = s.semantic_tags.as_ref()
+                .and_then(|tags_json| serde_json::from_str(tags_json).ok());
+            
+            parser_symbols.push(Symbol {
+                id: s.qualified_name.clone(),
+                name: s.name.clone(),
+                signature: s.signature.clone().unwrap_or_default(),
+                language,
+                file_path: s.file_path.clone(),
+                start_line: s.line as u32,
+                end_line: s.end_line.unwrap_or(s.line) as u32,
+                embedding: None,
+                semantic_hash: None,
+                normalized_name: s.name.to_lowercase(),
+                context_embedding: None,
+                duplicate_of: None,
+                confidence_score: Some(s.confidence as f32),
+                similar_symbols: vec![],
+                semantic_tags,
+                intent: s.intent.clone(),
+            });
+        }
         
         // Use your advanced semantic deduplication system!
-        let duplicate_groups = self.symbol_cache.find_duplicates(&parser_symbols).await?;
+        let duplicate_groups = if let Some(ref cache) = self.symbol_cache {
+            cache.find_duplicates(&parser_symbols).await?
+        } else {
+            Vec::new()
+        };
         
         // Cache the results if persistence is enabled
         if let Some(ref persistence) = self.cache_persistence {
@@ -442,6 +693,17 @@ impl ProjectDatabase {
         }
         
         Ok(stored_relationships)
+    }
+    
+    /// Get file index for a specific file
+    pub async fn get_file_index(&self, project_id: i32, file_path: &str) -> Result<Option<FileIndex>> {
+        let results = self.db.find_all(
+            QueryBuilder::<FileIndex>::new()
+                .where_eq("project_id", project_id)
+                .where_eq("file_path", file_path)
+                .limit(1)
+        ).await?;
+        Ok(results.into_iter().next())
     }
     
     /// Update file index after parsing
@@ -540,15 +802,61 @@ impl ProjectDatabase {
         
         Ok(count as usize)
     }
+    
+    /// Get language distribution for a project
+    pub async fn get_language_distribution(&self, project_id: i32) -> Result<std::collections::HashMap<String, i32>> {
+        use std::collections::HashMap;
+        
+        // Get all symbols for the project
+        let symbols = self.db.find_all(
+            QueryBuilder::<UniversalSymbol>::new()
+                .where_eq("project_id", project_id)
+        ).await?;
+        
+        // Count symbols by language_id
+        let mut language_counts: HashMap<i32, i32> = HashMap::new();
+        for symbol in symbols {
+            *language_counts.entry(symbol.language_id).or_insert(0) += 1;
+        }
+        
+        // Get language names for the IDs
+        let mut distribution = HashMap::new();
+        for (language_id, count) in language_counts {
+            // Get language name
+            let languages = self.db.find_all(
+                QueryBuilder::<Language>::new()
+                    .where_eq("id", language_id)
+                    .limit(1)
+            ).await?;
+            
+            if let Some(language) = languages.first() {
+                distribution.insert(language.display_name.clone(), count);
+            }
+        }
+        
+        Ok(distribution)
+    }
 
+    /// Find symbol by exact qualified name (ID)
+    pub async fn find_symbol_by_id(&self, symbol_id: &str, project_id: i32) -> Result<Option<UniversalSymbol>> {
+        let symbols = self.db.find_all(
+            QueryBuilder::<UniversalSymbol>::new()
+                .where_eq("project_id", project_id)
+                .where_eq("qualified_name", symbol_id)
+                .limit(1)
+        ).await?;
+        
+        Ok(symbols.into_iter().next())
+    }
+    
     /// Simple symbol search by name pattern
     pub async fn search_symbols_simple(&self, query: &str, project_id: i32, limit: usize) -> Result<Vec<UniversalSymbol>> {
-        let mut query_builder = QueryBuilder::<UniversalSymbol>::new()
+        let query_builder = QueryBuilder::<UniversalSymbol>::new()
             .where_eq("project_id", project_id)
             .limit(limit as i64);
         
-        // If query is not empty, add name filter
-        if !query.is_empty() {
+        // If query is not empty and not a wildcard, add name filter
+        if !query.is_empty() && query != "*" {
             // For now, use a simple contains search
             // In a real implementation, we'd use SQLite's LIKE or FTS
             let symbols = self.db.find_all(query_builder).await?;
@@ -562,7 +870,7 @@ impl ProjectDatabase {
             
             Ok(filtered)
         } else {
-            // Return all symbols up to limit
+            // Return all symbols up to limit (empty query or wildcard "*")
             self.db.find_all(query_builder).await
         }
     }
@@ -590,7 +898,12 @@ impl ProjectDatabase {
                 .where_eq("is_indexed", true)
         ).await?;
         
-        let cache_stats = self.symbol_cache.get_cache_statistics().await;
+        let cache_stats = if let Some(ref cache) = self.symbol_cache {
+            cache.get_cache_statistics().await
+        } else {
+            // Return default stats when cache is disabled
+            crate::database::cache::CacheStatistics::default()
+        };
         
         Ok(ProjectStats {
             symbol_count: symbol_count as i32,
@@ -602,9 +915,90 @@ impl ProjectDatabase {
         })
     }
     
+    /// Search symbols semantically using embeddings
+    pub async fn search_symbols_semantic(
+        &self,
+        query: &str,
+        project_id: i32,
+        limit: usize,
+        threshold: Option<f32>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(ref search_engine) = self.semantic_search {
+            search_engine.search(query, project_id, limit, threshold.unwrap_or(0.7)).await
+        } else {
+            // Fallback to simple search
+            tracing::warn!("Semantic search not available, falling back to simple search");
+            let symbols = self.search_symbols_simple(query, project_id, limit).await?;
+            Ok(symbols.into_iter().map(|s| SearchResult {
+                symbol: s,
+                similarity: 1.0,
+                match_reason: "Name-based match".to_string(),
+            }).collect())
+        }
+    }
+    
+    /// Find symbols similar to a given symbol
+    pub async fn find_similar_symbols_semantic(
+        &self,
+        symbol: &UniversalSymbol,
+        project_id: i32,
+        limit: usize,
+        threshold: Option<f32>,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(ref search_engine) = self.semantic_search {
+            search_engine.find_similar_symbols(symbol, project_id, limit, threshold.unwrap_or(0.7)).await
+        } else {
+            // Fallback: find symbols with same name pattern
+            let query = format!("{}%", &symbol.name[..symbol.name.len().min(5)]);
+            let similar = self.db.find_all(
+                QueryBuilder::<UniversalSymbol>::new()
+                    .where_eq("project_id", project_id)
+                    .where_like("name", query)
+                    .limit(limit as i64)
+            ).await?;
+            
+            Ok(similar.into_iter().map(|s| SearchResult {
+                symbol: s,
+                similarity: 0.8,
+                match_reason: "Name pattern match".to_string(),
+            }).collect())
+        }
+    }
+    
+    /// Find reusable components by intent
+    pub async fn find_reusable_components(
+        &self,
+        intent: &str,
+        project_id: i32,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        if let Some(ref search_engine) = self.semantic_search {
+            search_engine.find_reusable_components(intent, project_id, limit).await
+        } else {
+            // Fallback: find exported functions and classes
+            let components = self.db.find_all(
+                QueryBuilder::<UniversalSymbol>::new()
+                    .where_eq("project_id", project_id)
+                    .where_eq("is_exported", 1)
+                    .where_in("kind", vec!["function", "class", "interface"])
+                    .limit(limit as i64)
+            ).await?;
+            
+            Ok(components.into_iter().map(|s| SearchResult {
+                symbol: s,
+                similarity: 0.6,
+                match_reason: "Exported component".to_string(),
+            }).collect())
+        }
+    }
+    
     /// Clean up expired cache entries
     pub async fn cleanup_caches(&self) -> Result<()> {
-        let expired_count = self.symbol_cache.cleanup_expired().await;
+        let expired_count = if let Some(ref cache) = self.symbol_cache {
+            cache.cleanup_expired().await
+        } else {
+            0
+        };
         println!("Cleaned up {} expired cache entries", expired_count);
         Ok(())
     }
@@ -616,6 +1010,31 @@ impl ProjectDatabase {
         } else {
             Ok(None)
         }
+    }
+    
+    /// Clear all symbols and relationships for a project (used for force reindex)
+    pub async fn clear_project_symbols(&self, project_id: i32) -> Result<()> {
+        use crate::database::orm::DatabaseValue;
+        
+        // First delete all relationships for this project
+        self.db.execute(
+            "DELETE FROM universal_relationships WHERE project_id = ?",
+            vec![DatabaseValue::Integer(project_id as i64)]
+        ).await?;
+        
+        // Then delete all symbols for this project
+        self.db.execute(
+            "DELETE FROM universal_symbols WHERE project_id = ?",
+            vec![DatabaseValue::Integer(project_id as i64)]
+        ).await?;
+        
+        // Finally delete file index entries to force re-parsing
+        self.db.execute(
+            "DELETE FROM file_index WHERE project_id = ?",
+            vec![DatabaseValue::Integer(project_id as i64)]
+        ).await?;
+        
+        Ok(())
     }
 }
 

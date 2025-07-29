@@ -4,11 +4,122 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_rusqlite::Connection;
 use std::fmt::Debug;
+use rusqlite::Transaction as RusqliteTransaction;
 
 /// Our beautiful custom ORM that eliminates SQL headaches
 #[derive(Clone)]
 pub struct Database {
     conn: Arc<Connection>,
+}
+
+/// Transaction wrapper for atomic operations
+pub struct Transaction<'a> {
+    tx: RusqliteTransaction<'a>,
+}
+
+impl<'a> Transaction<'a> {
+    /// Insert a model within the transaction
+    pub fn insert<T: Model>(&mut self, model: &T) -> Result<T> {
+        let fields = T::field_names().into_iter()
+            .filter(|&f| f != T::primary_key())
+            .collect::<Vec<_>>();
+        
+        let placeholders = fields.iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            T::table_name(),
+            fields.join(", "),
+            placeholders
+        );
+        
+        let values = model.to_field_values();
+        let params: Vec<DatabaseValue> = fields.iter()
+            .map(|&field| values.get(field).cloned().unwrap_or(DatabaseValue::Null))
+            .collect();
+        
+        let mut stmt = self.tx.prepare(&sql)?;
+        let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        stmt.execute(db_params.as_slice())?;
+        
+        let id = self.tx.last_insert_rowid();
+        let mut result = model.clone();
+        result.set_id(id);
+        
+        Ok(result)
+    }
+    
+    /// Update a model within the transaction
+    pub fn update<T: Model>(&mut self, model: &T) -> Result<()> {
+        let id = model.get_id().ok_or_else(|| anyhow!("Cannot update model without ID"))?;
+        
+        let fields = T::field_names().into_iter()
+            .filter(|&f| f != T::primary_key())
+            .collect::<Vec<_>>();
+        
+        let set_clause = fields.iter()
+            .enumerate()
+            .map(|(i, field)| format!("{} = ?{}", field, i + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        
+        let sql = format!(
+            "UPDATE {} SET {} WHERE {} = ?{}",
+            T::table_name(),
+            set_clause,
+            T::primary_key(),
+            fields.len() + 1
+        );
+        
+        let values = model.to_field_values();
+        let mut params: Vec<DatabaseValue> = fields.iter()
+            .map(|&field| values.get(field).cloned().unwrap_or(DatabaseValue::Null))
+            .collect();
+        params.push(DatabaseValue::Integer(id));
+        
+        let mut stmt = self.tx.prepare(&sql)?;
+        let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        stmt.execute(db_params.as_slice())?;
+        
+        Ok(())
+    }
+    
+    /// Delete a model within the transaction
+    pub fn delete<T: Model>(&mut self, id: i64) -> Result<()> {
+        let sql = format!(
+            "DELETE FROM {} WHERE {} = ?1",
+            T::table_name(),
+            T::primary_key()
+        );
+        
+        let mut stmt = self.tx.prepare(&sql)?;
+        stmt.execute(&[&id])?;
+        
+        Ok(())
+    }
+    
+    /// Execute raw SQL within the transaction
+    pub fn execute(&mut self, sql: &str, params: Vec<DatabaseValue>) -> Result<usize> {
+        let mut stmt = self.tx.prepare(sql)?;
+        let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+        let rows_affected = stmt.execute(db_params.as_slice())?;
+        Ok(rows_affected)
+    }
+    
+    /// Get the last inserted row ID
+    pub fn last_insert_rowid(&self) -> i64 {
+        self.tx.last_insert_rowid()
+    }
+    
+    /// Commit the transaction
+    pub fn commit(self) -> Result<()> {
+        self.tx.commit()?;
+        Ok(())
+    }
 }
 
 /// Trait that all our models implement - gives them superpowers!
@@ -152,6 +263,11 @@ impl<T: Model> QueryBuilder<T> {
     pub fn where_lt<V: Into<DatabaseValue>>(mut self, field: &str, value: V) -> Self {
         self.where_clauses.push(format!("{} < ?", field));
         self.where_values.push(value.into());
+        self
+    }
+    
+    pub fn where_not_null(mut self, field: &str) -> Self {
+        self.where_clauses.push(format!("{} IS NOT NULL", field));
         self
     }
     
@@ -409,12 +525,168 @@ impl Database {
     /// Execute a batch of operations in a transaction
     pub async fn transaction<F, R>(&self, operations: F) -> Result<R>
     where
-        F: FnOnce(&Self) -> R + Send + 'static,
+        F: FnOnce(&mut Transaction) -> Result<R> + Send + 'static,
         R: Send + 'static,
     {
-        // For now, just execute the operations
-        // In a real implementation, we'd wrap this in a transaction
-        Ok(operations(self))
+        let conn = self.conn.clone();
+        
+        let result = conn.call(move |conn: &mut rusqlite::Connection| -> tokio_rusqlite::Result<Result<R>> {
+            let tx = conn.transaction()
+                .map_err(|e| tokio_rusqlite::Error::Rusqlite(e))?;
+            let mut transaction = Transaction { tx };
+            
+            // Execute the operations and capture the result
+            let result = operations(&mut transaction);
+            
+            match &result {
+                Ok(_) => {
+                    // Commit on success
+                    transaction.tx.commit()
+                        .map_err(|e| tokio_rusqlite::Error::Rusqlite(e))?;
+                }
+                Err(_) => {
+                    // Transaction will rollback on drop
+                }
+            }
+            
+            Ok(result)
+        })
+        .await
+        .map_err(|e| anyhow!("Database error: {}", e))?;
+        
+        result
+    }
+    
+    /// Execute multiple inserts in a transaction for better performance
+    pub async fn insert_batch<T: Model + Clone + 'static>(&self, models: Vec<T>) -> Result<Vec<T>> {
+        self.transaction(move |tx| {
+            let mut results = Vec::new();
+            for model in models {
+                results.push(tx.insert(&model)?);
+            }
+            Ok(results)
+        }).await.map_err(|e| anyhow::anyhow!("Database query failed: {}", e))
+    }
+
+    /// Raw query methods for flow analysis
+    pub async fn query_symbols_raw(&self, query: &str, params: &[DatabaseValue]) -> Result<Vec<crate::database::models::UniversalSymbol>> {
+        let conn = self.conn.clone();
+        let query = query.to_string();
+        let params = params.to_vec();
+        
+        conn.call(move |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let column_names: Vec<String> = stmt.column_names().into_iter().map(|s| s.to_string()).collect();
+            let rows = stmt.query_map(db_params.as_slice(), |row| {
+                let mut values = HashMap::new();
+                for (i, column_name) in column_names.iter().enumerate() {
+                    let value: DatabaseValue = match row.get::<_, rusqlite::types::Value>(i)? {
+                        rusqlite::types::Value::Null => DatabaseValue::Null,
+                        rusqlite::types::Value::Integer(i) => DatabaseValue::Integer(i),
+                        rusqlite::types::Value::Real(r) => DatabaseValue::Real(r),
+                        rusqlite::types::Value::Text(s) => DatabaseValue::Text(s),
+                        rusqlite::types::Value::Blob(_) => DatabaseValue::Null,
+                    };
+                    values.insert(column_name.to_string(), value);
+                }
+                Ok(values)
+            })?;
+            
+            let mut results = Vec::new();
+            for row in rows {
+                let values = row?;
+                match crate::database::models::UniversalSymbol::from_field_values(values) {
+                    Ok(symbol) => results.push(symbol),
+                    Err(e) => return Err(tokio_rusqlite::Error::Rusqlite(rusqlite::Error::FromSqlConversionFailure(
+                        0, 
+                        rusqlite::types::Type::Text, 
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    ))),
+                }
+            }
+            Ok(results)
+        }).await.map_err(|e| anyhow::anyhow!("Database query failed: {}", e))
+    }
+
+    pub async fn query_calls_raw(&self, query: &str, params: &[DatabaseValue]) -> Result<Vec<crate::database::flow_models::SymbolCall>> {
+        let conn = self.conn.clone();
+        let query = query.to_string();
+        let params = params.to_vec();
+        
+        conn.call(move |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let column_names: Vec<String> = stmt.column_names().into_iter().map(|s| s.to_string()).collect();
+            let rows = stmt.query_map(db_params.as_slice(), |row| {
+                let mut values = HashMap::new();
+                for (i, column_name) in column_names.iter().enumerate() {
+                    let value: DatabaseValue = match row.get::<_, rusqlite::types::Value>(i)? {
+                        rusqlite::types::Value::Null => DatabaseValue::Null,
+                        rusqlite::types::Value::Integer(i) => DatabaseValue::Integer(i),
+                        rusqlite::types::Value::Real(r) => DatabaseValue::Real(r),
+                        rusqlite::types::Value::Text(s) => DatabaseValue::Text(s),
+                        rusqlite::types::Value::Blob(_) => DatabaseValue::Null,
+                    };
+                    values.insert(column_name.to_string(), value);
+                }
+                Ok(values)
+            })?;
+            
+            let mut results = Vec::new();
+            for row in rows {
+                let values = row?;
+                match crate::database::flow_models::SymbolCall::from_field_values(values) {
+                    Ok(call) => results.push(call),
+                    Err(e) => return Err(tokio_rusqlite::Error::Rusqlite(rusqlite::Error::FromSqlConversionFailure(
+                        0, 
+                        rusqlite::types::Type::Text, 
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    ))),
+                }
+            }
+            Ok(results)
+        }).await.map_err(|e| anyhow::anyhow!("Database query failed: {}", e))
+    }
+
+    pub async fn query_flows_raw(&self, query: &str, params: &[DatabaseValue]) -> Result<Vec<crate::database::flow_models::DataFlow>> {
+        let conn = self.conn.clone();
+        let query = query.to_string();
+        let params = params.to_vec();
+        
+        conn.call(move |conn| {
+            let mut stmt = conn.prepare(&query)?;
+            let db_params: Vec<&dyn rusqlite::ToSql> = params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+            let column_names: Vec<String> = stmt.column_names().into_iter().map(|s| s.to_string()).collect();
+            let rows = stmt.query_map(db_params.as_slice(), |row| {
+                let mut values = HashMap::new();
+                for (i, column_name) in column_names.iter().enumerate() {
+                    let value: DatabaseValue = match row.get::<_, rusqlite::types::Value>(i)? {
+                        rusqlite::types::Value::Null => DatabaseValue::Null,
+                        rusqlite::types::Value::Integer(i) => DatabaseValue::Integer(i),
+                        rusqlite::types::Value::Real(r) => DatabaseValue::Real(r),
+                        rusqlite::types::Value::Text(s) => DatabaseValue::Text(s),
+                        rusqlite::types::Value::Blob(_) => DatabaseValue::Null,
+                    };
+                    values.insert(column_name.to_string(), value);
+                }
+                Ok(values)
+            })?;
+            
+            let mut results = Vec::new();
+            for row in rows {
+                let values = row?;
+                match crate::database::flow_models::DataFlow::from_field_values(values) {
+                    Ok(flow) => results.push(flow),
+                    Err(e) => return Err(tokio_rusqlite::Error::Rusqlite(rusqlite::Error::FromSqlConversionFailure(
+                        0, 
+                        rusqlite::types::Type::Text, 
+                        Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    ))),
+                }
+            }
+            Ok(results)
+        }).await.map_err(|e| anyhow::anyhow!("Database query failed: {}", e))
     }
 }
 

@@ -9,32 +9,37 @@
   },
   "scripts": {
     "build": "npm run build:rust && tsc && npm run build:dashboard",
-    "build:rust": "node scripts/build-napi.js",
-    "build:dashboard": "vite build",
-    "dev": "tsx --watch src/dashboard-server.ts",
-    "start": "npm run build && node dist/index.js",
-    "start:dashboard": "npm run build && tsx src/dashboard-server.ts",
+    "build:rust": "RUST_LOG=ort=off node scripts/build-napi.js",
+    "clean:dashboard": "rm -rf dist/dashboard src/dashboard/dist node_modules/.vite",
+    "build:dashboard": "npm run clean:dashboard && vite build",
+    "dev": "RUST_LOG=ort=off tsx --watch src/dashboard-server.ts",
+    "start": "npm run build && RUST_LOG=ort=off node dist/index.js",
+    "start:dashboard": "npm run build && RUST_LOG=ort=off tsx src/dashboard-server.ts",
     "lint": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts'",
     "lint:fix": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --fix",
     "lint:check": "eslint src/**/*.ts --ignore-pattern 'src/**/*.test.ts' --max-warnings 0",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist *.node",
+    "clean": "rm -rf dist *.node src/dashboard/dist node_modules/.vite",
     "prepare": "husky",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "test:ci": "jest --ci --coverage --maxWorkers=2"
+    "test:ci": "jest --ci --coverage --maxWorkers=2",
+    "test:rust-bridge": "jest src/rust-bridge/__tests__",
+    "test:rust-bridge:watch": "jest src/rust-bridge/__tests__ --watch",
+    "test:rust-bridge:performance": "jest src/rust-bridge/__tests__/performance.test.ts",
+    "test:rust-bridge:integration": "jest src/rust-bridge/__tests__/integration.test.ts"
   },
   "lint-staged": {
-    "*.{ts,tsx}": [
-      "eslint --fix",
-      "git add"
+    "src/**/*.{ts,tsx}": [
+      "eslint --fix"
     ]
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "d3": "^7.9.0",
-    "dotenv": "^17.2.0"
+    "dotenv": "^17.2.1",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@babel/core": "^7.28.0",
@@ -47,12 +52,14 @@
     "@types/node": "^22.5.0",
     "@typescript-eslint/eslint-plugin": "^8.38.0",
     "@typescript-eslint/parser": "^8.38.0",
+    "@webgpu/types": "^0.1.64",
     "babel-jest": "^30.0.5",
     "eslint": "^9.31.0",
     "husky": "^9.1.7",
     "jest": "^30.0.5",
     "jest-environment-jsdom": "^30.0.5",
     "lint-staged": "^16.1.2",
+    "playwright": "^1.54.1",
     "ts-jest": "^29.4.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",

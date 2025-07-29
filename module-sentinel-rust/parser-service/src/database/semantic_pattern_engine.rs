@@ -1,17 +1,14 @@
-// Stub implementation for semantic pattern engine
+// Simplified semantic pattern engine
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
-use dashmap::DashMap;
 
-use crate::parsers::tree_sitter::{CodeEmbedder, Symbol, Language};
+use crate::parsers::tree_sitter::{CodeEmbedder, Symbol};
 
-/// Simplified version for compilation
+/// Simple pattern detection engine for code analysis
 pub struct SemanticPatternEngine {
-    embedder: Arc<CodeEmbedder>,
-    patterns: Arc<DashMap<String, EvolvingPattern>>,
+    _embedder: Arc<CodeEmbedder>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,14 +16,6 @@ pub struct EvolvingPattern {
     pub id: String,
     pub pattern_type: PatternType,
     pub confidence: f32,
-    pub detection_count: u64,
-    pub success_rate: f64,
-    pub last_seen: chrono::DateTime<chrono::Utc>,
-    pub evolution_history: Vec<String>,
-    pub feedback_corrections: Vec<String>,
-    pub ai_validations: Vec<String>,
-    pub adaptive_features: HashMap<String, f32>,
-    pub contextual_weights: HashMap<String, f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,29 +35,11 @@ pub struct PatternMatch {
     pub source_symbol: Symbol,
     pub target_symbol: Symbol,
     pub similarity_score: f32,
-    pub detected_features: HashMap<String, f32>,
-    pub confidence_breakdown: ConfidenceBreakdown,
 }
 
+// Simplified types for compatibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConfidenceBreakdown {
-    pub name_similarity: f32,
-    pub structural_similarity: f32,
-    pub behavioral_similarity: f32,
-    pub contextual_similarity: f32,
-    pub embedding_similarity: f32,
-    pub overall_confidence: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AIFeedback {
-    pub request_id: String,
-    pub pattern_id: String,
-    pub validation_result: ValidationResult,
-    pub confidence: f32,
-    pub reasoning: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-}
+pub struct AIFeedback;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ValidationResult {
@@ -86,24 +57,146 @@ pub enum ValidationPriority {
 impl SemanticPatternEngine {
     pub async fn new(embedder: Arc<CodeEmbedder>) -> Result<Self> {
         Ok(Self {
-            embedder,
-            patterns: Arc::new(DashMap::new()),
+            _embedder: embedder,
         })
     }
     
-    pub async fn detect_patterns(&self, _symbols: &[Symbol]) -> Result<Vec<EvolvingPattern>> {
-        Ok(vec![]) // Stub implementation
+    /// Detect patterns in symbols based on naming and structural similarities
+    pub async fn detect_patterns(&self, symbols: &[Symbol]) -> Result<Vec<EvolvingPattern>> {
+        let mut patterns = Vec::new();
+        
+        // Simple pattern detection based on symbol names
+        let mut function_groups: HashMap<String, Vec<&Symbol>> = HashMap::new();
+        
+        for symbol in symbols {
+            // Group functions by common prefixes (e.g., get*, set*, handle*)
+            if symbol.signature.contains("fn") || symbol.signature.contains("function") {
+                let prefix = self.extract_function_prefix(&symbol.name);
+                if !prefix.is_empty() {
+                    function_groups.entry(prefix).or_insert_with(Vec::new).push(symbol);
+                }
+            }
+        }
+        
+        // Create patterns for groups with multiple symbols
+        for (prefix, group) in function_groups {
+            if group.len() >= 2 {
+                patterns.push(EvolvingPattern {
+                    id: format!("func_pattern_{}", prefix),
+                    pattern_type: PatternType::FunctionSimilarity {
+                        semantic_hash: format!("hash_{}", prefix),
+                        behavior_signature: prefix.clone(),
+                    },
+                    confidence: 0.7 + (group.len() as f32 * 0.05).min(0.3),
+                });
+            }
+        }
+        
+        // Detect cross-language patterns
+        let cross_lang_symbols: Vec<_> = symbols.iter()
+            .filter(|s| s.name.contains("ffi") || s.name.contains("binding") || s.name.contains("extern"))
+            .collect();
+            
+        if cross_lang_symbols.len() >= 2 {
+            patterns.push(EvolvingPattern {
+                id: "cross_language_pattern".to_string(),
+                pattern_type: PatternType::CrossLanguage,
+                confidence: 0.8,
+            });
+        }
+        
+        Ok(patterns)
     }
     
-    pub async fn find_similar_symbols(&self, _target: &Symbol, _candidates: &[Symbol]) -> Result<Vec<PatternMatch>> {
-        Ok(vec![]) // Stub implementation
+    /// Find symbols similar to a target
+    pub async fn find_similar_symbols(&self, target: &Symbol, candidates: &[Symbol]) -> Result<Vec<PatternMatch>> {
+        let mut matches = Vec::new();
+        
+        for candidate in candidates {
+            if candidate.id == target.id {
+                continue;
+            }
+            
+            let similarity = self.calculate_basic_similarity(target, candidate);
+            
+            if similarity > 0.5 {
+                matches.push(PatternMatch {
+                    source_symbol: target.clone(),
+                    target_symbol: candidate.clone(),
+                    similarity_score: similarity,
+                });
+            }
+        }
+        
+        // Sort by similarity descending
+        matches.sort_by(|a, b| b.similarity_score.partial_cmp(&a.similarity_score).unwrap_or(std::cmp::Ordering::Equal));
+        
+        Ok(matches)
     }
     
-    pub async fn get_pattern_insights(&self) -> Result<Vec<String>> {
-        Ok(vec![]) // Stub implementation
+    // Helper methods
+    
+    fn extract_function_prefix(&self, name: &str) -> String {
+        let name_lower = name.to_lowercase();
+        
+        // Common function prefixes
+        for prefix in &["get", "set", "create", "update", "delete", "handle", "process", "validate", "check"] {
+            if name_lower.starts_with(prefix) {
+                return prefix.to_string();
+            }
+        }
+        
+        String::new()
     }
     
-    pub async fn request_ai_validation(&self, _pattern: &EvolvingPattern, _priority: ValidationPriority) -> Result<String> {
-        Ok("validation_id_123".to_string()) // Stub implementation
+    fn calculate_basic_similarity(&self, symbol1: &Symbol, symbol2: &Symbol) -> f32 {
+        let mut score = 0.0;
+        
+        // Name similarity
+        let name_sim = self.string_similarity(&symbol1.name, &symbol2.name);
+        score += name_sim * 0.4;
+        
+        // Signature similarity
+        let sig_sim = self.string_similarity(&symbol1.signature, &symbol2.signature);
+        score += sig_sim * 0.3;
+        
+        // Same file boost
+        if symbol1.file_path == symbol2.file_path {
+            score += 0.2;
+        }
+        
+        // Language match
+        if symbol1.language == symbol2.language {
+            score += 0.1;
+        }
+        
+        score.min(1.0)
+    }
+    
+    fn string_similarity(&self, s1: &str, s2: &str) -> f32 {
+        if s1 == s2 {
+            return 1.0;
+        }
+        
+        let s1_lower = s1.to_lowercase();
+        let s2_lower = s2.to_lowercase();
+        
+        if s1_lower == s2_lower {
+            return 0.9;
+        }
+        
+        // Check if one contains the other
+        if s1_lower.contains(&s2_lower) || s2_lower.contains(&s1_lower) {
+            return 0.7;
+        }
+        
+        // Simple edit distance approximation
+        let max_len = s1.len().max(s2.len());
+        if max_len == 0 {
+            return 1.0;
+        }
+        
+        let common_chars = s1.chars().zip(s2.chars()).filter(|(a, b)| a == b).count();
+        common_chars as f32 / max_len as f32
     }
 }

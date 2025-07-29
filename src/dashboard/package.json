@@ -1,0 +1,20 @@
+{
+  "name": "module-sentinel-dashboard",
+  "version": "1.0.0",
+  "description": "WebGPU-powered code intelligence visualization dashboard",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@webgpu/types": "^0.1.40"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.11"
+  }
+}

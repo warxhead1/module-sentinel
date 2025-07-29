@@ -97,7 +97,7 @@ describe('FlowAnalysisService', () => {
       });
 
       // Assert
-      expect(mockBridge.searchSymbols).toHaveBeenCalledWith('', {
+      expect(mockBridge.searchSymbols).toHaveBeenCalledWith('*', {
         kind: SymbolKind.Class,
         limit: 10
       });
@@ -111,14 +111,14 @@ describe('FlowAnalysisService', () => {
       const mockRelationships: UniversalRelationship[] = [
         {
           id: 1,
-          projectId: 1,
-          sourceSymbolId: 10,
-          targetSymbolId: 20,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 10,
+          to_symbol_id: 20,
+          relationship_type: 'calls',
           strength: 0.9,
           confidence: 0.8,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         }
       ];
 
@@ -145,25 +145,25 @@ describe('FlowAnalysisService', () => {
       const mockRelationships: UniversalRelationship[] = [
         {
           id: 1,
-          projectId: 1,
-          sourceSymbolId: 10,
-          targetSymbolId: 20,
-          relationshipType: 'async_calls',
+          project_id: 1,
+          from_symbol_id: 10,
+          to_symbol_id: 20,
+          relationship_type: 'async_calls',
           strength: 0.7,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         },
         {
           id: 2,
-          projectId: 1,
-          sourceSymbolId: 30,
-          targetSymbolId: 40,
-          relationshipType: 'network_request',
+          project_id: 1,
+          from_symbol_id: 30,
+          to_symbol_id: 40,
+          relationship_type: 'network_request',
           strength: 0.6,
           confidence: 0.85,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         }
       ];
 
@@ -209,14 +209,14 @@ describe('FlowAnalysisService', () => {
       const mockRelationships: UniversalRelationship[] = [
         {
           id: 1,
-          projectId: 1,
-          sourceSymbolId: 1,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 1,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.9,
           confidence: 0.95,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         }
       ];
 
@@ -317,47 +317,47 @@ describe('FlowAnalysisService', () => {
       const mockRelationships: UniversalRelationship[] = [
         {
           id: 1,
-          projectId: 1,
-          sourceSymbolId: 1,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 1,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.9,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         },
         {
           id: 2,
-          projectId: 1,
-          sourceSymbolId: 3,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 3,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.8,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         },
         {
           id: 3,
-          projectId: 1,
-          sourceSymbolId: 4,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 4,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.7,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         },
         {
           id: 4,
-          projectId: 1,
-          sourceSymbolId: 5,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 5,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.6,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         }
         // Note: No outgoing relationships from symbol 2 = bottleneck!
       ];
@@ -405,8 +405,8 @@ describe('FlowAnalysisService', () => {
       ];
 
       const mockRelationships: UniversalRelationship[] = [
-        { id: 1, projectId: 1, sourceSymbolId: 1, targetSymbolId: 2, relationshipType: 'calls', strength: 0.9, confidence: 0.9, isInferred: false, lastModified: '2024-01-01' },
-        { id: 2, projectId: 1, sourceSymbolId: 2, targetSymbolId: 3, relationshipType: 'calls', strength: 0.8, confidence: 0.8, isInferred: false, lastModified: '2024-01-01' }
+        { id: 1, project_id: 1, from_symbol_id: 1, to_symbol_id: 2, relationship_type: 'calls', strength: 0.9, confidence: 0.9, is_inferred: false, created_at: '2024-01-01' },
+        { id: 2, project_id: 1, from_symbol_id: 2, to_symbol_id: 3, relationship_type: 'calls', strength: 0.8, confidence: 0.8, is_inferred: false, created_at: '2024-01-01' }
       ];
 
       mockBridge.searchSymbols.mockResolvedValue(mockSymbols);
@@ -450,14 +450,14 @@ describe('FlowAnalysisService', () => {
       const mockRelationships: UniversalRelationship[] = [
         {
           id: 1,
-          projectId: 1,
-          sourceSymbolId: 1,
-          targetSymbolId: 2,
-          relationshipType: 'calls',
+          project_id: 1,
+          from_symbol_id: 1,
+          to_symbol_id: 2,
+          relationship_type: 'calls',
           strength: 0.8,
           confidence: 0.9,
-          isInferred: false,
-          lastModified: '2024-01-01'
+          is_inferred: false,
+          created_at: '2024-01-01'
         }
       ];
       

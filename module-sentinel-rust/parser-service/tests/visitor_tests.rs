@@ -1,6 +1,6 @@
 use module_sentinel_parser::ast::{
     UniversalAst, UniversalNode, NodeId, NodeLocation, SourceLocation,
-    AstVisitor, LiteralValue
+    AstVisitor
 };
 
 fn create_test_location(start: usize, end: usize) -> NodeLocation {

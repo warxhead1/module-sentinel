@@ -1,5 +1,4 @@
 use anyhow::Result;
-use tempfile::TempDir;
 use std::sync::Arc;
 use std::fs;
 use std::path::Path;
@@ -110,7 +109,7 @@ async fn test_simple_duplicate_detection_with_similarity_calculator() -> Result<
     
     // Parse the project
     let project = project_db.get_or_create_project("test_project", temp_dir.path().to_str().unwrap()).await?;
-    parsing_service.parse_project(temp_dir.path(), "test_project").await?;
+    parsing_service.parse_project(temp_dir.path(), "test_project", true).await?;
     
     // Load symbols from database
     use module_sentinel_parser::database::{orm::QueryBuilder, models::UniversalSymbol};
@@ -138,6 +137,8 @@ async fn test_simple_duplicate_detection_with_similarity_calculator() -> Result<
             duplicate_of: None,
             confidence_score: Some(1.0),
             similar_symbols: vec![],
+            semantic_tags: None,
+            intent: None,
         }
     }).collect();
     

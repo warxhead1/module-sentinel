@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::RwLock as AsyncRwLock;
 
 /// High-performance bloom filter for fast duplicate symbol detection
@@ -96,10 +96,6 @@ impl SymbolBloomFilter {
         if self.insertions == 0 {
             return 0.0;
         }
-        
-        // Calculate actual false positive rate based on current load
-        let load_factor = self.insertions as f64 / self.capacity as f64;
-        let bits_per_element = self.bits.len() as f64 / self.insertions as f64;
         
         // Approximate false positive rate: (1 - e^(-k*n/m))^k
         // where k = hash functions, n = insertions, m = bit array size
@@ -428,15 +424,75 @@ impl AdaptiveSymbolBloomFilter {
         let mut stats = BloomFilterPerformanceStats::default();
         stats.capacity = initial_capacity;
         
+        let config = BloomFilterConfig::default();
+        
         Ok(Self {
             inner: AsyncRwLock::new(filter),
-            config: BloomFilterConfig::default(),
+            config,
             stats: AsyncRwLock::new(stats),
             resize_threshold: 0.8,
             target_false_positive_rate: false_positive_rate,
             recent_insertions: AsyncRwLock::new(Vec::new()),
             max_stored_insertions: 10000, // Store up to 10k recent insertions for resize
         })
+    }
+    
+    /// Get the current configuration
+    pub fn get_config(&self) -> &BloomFilterConfig {
+        &self.config
+    }
+    
+    /// Update configuration (some settings may require filter rebuild)
+    pub async fn update_config(&mut self, new_config: BloomFilterConfig) -> Result<()> {
+        // Check if auto-resize threshold changed
+        if self.config.auto_resize_threshold != new_config.auto_resize_threshold {
+            self.resize_threshold = new_config.auto_resize_threshold;
+        }
+        
+        // Check if we need to rebuild due to hash function change
+        if self.config.hash_functions != new_config.hash_functions {
+            let current_capacity = {
+                let filter = self.inner.read().await;
+                filter.stats().capacity
+            };
+            
+            // Create new filter with updated hash functions
+            let new_filter = SymbolBloomFilter::new(current_capacity, self.target_false_positive_rate)?;
+            let mut filter_guard = self.inner.write().await;
+            *filter_guard = new_filter;
+            
+            // Re-insert recent items
+            let recent = self.recent_insertions.read().await;
+            for (s1, s2) in recent.iter() {
+                filter_guard.insert_pair(s1, s2);
+            }
+            
+            // Update stats
+            let mut stats = self.stats.write().await;
+            stats.resize_count += 1;
+        }
+        
+        // Apply memory limit if specified
+        if new_config.max_memory_mb > 0 {
+            // Check current memory usage
+            let stats = self.stats.read().await;
+            if stats.memory_usage_mb > new_config.max_memory_mb as f64 {
+                tracing::warn!("Bloom filter memory usage ({:.2} MB) exceeds new limit ({} MB)", 
+                             stats.memory_usage_mb, new_config.max_memory_mb);
+            }
+        }
+        
+        self.config = new_config;
+        Ok(())
+    }
+    
+    /// Check if configuration allows operation
+    pub async fn check_config_allows_operation(&self) -> bool {
+        if self.config.max_memory_mb > 0 {
+            let stats = self.stats.read().await;
+            return stats.memory_usage_mb < self.config.max_memory_mb as f64;
+        }
+        true
     }
     
     pub async fn insert_symbol_pair(&mut self, symbol1: &str, symbol2: &str) -> Result<()> {
@@ -608,10 +664,46 @@ impl MemoryAwareBloomFilter {
     }
     
     pub async fn measure_accuracy_sample(&self, sample_size: usize) -> Result<f64> {
-        // Simple accuracy measurement - check false positive rate
+        // Measure accuracy by testing false positive rate on a sample
+        if sample_size == 0 {
+            let filter = self.inner.read().await;
+            return Ok(1.0 - filter.current_false_positive_rate());
+        }
+        
+        // Generate sample test keys that shouldn't be in the filter
+        let mut false_positives = 0;
+        for i in 0..sample_size {
+            let test_name = format!("__test_key_not_in_filter__{}", i);
+            let symbol_key = SymbolKey::new(&test_name, "", "");
+            
+            // Use write lock since might_contain needs mutable access
+            let mut filter = self.inner.write().await;
+            if filter.might_contain(&symbol_key) {
+                false_positives += 1;
+            }
+        }
+        
+        let measured_fp_rate = false_positives as f64 / sample_size as f64;
+        Ok(1.0 - measured_fp_rate)
+    }
+    
+    /// Check if current false positive rate exceeds target
+    pub async fn is_exceeding_target_rate(&self) -> bool {
         let filter = self.inner.read().await;
-        let fp_rate = filter.current_false_positive_rate();
-        Ok(1.0 - fp_rate) // Accuracy is 1 - false positive rate
+        filter.current_false_positive_rate() > self.target_false_positive_rate
+    }
+    
+    /// Get the target false positive rate
+    pub fn get_target_false_positive_rate(&self) -> f64 {
+        self.target_false_positive_rate
+    }
+    
+    /// Check if filter needs optimization based on target rate
+    pub async fn needs_optimization(&self) -> bool {
+        let filter = self.inner.read().await;
+        let current_rate = filter.current_false_positive_rate();
+        // Need optimization if we're more than 50% above target
+        current_rate > self.target_false_positive_rate * 1.5
     }
 }
 

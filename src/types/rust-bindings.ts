@@ -7,13 +7,14 @@ export interface Symbol {
   id: string;
   name: string;
   signature: string;
+  returnType?: string;
   language: Language;
-  file_path: string;
-  start_line: number;
-  end_line: number;
-  normalized_name: string;
-  confidence_score?: number;
-  similar_symbols: string[];
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  normalizedName: string;
+  confidenceScore?: number;
+  similarSymbols: string[];
 }
 
 export interface UniversalSymbol {
@@ -38,14 +39,15 @@ export interface UniversalSymbol {
 export interface UniversalRelationship {
   id?: number;
   projectId: number;
-  sourceSymbolId: number;
-  targetSymbolId: number;
+  fromSymbolId?: number;
+  toSymbolId?: number;
   relationshipType: string;
-  strength: number;
-  context?: string;
   confidence: number;
-  isInferred: boolean;
-  lastModified: string;
+  contextLine?: number;
+  contextColumn?: number;
+  contextSnippet?: string;
+  metadata?: string;
+  createdAt: string;
 }
 
 export enum Language {
@@ -63,7 +65,7 @@ export interface ParseResult {
   symbols: Symbol[];
   relationships: UniversalRelationship[];
   errors: string[];
-  parse_method: string;
+  parseMethod: string;
   confidence: number;
 }
 
@@ -90,11 +92,11 @@ export enum PatternCategory {
 }
 
 export interface SimilarityResult {
-  overall_score: number;
-  name_similarity: number;
-  signature_similarity: number;
-  structural_similarity: number;
-  context_similarity: number;
+  overallScore: number;
+  nameSimilarity: number;
+  signatureSimilarity: number;
+  structuralSimilarity: number;
+  contextSimilarity: number;
 }
 
 export interface DuplicateGroup {
@@ -108,15 +110,15 @@ export interface DuplicateGroup {
 export interface AnalysisResult {
   patterns: PatternDetectionResult[];
   insights: AnalysisInsights;
-  symbol_count: number;
+  symbolCount: number;
 }
 
 export interface AnalysisInsights {
-  total_symbols_analyzed: number;
-  duplicate_count: number;
-  patterns_detected: number;
-  average_similarity: number;
-  code_reuse_percentage: number;
+  totalSymbolsAnalyzed: number;
+  duplicateCount: number;
+  patternsDetected: number;
+  averageSimilarity: number;
+  codeReusePercentage: number;
   recommendations: string[];
 }
 
@@ -124,9 +126,9 @@ export interface ProjectInfo {
   id: number;
   name: string;
   path: string;
-  last_indexed?: string;
-  symbol_count: number;
-  language_distribution: Record<string, number>;
+  lastIndexed?: string;
+  symbolCount: number;
+  languageDistribution: Record<string, number>;
 }
 
 export interface IndexingOptions {
@@ -155,4 +157,59 @@ export interface CrossLanguageRelationship {
     targetFile: string;
     description: string;
   }>;
+}
+
+export interface QualityIssue {
+  description: string;
+  category: string;
+  severity: string;
+  suggestion?: string;
+  confidence?: number;
+  suggestedRefactoring?: string[];
+  line?: number;
+  column?: number;
+}
+
+export interface QualityMetrics {
+  cyclomaticComplexity: number;
+  maxNestingDepth: number;
+  functionCount: number;
+  largeFunctionCount: number;
+  linesOfCode: number;
+  commentRatio: number;
+  decisionPoints?: number;
+  errorHandlingComplexity?: number;
+}
+
+export interface CodeQualityResult {
+  issues: QualityIssue[];
+  metrics: QualityMetrics;
+  overallScore: number;
+  recommendations: string[];
+}
+
+// ML-powered types
+export interface ComponentReuseRecommendation {
+  existingComponentId: string;
+  relevanceScore: number;
+  suggestedUsage: string;
+  extensionNeeded: "none" | "minor_config" | "new_implementation" | "significant_mod";
+  componentPath: string;
+}
+
+export interface ErrorFixSuggestion {
+  suggestion: string;
+  confidence: number;
+  explanation: string;
+  learnedFrom?: string;
+}
+
+export interface MLParseError {
+  message: string;
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+  errorType: string;
+  mlSuggestions: ErrorFixSuggestion[];
 }

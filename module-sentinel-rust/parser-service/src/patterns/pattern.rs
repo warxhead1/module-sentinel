@@ -28,19 +28,79 @@ pub struct PatternMatch {
 }
 
 impl Pattern {
-    pub fn find_matches(&self, _language: &str, _source: &str) -> Result<Vec<PatternMatch>> {
-        // TODO: Implement actual tree-sitter matching
-        // For now, return mock data for tests
-        if self.query.contains("function_item") && _source.contains("fn calculate") {
-            Ok(vec![PatternMatch {
-                capture_name: "name".to_string(),
-                text: "calculate".to_string(),
-                start_byte: 3,
-                end_byte: 12,
-            }])
-        } else {
-            Ok(vec![])
+    pub fn find_matches(&self, language: &str, source: &str) -> Result<Vec<PatternMatch>> {
+        use tree_sitter::{Parser, Query, QueryCursor, StreamingIterator};
+        
+        // Get the appropriate tree-sitter language
+        let ts_language = match language {
+            "rust" => tree_sitter_rust::LANGUAGE.into(),
+            "cpp" | "c++" => tree_sitter_cpp::LANGUAGE.into(),
+            "python" => tree_sitter_python::LANGUAGE.into(),
+            "typescript" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "javascript" => tree_sitter_javascript::LANGUAGE.into(),
+            "go" => tree_sitter_go::LANGUAGE.into(),
+            "java" => tree_sitter_java::LANGUAGE.into(),
+            "c_sharp" | "csharp" => tree_sitter_c_sharp::LANGUAGE.into(),
+            _ => {
+                tracing::warn!("Unsupported language for pattern matching: {}", language);
+                return Ok(vec![]);
+            }
+        };
+        
+        // Parse the source code
+        let mut parser = Parser::new();
+        parser.set_language(&ts_language)?;
+        
+        let tree = match parser.parse(source, None) {
+            Some(tree) => tree,
+            None => {
+                tracing::warn!("Failed to parse source code for pattern matching");
+                return Ok(vec![]);
+            }
+        };
+        
+        // Create and execute the query
+        let query = match Query::new(&ts_language, &self.query) {
+            Ok(query) => query,
+            Err(e) => {
+                tracing::warn!("Invalid tree-sitter query: {} - Error: {}", self.query, e);
+                return Ok(vec![]);
+            }
+        };
+        
+        let mut cursor = QueryCursor::new();
+        let mut pattern_matches = Vec::new();
+        
+        // Use the proper QueryMatches API with while loop
+        let text_provider = source.as_bytes();
+        let mut matches = cursor.matches(&query, tree.root_node(), text_provider);
+        
+        // Use a while loop to iterate through matches
+        while let Some(query_match) = matches.next() {
+            for capture in query_match.captures {
+                let capture_name = query.capture_names()[capture.index as usize].to_string();
+                let node = capture.node;
+                
+                // Extract text safely
+                let text = match node.utf8_text(text_provider) {
+                    Ok(text) => text,
+                    Err(_) => {
+                        tracing::warn!("Failed to extract text for capture: {}", capture_name);
+                        continue;
+                    }
+                };
+                
+                pattern_matches.push(PatternMatch {
+                    capture_name,
+                    text: text.to_string(),
+                    start_byte: node.start_byte(),
+                    end_byte: node.end_byte(),
+                });
+            }
         }
+        
+        tracing::debug!("Tree-sitter pattern matching for language '{}' found {} matches", language, pattern_matches.len());
+        Ok(pattern_matches)
     }
     
     pub fn is_compatible_with_version(&self, version: &str) -> bool {

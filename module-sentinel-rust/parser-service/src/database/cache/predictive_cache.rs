@@ -54,7 +54,7 @@ impl Default for PredictiveCacheStats {
 
 /// Pattern learned from symbol access history
 #[derive(Debug, Clone)]
-struct AccessPattern {
+pub struct AccessPattern {
     pattern_id: String,
     symbols: Vec<String>,
     frequency: u64,
@@ -78,6 +78,16 @@ impl AccessPattern {
         self.frequency += 1;
         self.confidence = (self.confidence + 0.1).min(1.0);
         self.last_seen = std::time::Instant::now();
+    }
+    
+    /// Get the pattern ID for logging and debugging
+    pub fn get_pattern_id(&self) -> &str {
+        &self.pattern_id
+    }
+    
+    /// Check if this pattern matches another by ID
+    pub fn matches_pattern_id(&self, other_id: &str) -> bool {
+        self.pattern_id == other_id
     }
     
     fn generate_pattern_id(symbols: &[String]) -> String {
@@ -503,6 +513,27 @@ impl PredictiveCachedDeduplicator {
         }
         
         Ok(())
+    }
+    
+    /// Get pattern by ID for debugging and analysis
+    pub async fn get_pattern_by_id(&self, pattern_id: &str) -> Option<AccessPattern> {
+        let patterns = self.access_patterns.read().await;
+        patterns.values().find(|p| p.get_pattern_id() == pattern_id).cloned()
+    }
+    
+    /// List all pattern IDs for monitoring
+    pub async fn list_pattern_ids(&self) -> Vec<String> {
+        let patterns = self.access_patterns.read().await;
+        patterns.values().map(|p| p.get_pattern_id().to_string()).collect()
+    }
+    
+    /// Find patterns matching a specific pattern ID
+    pub async fn find_patterns_by_id(&self, pattern_id: &str) -> Vec<AccessPattern> {
+        let patterns = self.access_patterns.read().await;
+        patterns.values()
+            .filter(|p| p.matches_pattern_id(pattern_id))
+            .cloned()
+            .collect()
     }
     
     fn create_cache_key(&self, id1: &str, id2: &str) -> String {

@@ -1,27 +1,34 @@
 use anyhow::{Result, anyhow};
 use std::path::Path;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 use serde::{Serialize, Deserialize};
+use serde_json;
 use tokio::fs;
 use tree_sitter::{Parser, Tree, Node};
-use dashmap::DashMap;
-use tokio::sync::RwLock;
 use walkdir::WalkDir;
 use tracing::{info, debug, warn};
+use sha2::{Sha256, Digest};
 
 use crate::database::{
     project_database::ProjectDatabase,
     models::{UniversalSymbol},
 };
-use crate::parsers::tree_sitter::{Symbol, Language as ParserLanguage};
+use crate::parsers::tree_sitter::Language as ParserLanguage;
+use crate::analysis::RelationshipExtractor;
+use std::collections::HashMap;
+#[cfg(feature = "ml")]
+use std::sync::Arc;
+#[cfg(feature = "ml")]
+use tokio::sync::RwLock;
+#[cfg(feature = "ml")]
+use dashmap::DashMap;
 
 // ML Integration imports (conditional compilation)
 #[cfg(feature = "ml")]
 use crate::parsers::tree_sitter::{
-    SyntaxPredictor, CodeEmbedder, ErrorPredictor, 
-    Language as MLLanguage,
+    CodeEmbedder, ErrorPredictor, SyntaxPredictor,
+    Language as MLLanguage, ComponentReusePredictor,
+    UserIntent,
 };
 
 /// Configuration for the unified parsing service
@@ -116,8 +123,8 @@ struct MLComponents {
     syntax_predictor: Arc<SyntaxPredictor>,
     code_embedder: Arc<CodeEmbedder>,
     error_predictor: Arc<ErrorPredictor>,
+    component_reuse_predictor: Arc<RwLock<ComponentReusePredictor>>,
     parse_cache: Arc<DashMap<u64, CachedParseResult>>,
-    embedding_cache: Arc<DashMap<String, Vec<f32>>>,
 }
 
 #[cfg(feature = "ml")]
@@ -141,8 +148,42 @@ pub struct UnifiedParsingService {
 }
 
 impl UnifiedParsingService {
+    /// Compute hash of file content for caching
+    fn compute_file_hash(&self, content: &str) -> String {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        format!("{:x}", hasher.finish())
+    }
+    
+    /// Compute hash of parse tree for caching
+    fn compute_tree_hash(&self, tree: &tree_sitter::Tree) -> u64 {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+        
+        let mut hasher = DefaultHasher::new();
+        // Hash tree properties
+        tree.root_node().range().start_byte.hash(&mut hasher);
+        tree.root_node().range().end_byte.hash(&mut hasher);
+        tree.root_node().child_count().hash(&mut hasher);
+        hasher.finish()
+    }
+    
     /// Create a new unified parsing service
     pub async fn new(project_db: ProjectDatabase, config: UnifiedParsingConfig) -> Result<Self> {
+        // Initialize global model cache if ML features are enabled
+        if config.enable_ml_features {
+            use crate::parsers::tree_sitter::initialize_global_cache;
+            use std::path::Path;
+            
+            let models_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("models");
+            initialize_global_cache(models_dir).await.unwrap_or_else(|e| {
+                tracing::warn!("Failed to initialize global model cache: {}", e);
+            });
+        }
+        
         #[cfg(feature = "ml")]
         let ml_components = Arc::new(RwLock::new(HashMap::new()));
         
@@ -196,7 +237,7 @@ impl UnifiedParsingService {
     }
 
     /// Parse an entire project from scratch
-    pub async fn parse_project(&self, project_path: &Path, project_name: &str) -> Result<UnifiedParsedProject> {
+    pub async fn parse_project(&self, project_path: &Path, project_name: &str, force_reindex: bool) -> Result<UnifiedParsedProject> {
         let start_time = Instant::now();
         
         // Create or get project in database
@@ -204,7 +245,13 @@ impl UnifiedParsingService {
             project_name, 
             project_path.to_string_lossy().as_ref()
         ).await?;
-        let project_id = project.id;
+        let project_id = project.id.ok_or_else(|| anyhow::anyhow!("Project creation failed - no ID assigned"))?;
+        
+        // Clear existing symbols if force reindex is requested
+        if force_reindex {
+            info!("Force reindex requested, clearing existing symbols for project {}", project_id);
+            self.project_db.clear_project_symbols(project_id).await?;
+        }
         
         // Find all source files
         let source_files = self.find_source_files(project_path)?;
@@ -222,26 +269,46 @@ impl UnifiedParsingService {
                 info!("Processing file {}/{}: {}", i + 1, source_files.len(), file_path.display());
             }
             
+            // Check if file needs to be re-indexed
+            if !force_reindex {
+                if let Ok(should_skip) = self.should_skip_file(project_id, file_path).await {
+                    if should_skip {
+                        debug!("Skipping unchanged file: {}", file_path.display());
+                        continue;
+                    }
+                }
+            }
+            
+            let parse_time = Instant::now();
             match self.parse_file(file_path).await {
                 Ok(mut result) => {
                     // Update symbols with correct project_id and language_id before storing
+                    let actual_project_id = project_id;
                     for symbol in &mut result.symbols {
-                        symbol.project_id = project_id.unwrap_or(0);
+                        symbol.project_id = actual_project_id;
                         symbol.language_id = self.get_or_create_language_id(&self.detect_language(file_path)?).await?;
                     }
                     
-                    // Store symbols in database  
-                    for symbol in &result.symbols {
-                        let _stored = self.project_db.store_universal_symbol(symbol).await?;
+                    // Update relationships with correct project_id
+                    for relationship in &mut result.relationships {
+                        relationship.project_id = project_id;
                     }
                     
-                    // Store relationships in database
-                    for relationship in &result.relationships {
-                        let _stored = self.project_db.store_universal_relationship(relationship).await?;
-                    }
+                    // Store symbols and relationships in a transaction
+                    tracing::info!("Storing {} symbols and {} relationships for project_id={:?}", 
+                        result.symbols.len(), result.relationships.len(), project_id);
                     
-                    total_symbols += result.symbols.len() as i32;
-                    total_relationships += result.relationships.len() as i32;
+                    let (stored_symbols, stored_relationships) = self.project_db.store_parse_results(
+                        project_id,
+                        &result.symbols,
+                        &result.relationships,
+                    ).await?;
+                    
+                    tracing::info!("Successfully stored {} symbols and {} relationships", 
+                        stored_symbols.len(), stored_relationships.len());
+                    
+                    total_symbols += stored_symbols.len() as i32;
+                    total_relationships += stored_relationships.len() as i32;
                     files_processed += 1;
                     
                     if result.embeddings_generated {
@@ -261,10 +328,47 @@ impl UnifiedParsingService {
                     
                     debug!("Parsed {}: {} symbols, {} relationships", 
                         file_path.display(), result.symbols.len(), result.relationships.len());
+                    
+                    // Update file index with success
+                    let language_id = self.get_or_create_language_id(&self.detect_language(file_path)?).await?;
+                    let file_metadata = fs::metadata(file_path).await?;
+                    let file_size = file_metadata.len() as i64;
+                    let file_hash = self.calculate_file_hash(file_path).await?;
+                    
+                    self.project_db.update_file_index(
+                        project_id,
+                        language_id,
+                        file_path.to_string_lossy().as_ref(),
+                        result.symbols.len() as i32,
+                        result.relationships.len() as i32,
+                        Some(parse_time.elapsed().as_millis() as i32),
+                        None, // No error
+                        file_size,
+                        &file_hash
+                    ).await?;
                 }
                 Err(e) => {
                     warn!("Failed to parse {}: {}", file_path.display(), e);
                     errors.push(format!("Failed to parse {}: {}", file_path.display(), e));
+                    
+                    // Update file index with error
+                    if let Ok(language_id) = self.get_or_create_language_id(&self.detect_language(file_path).unwrap_or(ParserLanguage::Rust)).await {
+                        let file_metadata = fs::metadata(file_path).await.ok();
+                        let file_size = file_metadata.map(|m| m.len() as i64).unwrap_or(0);
+                        let file_hash = self.calculate_file_hash(file_path).await.unwrap_or_default();
+                        
+                        let _ = self.project_db.update_file_index(
+                            project_id,
+                            language_id,
+                            file_path.to_string_lossy().as_ref(),
+                            0, // No symbols
+                            0, // No relationships
+                            Some(parse_time.elapsed().as_millis() as i32),
+                            Some(&e.to_string()),
+                            file_size,
+                            &file_hash
+                        ).await;
+                    }
                 }
             }
         }
@@ -272,7 +376,7 @@ impl UnifiedParsingService {
         let parse_duration = start_time.elapsed().as_millis() as u64;
         
         Ok(UnifiedParsedProject {
-            project_id: project.id.unwrap_or(0),
+            project_id,
             project_name: project_name.to_string(),
             total_files: source_files.len() as i32,
             total_symbols,
@@ -300,6 +404,35 @@ impl UnifiedParsingService {
         // Get or create ML components for this language
         let ml_components = self.get_or_create_ml_components(&ml_language).await?;
         
+        // Check cache first
+        let file_hash = self.compute_file_hash(content);
+        let file_hash_u64 = file_hash.parse::<u64>().unwrap_or_else(|_| {
+            use std::hash::{Hash, Hasher};
+            use std::collections::hash_map::DefaultHasher;
+            let mut hasher = DefaultHasher::new();
+            file_hash.hash(&mut hasher);
+            hasher.finish()
+        });
+        
+        // Try to get cached embeddings
+        let cached_embeddings = if let Some(cached) = ml_components.parse_cache.get(&file_hash_u64) {
+            // Check if cache is still fresh (e.g., within 1 hour)
+            if let Ok(elapsed) = cached.timestamp.elapsed() {
+                if elapsed.as_secs() < 3600 {
+                    tracing::debug!("Using cached parse result for {} (tree_hash: {}, confidence: {})", 
+                        file_path.display(), cached.tree_hash, cached.confidence);
+                    // Return the embeddings from the cached result
+                    Some(cached.embeddings.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
         // Create parser with ML integration
         let mut parser = self.get_cached_parser(language).await?;
         
@@ -307,27 +440,77 @@ impl UnifiedParsingService {
         let tree = parser.parse(content, None)
             .ok_or_else(|| anyhow!("Failed to parse code with tree-sitter"))?;
         
-        // Check for errors
+        // Check for errors and use ML to predict fixes
         let mut errors = Vec::new();
         let mut ml_suggestions = Vec::new();
         
         if tree.root_node().has_error() {
-            // Basic error detection without ML recovery for now
-            errors.push(EnhancedParseError {
-                message: "Syntax error detected".to_string(),
-                line: 0,
-                column: 0,
-                error_type: "SYNTAX_ERROR".to_string(),
-                confidence: Some(0.8),
-                recovery_suggestions: Vec::new(),
-            });
+            // Find error nodes and use ML to predict fixes
+            let error_nodes = self.find_error_nodes(&tree.root_node());
+            
+            for error_node in error_nodes {
+                let parse_error = crate::parsers::tree_sitter::ParseError {
+                    message: format!("Syntax error at {}:{}", 
+                        error_node.start_position().row + 1, 
+                        error_node.start_position().column),
+                    start_position: tree_sitter::Point {
+                        row: error_node.start_position().row,
+                        column: error_node.start_position().column,
+                    },
+                    end_position: tree_sitter::Point {
+                        row: error_node.end_position().row,
+                        column: error_node.end_position().column,
+                    },
+                    error_type: self.classify_error_type(&error_node, content),
+                    confidence: 0.8,
+                    ml_suggestions: Vec::new(),
+                };
+                
+                // Use ML to predict fixes
+                let fix_suggestions = ml_components.error_predictor
+                    .predict_fixes(&parse_error, content)
+                    .await
+                    .unwrap_or_default();
+                
+                // Convert ML suggestions to recovery suggestions
+                let recovery_suggestions: Vec<String> = fix_suggestions.iter()
+                    .map(|s| format!("{} (confidence: {:.0}%)", s.explanation, s.confidence * 100.0))
+                    .collect();
+                
+                // Add to ML suggestions for display
+                for suggestion in &fix_suggestions {
+                    ml_suggestions.push(format!(
+                        "🔧 {} - {} (learned from: {})",
+                        suggestion.suggestion,
+                        suggestion.explanation,
+                        suggestion.learned_from.as_ref().unwrap_or(&"syntax patterns".to_string())
+                    ));
+                }
+                
+                errors.push(EnhancedParseError {
+                    message: parse_error.message.clone(),
+                    line: error_node.start_position().row as u32,
+                    column: error_node.start_position().column as u32,
+                    error_type: format!("{:?}", parse_error.error_type),
+                    confidence: Some(0.8),
+                    recovery_suggestions,
+                });
+            }
         }
         
         // Generate embeddings if enabled
         let embeddings_generated = if self.config.cache_embeddings {
             match ml_components.code_embedder.generate_embeddings(content, &ml_language).await {
-                Ok(_embeddings) => {
-                    // Cache embeddings for future use
+                Ok(embeddings) => {
+                    // Cache the parse result with embeddings
+                    let cached_result = CachedParseResult {
+                        tree_hash: self.compute_tree_hash(&tree),
+                        confidence: 0.95, // High confidence for successful parse
+                        embeddings,
+                        timestamp: std::time::SystemTime::now(),
+                    };
+                    ml_components.parse_cache.insert(file_hash_u64, cached_result);
+                    
                     true
                 }
                 Err(e) => {
@@ -340,7 +523,7 @@ impl UnifiedParsingService {
         };
         
         // Extract symbols with enhanced analysis
-        let symbols = self.extract_symbols_enhanced(&tree, content, file_path, language, &ml_components).await?;
+        let symbols = self.extract_symbols_enhanced(&tree, content, file_path, language, &ml_components, cached_embeddings.as_ref()).await?;
         
         // Predict intent if possible
         let predicted_intent = ml_components.syntax_predictor
@@ -349,16 +532,86 @@ impl UnifiedParsingService {
             .ok()
             .map(|intent| format!("{:?}", intent));
         
-        // Calculate confidence score
+        // Analyze code quality using ML
+        let quality_issues = ml_components.error_predictor
+            .analyze_code_quality(&tree, content)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to analyze code quality: {}", e);
+                Vec::new()
+            });
+        
+        // Convert quality issues to ML suggestions
+        for issue in &quality_issues {
+            ml_suggestions.push(format!(
+                "{} (line {}, {})\n  Suggested: {}",
+                issue.description,
+                issue.position.row + 1,
+                issue.severity,
+                issue.suggested_refactoring.join(", ")
+            ));
+            
+            // Add as enhanced error if severity is high
+            if issue.severity == "high" {
+                errors.push(EnhancedParseError {
+                    message: issue.description.clone(),
+                    line: issue.position.row as u32,
+                    column: issue.position.column as u32,
+                    error_type: issue.category.clone(),
+                    confidence: Some(issue.confidence),
+                    recovery_suggestions: issue.suggested_refactoring.clone(),
+                });
+            }
+        }
+        
+        // Check for component reuse opportunities based on the parsed code intent
+        if let Some(intent_str) = &predicted_intent {
+            // Create a UserIntent from the predicted intent
+            let user_intent = UserIntent {
+                functionality_category: self.extract_functionality_category(intent_str),
+                required_capabilities: self.extract_capabilities(content),
+                context_description: format!("File: {}", file_path.display()),
+            };
+            
+            let predictor = ml_components.component_reuse_predictor.read().await;
+            let reuse_recommendations = predictor.predict_component_reuse(&user_intent);
+            
+            // Add reuse recommendations to ML suggestions
+            for recommendation in reuse_recommendations.iter().take(3) {
+                ml_suggestions.push(format!(
+                    "🔄 Consider reusing: {} ({}% match)\n  {}",
+                    recommendation.component_signature.functionality_category,
+                    (recommendation.relevance_score * 100.0) as i32,
+                    recommendation.suggested_usage
+                ));
+            }
+        }
+        
+        // Calculate confidence score based on quality analysis
         let confidence_score = if tree.root_node().has_error() {
             Some(0.5) // Lower confidence for error trees
+        } else if quality_issues.iter().any(|i| i.severity == "high") {
+            Some(0.7) // Medium confidence if high severity issues
+        } else if !quality_issues.is_empty() {
+            Some(0.8) // Slightly lower if any issues
         } else {
             Some(0.9) // High confidence for clean parses
         };
         
+        // Extract relationships between symbols
+        debug!("Extracting relationships for {} symbols", symbols.len());
+        let relationships = self.extract_relationships(
+            &tree,
+            content,
+            file_path,
+            language,
+            &symbols
+        )?;
+        debug!("Extracted {} relationships", relationships.len());
+        
         Ok(ParseResultInternal {
             symbols,
-            relationships: Vec::new(), // TODO: Extract relationships
+            relationships,
             success: errors.is_empty(),
             errors,
             confidence_score,
@@ -453,17 +706,19 @@ impl UnifiedParsingService {
         
         drop(components_map);
         
-        // Create new ML components
-        let syntax_predictor = Arc::new(SyntaxPredictor::load(language).await?);
+        // Create new ML components - CodeEmbedder will use global cache
+        tracing::debug!("Creating ML components for language: {:?}", language);
+        let syntax_predictor = Arc::new(SyntaxPredictor::load(*language).await?);
         let code_embedder = Arc::new(CodeEmbedder::load(language).await?);
-        let error_predictor = Arc::new(ErrorPredictor::load(language).await?);
+        let error_predictor = Arc::new(ErrorPredictor::load(*language).await?);
+        let component_reuse_predictor = Arc::new(RwLock::new(ComponentReusePredictor::new()));
         
         let components = MLComponents {
             syntax_predictor,
             code_embedder,
             error_predictor,
+            component_reuse_predictor,
             parse_cache: Arc::new(DashMap::new()),
-            embedding_cache: Arc::new(DashMap::new()),
         };
         
         // Cache components
@@ -481,10 +736,67 @@ impl UnifiedParsingService {
         content: &str,
         file_path: &Path,
         language: &ParserLanguage,
-        _ml_components: &MLComponents,
+        ml_components: &MLComponents,
+        cached_embeddings: Option<&Vec<f32>>,
     ) -> Result<Vec<UniversalSymbol>> {
-        // Use existing symbol extraction logic but with ML enhancements
-        self.extract_symbols_basic(tree, content, file_path, language).await
+        // Extract symbols normally
+        let symbols = self.extract_symbols_basic(tree, content, file_path, language).await?;
+        
+        // Index the symbols for component reuse analysis
+        {
+            let mut predictor = ml_components.component_reuse_predictor.write().await;
+            
+            // If we have cached embeddings, distribute them to symbols
+            let embedding_chunks = if let Some(embeddings) = cached_embeddings {
+                // Split embeddings into chunks for each symbol
+                let chunk_size = embeddings.len() / symbols.len().max(1);
+                Some((embeddings, chunk_size))
+            } else {
+                None
+            };
+            
+            let symbols_for_analysis: Vec<crate::parsers::tree_sitter::Symbol> = symbols.iter().enumerate().map(|(idx, s)| {
+                // Extract embedding chunk for this symbol if available
+                let symbol_embedding = if let Some((embeddings, chunk_size)) = &embedding_chunks {
+                    let start = idx * chunk_size;
+                    let end = ((idx + 1) * chunk_size).min(embeddings.len());
+                    if start < embeddings.len() {
+                        Some(embeddings[start..end].to_vec())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                
+                crate::parsers::tree_sitter::Symbol {
+                    id: s.qualified_name.clone(),
+                    name: s.name.clone(),
+                    signature: s.signature.clone().unwrap_or_default(),
+                    language: *language,
+                    file_path: s.file_path.clone(),
+                    start_line: s.line as u32,
+                    end_line: s.end_line.unwrap_or(s.line) as u32,
+                    embedding: symbol_embedding,
+                    semantic_hash: None,
+                    normalized_name: s.name.to_lowercase(),
+                    context_embedding: cached_embeddings.map(|_| vec![0.0; 128]), // Placeholder context embedding
+                    duplicate_of: None,
+                    confidence_score: Some(s.confidence as f32),
+                    similar_symbols: vec![],
+                    semantic_tags: s.semantic_tags.clone().and_then(|tags| serde_json::from_str(&tags).ok()),
+                    intent: s.intent.clone(),
+                }
+            }).collect();
+            
+            if cached_embeddings.is_some() {
+                tracing::info!("Applied cached embeddings to {} symbols", symbols_for_analysis.len());
+            }
+            
+            predictor.index_existing_components(&symbols_for_analysis);
+        }
+        
+        Ok(symbols)
     }
 
     /// Extract symbols using basic tree-sitter traversal
@@ -500,6 +812,8 @@ impl UnifiedParsingService {
         
         // Get the language_id for the foreign key - we'll need to ensure languages are populated
         let language_id = self.get_or_create_language_id(language).await?;
+        
+        debug!("Extracting symbols for {} file: {}", language, file_path.display());
         
         match language {
             ParserLanguage::Rust => self.extract_rust_symbols(&mut cursor, content, file_path, language_id, &mut symbols),
@@ -560,7 +874,16 @@ impl UnifiedParsingService {
         Ok(fs::read_to_string(file_path).await?)
     }
 
-    fn detect_language(&self, file_path: &Path) -> Result<ParserLanguage> {
+    /// Parse content directly without reading from file
+    pub async fn parse_content(&self, content: &str, file_path: &Path) -> Result<tree_sitter::Tree> {
+        let language = self.detect_language(file_path)?;
+        let mut parser = self.get_cached_parser(&language).await?;
+        
+        parser.parse(content, None)
+            .ok_or_else(|| anyhow!("Failed to parse content"))
+    }
+
+    pub fn detect_language(&self, file_path: &Path) -> Result<ParserLanguage> {
         let extension = file_path.extension()
             .and_then(|s| s.to_str())
             .unwrap_or("");
@@ -578,7 +901,7 @@ impl UnifiedParsingService {
         }
     }
 
-    fn find_source_files(&self, project_path: &Path) -> Result<Vec<std::path::PathBuf>> {
+    pub fn find_source_files(&self, project_path: &Path) -> Result<Vec<std::path::PathBuf>> {
         let mut files = Vec::new();
         let max_file_size = 2 * 1024 * 1024; // 2MB limit
         
@@ -627,20 +950,88 @@ impl UnifiedParsingService {
         }
     }
 
+    /// Check if a file should be skipped based on modification time and hash
+    async fn should_skip_file(&self, project_id: i32, file_path: &Path) -> Result<bool> {
+        // Get file metadata
+        let metadata = fs::metadata(file_path).await?;
+        let modified_time = metadata.modified()?;
+        
+        // Check if we have an existing file index
+        if let Some(file_index) = self.project_db.get_file_index(project_id, file_path.to_string_lossy().as_ref()).await? {
+            // If the file was successfully indexed and hasn't been modified since
+            if file_index.is_indexed && !file_index.has_errors {
+                // Parse the updated_at timestamp
+                if let Ok(last_indexed) = chrono::DateTime::parse_from_rfc3339(&file_index.updated_at) {
+                    let last_indexed_time = SystemTime::UNIX_EPOCH + 
+                        std::time::Duration::from_secs(last_indexed.timestamp() as u64);
+                    
+                    // If file hasn't been modified since last index, skip it
+                    // Add a small tolerance (1 second) to handle timing precision issues
+                    let tolerance = std::time::Duration::from_secs(1);
+                    if modified_time <= last_indexed_time + tolerance {
+                        debug!("Skipping unchanged file: {} (modified: {:?}, indexed: {:?})", 
+                            file_path.display(), modified_time, last_indexed_time);
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        
+        Ok(false)
+    }
+
+    /// Calculate SHA256 hash of a file
+    async fn calculate_file_hash(&self, file_path: &Path) -> Result<String> {
+        let content = fs::read(file_path).await?;
+        let mut hasher = Sha256::new();
+        hasher.update(&content);
+        let result = hasher.finalize();
+        Ok(format!("{:x}", result))
+    }
+    
     /// Get or create language ID for foreign key relationships
-    async fn get_or_create_language_id(&self, language: &ParserLanguage) -> Result<i32> {
-        // For now, return a simple mapping - in production this would query/create in DB
-        let language_id = match language {
-            ParserLanguage::Rust => 1,
-            ParserLanguage::Python => 2,
-            ParserLanguage::TypeScript => 3,
-            ParserLanguage::JavaScript => 4,
-            ParserLanguage::Cpp => 5,
-            ParserLanguage::Go => 6,
-            ParserLanguage::Java => 7,
-            ParserLanguage::CSharp => 8,
+    pub async fn get_or_create_language_id(&self, language: &ParserLanguage) -> Result<i32> {
+        use crate::database::{orm::QueryBuilder, models::Language};
+        
+        // Get language name and metadata
+        let (name, display_name, extensions) = match language {
+            ParserLanguage::Rust => ("rust", "Rust", vec![".rs"]),
+            ParserLanguage::Python => ("python", "Python", vec![".py", ".pyi"]),
+            ParserLanguage::TypeScript => ("typescript", "TypeScript", vec![".ts", ".tsx"]),
+            ParserLanguage::JavaScript => ("javascript", "JavaScript", vec![".js", ".jsx", ".mjs"]),
+            ParserLanguage::Cpp => ("cpp", "C++", vec![".cpp", ".cc", ".cxx", ".hpp", ".h"]),
+            ParserLanguage::Go => ("go", "Go", vec![".go"]),
+            ParserLanguage::CSharp => ("csharp", "C#", vec![".cs"]),
+            ParserLanguage::Java => ("java", "Java", vec![".java"]),
         };
-        Ok(language_id)
+        
+        // First, try to find existing language
+        let existing_languages = self.project_db.db().find_all(
+            QueryBuilder::<Language>::new()
+                .where_eq("name", name)
+                .limit(1)
+        ).await?;
+        
+        if let Some(existing) = existing_languages.first() {
+            // Return existing language ID
+            Ok(existing.id.unwrap())
+        } else {
+            // Create new language entry
+            let language_model = Language {
+                id: None,
+                name: name.to_string(),
+                display_name: display_name.to_string(),
+                version: None,
+                parser_class: format!("tree_sitter::{}", name),
+                extensions: serde_json::to_string(&extensions).unwrap_or_else(|_| "[]".to_string()),
+                features: None,
+                is_enabled: true,
+                priority: 100,
+            };
+            
+            let inserted = self.project_db.db().insert(language_model).await?;
+            Ok(inserted.id.unwrap())
+        }
     }
 
     // Symbol extraction methods (from existing parsing_service.rs)
@@ -652,6 +1043,7 @@ impl UnifiedParsingService {
                 if let Some(name_node) = self.find_child_of_type(node, "identifier") {
                     if let Ok(name) = name_node.utf8_text(content.as_bytes()) {
                         let signature = self.build_function_signature(node, content);
+                        let return_type = self.extract_rust_return_type(node, content);
                         symbols.push(UniversalSymbol {
                             name: name.to_string(),
                             qualified_name: format!("{}::{}", file_path.file_stem().unwrap().to_string_lossy(), name),
@@ -661,6 +1053,7 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            return_type,
                             language_id,
                             project_id: 0, // Will be set later in index_project
                             ..Default::default()
@@ -744,6 +1137,7 @@ impl UnifiedParsingService {
                 if let Some(name_node) = self.find_child_of_type(node, "identifier") {
                     if let Ok(name) = name_node.utf8_text(content.as_bytes()) {
                         let signature = self.build_function_signature(node, content);
+                        let return_type = self.extract_python_return_type(node, content);
                         symbols.push(UniversalSymbol {
                             name: name.to_string(),
                             qualified_name: format!("{}::{}", file_path.file_stem().unwrap().to_string_lossy(), name),
@@ -753,6 +1147,7 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            return_type,
                             language_id,
                             project_id: 0, // Will be set later in index_project
                             ..Default::default()
@@ -797,11 +1192,18 @@ impl UnifiedParsingService {
     fn extract_typescript_symbols(&self, cursor: &mut tree_sitter::TreeCursor, content: &str, file_path: &Path, language_id: i32, symbols: &mut Vec<UniversalSymbol>) {
         let node = cursor.node();
         
+        // Debug logging
+        if matches!(node.kind(), "function_declaration" | "method_definition" | "class_declaration" | "interface_declaration" | "variable_declaration") {
+            debug!("TypeScript: Found node kind '{}' at line {}", node.kind(), node.start_position().row + 1);
+        }
+        
         match node.kind() {
             "function_declaration" | "method_definition" => {
                 if let Some(name_node) = self.find_child_of_type(node, "identifier") {
                     if let Ok(name) = name_node.utf8_text(content.as_bytes()) {
+                        debug!("TypeScript: Found function '{}'", name);
                         let signature = self.build_function_signature(node, content);
+                        let return_type = self.extract_typescript_return_type(node, content);
                         symbols.push(UniversalSymbol {
                             name: name.to_string(),
                             qualified_name: format!("{}::{}", file_path.file_stem().unwrap().to_string_lossy(), name),
@@ -811,6 +1213,7 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(signature),
+                            return_type,
                             language_id,
                             project_id: 0, // Will be set later in index_project
                             ..Default::default()
@@ -819,8 +1222,9 @@ impl UnifiedParsingService {
                 }
             }
             "class_declaration" => {
-                if let Some(name_node) = self.find_child_of_type(node, "type_identifier") {
+                if let Some(name_node) = self.find_child_of_type(node, "identifier") {
                     if let Ok(name) = name_node.utf8_text(content.as_bytes()) {
+                        debug!("TypeScript: Found class '{}'", name);
                         symbols.push(UniversalSymbol {
                             name: name.to_string(),
                             qualified_name: format!("{}::{}", file_path.file_stem().unwrap().to_string_lossy(), name),
@@ -903,6 +1307,7 @@ impl UnifiedParsingService {
                             if is_template { "template_function" } else { "function" }
                         };
                         
+                        let return_type = self.extract_cpp_return_type(node, content);
                         symbols.push(UniversalSymbol {
                             name: name.to_string(),
                             qualified_name,
@@ -912,6 +1317,7 @@ impl UnifiedParsingService {
                             column: node.start_position().column as i32,
                             end_line: Some(node.end_position().row as i32 + 1),
                             signature: Some(self.get_function_signature(node, content)),
+                            return_type,
                             language_id,
                             project_id: 0, // Will be set later in index_project
                             ..Default::default()
@@ -1140,29 +1546,155 @@ impl UnifiedParsingService {
         }
     }
 
-    /// Extract relationships between symbols
+    /// Extract return type from TypeScript/JavaScript function signature
+    fn extract_typescript_return_type(&self, node: Node, content: &str) -> Option<String> {
+        // For now, let's use a simpler approach - extract from the signature
+        // This is more reliable than trying to navigate the AST
+        if let Ok(text) = node.utf8_text(content.as_bytes()) {
+            // Look for function declaration pattern: "function name(...): Type"
+            // or method pattern: "name(...): Type"
+            if let Some(paren_close) = text.rfind(')') {
+                let after_params = &text[paren_close + 1..];
+                // Look for the colon that indicates a return type
+                if let Some(colon_pos) = after_params.find(':') {
+                    let return_type_part = &after_params[colon_pos + 1..];
+                    // Take everything until the opening brace or end
+                    let return_type = if let Some(brace_pos) = return_type_part.find('{') {
+                        &return_type_part[..brace_pos]
+                    } else {
+                        return_type_part
+                    };
+                    
+                    let clean_type = return_type.trim();
+                    if !clean_type.is_empty() {
+                        return Some(clean_type.to_string());
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// Extract return type from Rust function signature
+    fn extract_rust_return_type(&self, node: Node, content: &str) -> Option<String> {
+        // Look for return_type child node (after ->)
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                if child.kind() == "->" {
+                    // The next node should be the return type
+                    if let Some(type_node) = node.child(i + 1) {
+                        if let Ok(return_type) = type_node.utf8_text(content.as_bytes()) {
+                            return Some(return_type.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Alternative: look for the pattern in signature
+        if let Ok(signature) = node.utf8_text(content.as_bytes()) {
+            if let Some(arrow_pos) = signature.find("->") {
+                let after_arrow = &signature[arrow_pos + 2..];
+                // Take until opening brace or end of line
+                let return_type = if let Some(brace_pos) = after_arrow.find('{') {
+                    &after_arrow[..brace_pos]
+                } else {
+                    after_arrow.lines().next().unwrap_or(after_arrow)
+                };
+                return Some(return_type.trim().to_string());
+            }
+        }
+        
+        None
+    }
+
+    /// Extract return type from Python function signature
+    fn extract_python_return_type(&self, node: Node, content: &str) -> Option<String> {
+        // Python uses -> for return type annotations
+        if let Ok(text) = node.utf8_text(content.as_bytes()) {
+            // Look for pattern: "def name(...) -> Type:"
+            if let Some(arrow_pos) = text.find("->") {
+                let after_arrow = &text[arrow_pos + 2..];
+                // Take everything until the colon
+                let return_type = if let Some(colon_pos) = after_arrow.find(':') {
+                    &after_arrow[..colon_pos]
+                } else {
+                    after_arrow
+                };
+                
+                let clean_type = return_type.trim();
+                if !clean_type.is_empty() {
+                    return Some(clean_type.to_string());
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// Extract return type from C++ function signature
+    fn extract_cpp_return_type(&self, node: Node, content: &str) -> Option<String> {
+        // In C++, return type comes before the function name
+        // Look for type_identifier or primitive_type before function_declarator
+        if let Some(parent) = node.parent() {
+            for i in 0..parent.child_count() {
+                if let Some(child) = parent.child(i) {
+                    if child.id() == node.id() {
+                        // Found the function declarator, check previous siblings for type
+                        if i > 0 {
+                            if let Some(type_node) = parent.child(i - 1) {
+                                match type_node.kind() {
+                                    "type_identifier" | "primitive_type" | "template_type" |
+                                    "qualified_identifier" | "sized_type_specifier" => {
+                                        if let Ok(return_type) = type_node.utf8_text(content.as_bytes()) {
+                                            return Some(return_type.trim().to_string());
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        
+        None
+    }
+
+    /// Extract relationships between symbols using qualified names as placeholders
     fn extract_relationships(
         &self,
         tree: &Tree,
         content: &str,
         file_path: &Path,
-        language: &ParserLanguage,
+        _language: &ParserLanguage,
         symbols: &[UniversalSymbol],
     ) -> Result<Vec<crate::database::models::UniversalRelationship>> {
-        let mut relationships = Vec::new();
-        let mut cursor = tree.walk();
-        
-        match language {
-            ParserLanguage::Rust => self.extract_rust_relationships(&mut cursor, content, file_path, symbols, &mut relationships),
-            ParserLanguage::TypeScript | ParserLanguage::JavaScript => self.extract_typescript_relationships(&mut cursor, content, file_path, symbols, &mut relationships),
-            ParserLanguage::Python => self.extract_python_relationships(&mut cursor, content, file_path, symbols, &mut relationships),
-            ParserLanguage::Cpp => self.extract_cpp_relationships(&mut cursor, content, file_path, symbols, &mut relationships),
-            _ => {} // Other languages not yet implemented
+        // Create a map of symbol names to their qualified names for relationship tracking
+        // We'll resolve the actual database IDs later after symbols are stored
+        let mut symbol_map: HashMap<String, i32> = HashMap::new();
+        for (index, symbol) in symbols.iter().enumerate() {
+            // Use a placeholder ID based on the symbol's position in the array
+            symbol_map.insert(symbol.name.clone(), -(index as i32 + 1));
+            symbol_map.insert(symbol.qualified_name.clone(), -(index as i32 + 1));
         }
+        
+        // Use the proper RelationshipExtractor
+        // Get project_id from the first symbol if available, otherwise use 0
+        let project_id = symbols.iter()
+            .find_map(|s| Some(s.project_id))
+            .unwrap_or(0);
+        
+        let extractor = RelationshipExtractor::new(project_id);
+        let relationships = extractor.extract_from_ast(tree, content, file_path.to_str().unwrap_or(""), &symbol_map);
         
         Ok(relationships)
     }
 
+    /* DEPRECATED: Using RelationshipExtractor instead
     /// Extract Rust relationships (uses, imports, calls, extends)
     fn extract_rust_relationships(
         &self,
@@ -1183,7 +1715,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(import_name) = path_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1, // Will be set later
+                            project_id: 0, // Will be set later
                             from_symbol_id: None, // Will be resolved later
                             to_symbol_id: None,
                             relationship_type: "imports".to_string(),
@@ -1207,7 +1739,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(func_name) = func_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None, // Current function
                             to_symbol_id: None,   // Called function
                             relationship_type: "calls".to_string(),
@@ -1226,7 +1758,7 @@ impl UnifiedParsingService {
                 if let Some(trait_node) = self.find_child_of_type(node, "type_identifier") {
                     if let Ok(trait_name) = trait_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "implements".to_string(),
@@ -1272,7 +1804,7 @@ impl UnifiedParsingService {
                 if let Some(source_node) = self.find_child_of_type(node, "string") {
                     if let Ok(import_path) = source_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "imports".to_string(),
@@ -1295,7 +1827,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(func_name) = func_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "calls".to_string(),
@@ -1314,7 +1846,7 @@ impl UnifiedParsingService {
                 if let Some(extends_node) = self.find_child_of_type(node, "identifier") {
                     if let Ok(parent_class) = extends_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "extends".to_string(),
@@ -1362,7 +1894,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(import_name) = module_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "imports".to_string(),
@@ -1385,7 +1917,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(func_name) = func_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "calls".to_string(),
@@ -1463,7 +1995,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(include_path) = path_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "includes".to_string(),
@@ -1486,7 +2018,7 @@ impl UnifiedParsingService {
                     
                     if let Ok(func_name) = func_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "calls".to_string(),
@@ -1505,7 +2037,7 @@ impl UnifiedParsingService {
                 if let Some(base_node) = self.find_child_of_type(node, "type_identifier") {
                     if let Ok(base_class) = base_node.utf8_text(content.as_bytes()) {
                         relationships.push(crate::database::models::UniversalRelationship {
-                            project_id: 1,
+                            project_id: 0,
                             from_symbol_id: None,
                             to_symbol_id: None,
                             relationship_type: "extends".to_string(),
@@ -1532,6 +2064,473 @@ impl UnifiedParsingService {
             }
             cursor.goto_parent();
         }
+    }
+    */
+
+    /// Extract function calls with parameter information for data flow analysis
+    pub fn extract_function_calls_with_params(&self, 
+        cursor: &mut tree_sitter::TreeCursor, 
+        content: &str, 
+        _file_path: &Path,
+        data_flow_analyzer: &mut crate::analysis::DataFlowAnalyzer,
+        current_function: Option<&str>
+    ) {
+        let node = cursor.node();
+        let caller = current_function.unwrap_or("global");
+        
+        match node.kind() {
+            "call_expression" => {
+                if let Some((callee, args)) = self.extract_call_info(node, content) {
+                    let arg_infos = self.extract_argument_info(&args, content);
+                    
+                    data_flow_analyzer.track_function_call(
+                        caller,
+                        &callee,
+                        arg_infos,
+                        &_file_path.to_string_lossy(),
+                        node.start_position().row as u32 + 1,
+                    );
+                }
+            }
+            "function_declaration" | "method_definition" | "function_definition" => {
+                // Track we're inside a function
+                let func_name = self.extract_function_name_for_analysis(node, content);
+                
+                if cursor.goto_first_child() {
+                    loop {
+                        self.extract_function_calls_with_params(
+                            cursor, 
+                            content, 
+                            _file_path, 
+                            data_flow_analyzer,
+                            func_name.as_deref()
+                        );
+                        if !cursor.goto_next_sibling() {
+                            break;
+                        }
+                    }
+                    cursor.goto_parent();
+                }
+                return;
+            }
+            _ => {}
+        }
+        
+        // Recurse through children
+        if cursor.goto_first_child() {
+            loop {
+                self.extract_function_calls_with_params(
+                    cursor, 
+                    content, 
+                    _file_path, 
+                    data_flow_analyzer,
+                    current_function
+                );
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+            cursor.goto_parent();
+        }
+    }
+
+    /// Extract call information (callee name and arguments node)
+    fn extract_call_info<'a>(&self, node: Node<'a>, content: &str) -> Option<(String, Node<'a>)> {
+        let function_node = self.find_child_of_type(node, "identifier")
+            .or_else(|| self.find_child_of_type(node, "member_expression"))?;
+        
+        let callee = function_node.utf8_text(content.as_bytes()).ok()?;
+        let args_node = self.find_child_of_type(node, "arguments")?;
+        
+        Some((callee.to_string(), args_node))
+    }
+
+    /// Extract argument information from arguments node
+    fn extract_argument_info(&self, args_node: &Node, content: &str) -> Vec<crate::analysis::data_flow_analyzer::ArgumentInfo> {
+        let mut arg_infos = Vec::new();
+        let mut cursor = args_node.walk();
+        
+        if cursor.goto_first_child() {
+            loop {
+                let node = cursor.node();
+                
+                // Skip parentheses and commas
+                if matches!(node.kind(), "(" | ")" | ",") {
+                    if !cursor.goto_next_sibling() {
+                        break;
+                    }
+                    continue;
+                }
+                
+                // Extract argument info
+                if let Some(arg_info) = self.analyze_argument(node, content) {
+                    arg_infos.push(arg_info);
+                }
+                
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        
+        arg_infos
+    }
+
+    /// Analyze a single argument to extract type and pattern information
+    fn analyze_argument(&self, node: Node, content: &str) -> Option<crate::analysis::data_flow_analyzer::ArgumentInfo> {
+        use crate::analysis::data_flow_analyzer::ArgumentInfo;
+        
+        let node_text = node.utf8_text(content.as_bytes()).ok()?;
+        
+        // Determine argument type and pattern
+        let (value_type, value_pattern) = match node.kind() {
+            "string" | "string_literal" => {
+                ("string".to_string(), format!("string: \"{}\"", node_text.trim_matches(|c| c == '"' || c == '\'')))
+            }
+            "number" | "integer" => {
+                ("number".to_string(), format!("number: {}", node_text))
+            }
+            "true" | "false" => {
+                ("boolean".to_string(), format!("boolean: {}", node_text))
+            }
+            "object" => {
+                // Analyze object for keys
+                let keys = self.extract_object_keys(node, content);
+                let pattern = if keys.is_empty() {
+                    "dict empty".to_string()
+                } else {
+                    format!("dict with key {}", keys.join(", "))
+                };
+                ("dict".to_string(), pattern)
+            }
+            "array" => {
+                let length = self.count_array_elements(node);
+                ("array".to_string(), format!("array with {} elements", length))
+            }
+            "identifier" => {
+                // Variable reference
+                ("variable".to_string(), format!("variable: {}", node_text))
+            }
+            _ => {
+                ("unknown".to_string(), format!("complex: {}", node.kind()))
+            }
+        };
+        
+        // For now, we'll use a generic param name
+        // In a real implementation, we'd match this with function signatures
+        Some(ArgumentInfo {
+            param_name: "param".to_string(),
+            value_type,
+            value_pattern,
+        })
+    }
+
+    /// Extract keys from an object literal
+    fn extract_object_keys(&self, node: Node, content: &str) -> Vec<String> {
+        let mut keys = Vec::new();
+        let mut cursor = node.walk();
+        
+        if cursor.goto_first_child() {
+            loop {
+                let child = cursor.node();
+                
+                // Look for property nodes
+                if child.kind() == "property" || child.kind() == "pair" {
+                    // Find the key (identifier or string)
+                    if let Some(key_node) = self.find_child_of_type(child, "property_identifier")
+                        .or_else(|| self.find_child_of_type(child, "identifier"))
+                        .or_else(|| self.find_child_of_type(child, "string")) {
+                        
+                        if let Ok(key) = key_node.utf8_text(content.as_bytes()) {
+                            let clean_key = key.trim_matches(|c| c == '"' || c == '\'');
+                            keys.push(format!("'{}'", clean_key));
+                        }
+                    }
+                }
+                
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        
+        keys
+    }
+
+    /// Count elements in an array
+    fn count_array_elements(&self, node: Node) -> usize {
+        let mut count = 0;
+        let mut cursor = node.walk();
+        
+        if cursor.goto_first_child() {
+            loop {
+                let child = cursor.node();
+                // Skip brackets and commas
+                if !matches!(child.kind(), "[" | "]" | ",") {
+                    count += 1;
+                }
+                
+                if !cursor.goto_next_sibling() {
+                    break;
+                }
+            }
+        }
+        
+        count
+    }
+
+    /// Find all error nodes in the tree
+    fn find_error_nodes<'a>(&self, node: &Node<'a>) -> Vec<Node<'a>> {
+        let mut error_nodes = Vec::new();
+        let mut cursor = node.walk();
+        
+        fn find_errors_recursive<'a>(cursor: &mut tree_sitter::TreeCursor<'a>, errors: &mut Vec<Node<'a>>) {
+            let node = cursor.node();
+            if node.is_error() || node.kind() == "ERROR" || node.has_error() {
+                errors.push(node);
+            }
+            
+            if cursor.goto_first_child() {
+                loop {
+                    find_errors_recursive(cursor, errors);
+                    if !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+                cursor.goto_parent();
+            }
+        }
+        
+        find_errors_recursive(&mut cursor, &mut error_nodes);
+        error_nodes
+    }
+    
+    /// Classify error type based on context
+    fn classify_error_type(&self, node: &Node, content: &str) -> crate::parsers::tree_sitter::ErrorType {
+        use crate::parsers::tree_sitter::ErrorType;
+        
+        // Look at parent and siblings to determine error type
+        if let Some(parent) = node.parent() {
+            match parent.kind() {
+                "function_declaration" | "function_definition" => {
+                    // Check if it's a missing parenthesis or brace
+                    if let Ok(text) = parent.utf8_text(content.as_bytes()) {
+                        if text.matches('(').count() != text.matches(')').count() {
+                            return ErrorType::MissingToken(")".to_string());
+                        }
+                        if text.matches('{').count() != text.matches('}').count() {
+                            return ErrorType::MissingToken("}".to_string());
+                        }
+                    }
+                }
+                "call_expression" => {
+                    return ErrorType::MissingToken(")".to_string());
+                }
+                _ => {}
+            }
+        }
+        
+        // Check the error node itself
+        if let Ok(text) = node.utf8_text(content.as_bytes()) {
+            if text.trim().is_empty() {
+                return ErrorType::MissingToken("token".to_string());
+            } else {
+                return ErrorType::UnexpectedToken(text.to_string());
+            }
+        }
+        
+        ErrorType::UnknownError("Parse error".to_string())
+    }
+    
+    /// Extract function name for analysis context
+    fn extract_function_name_for_analysis(&self, node: Node, content: &str) -> Option<String> {
+        // Try various ways to find the function name
+        if let Some(name_node) = self.find_child_of_type(node, "identifier")
+            .or_else(|| self.find_child_of_type(node, "property_identifier")) {
+            
+            if let Ok(name) = name_node.utf8_text(content.as_bytes()) {
+                return Some(name.to_string());
+            }
+        }
+        
+        // For methods, try to get the method name from the signature
+        if let Ok(sig) = node.utf8_text(content.as_bytes()) {
+            // Extract name from signature (crude but works for many cases)
+            if let Some(name) = sig.split_whitespace()
+                .find(|s| !s.starts_with('(') && !s.starts_with('{') && s.len() > 1) {
+                return Some(name.to_string());
+            }
+        }
+        
+        None
+    }
+    
+    /// Extract functionality category from intent string
+    #[cfg(feature = "ml")]
+    fn extract_functionality_category(&self, intent: &str) -> String {
+        let intent_lower = intent.to_lowercase();
+        if intent_lower.contains("database") || intent_lower.contains("query") {
+            "database".to_string()
+        } else if intent_lower.contains("log") || intent_lower.contains("debug") {
+            "logging".to_string()
+        } else if intent_lower.contains("http") || intent_lower.contains("request") {
+            "http_client".to_string()
+        } else if intent_lower.contains("auth") || intent_lower.contains("token") {
+            "authentication".to_string()
+        } else if intent_lower.contains("file") || intent_lower.contains("parse") {
+            "file_processing".to_string()
+        } else {
+            "general".to_string()
+        }
+    }
+    
+    /// Extract capabilities from code content
+    #[cfg(feature = "ml")]
+    fn extract_capabilities(&self, content: &str) -> Vec<String> {
+        let mut capabilities = Vec::new();
+        let content_lower = content.to_lowercase();
+        
+        // Simple keyword-based capability extraction
+        if content_lower.contains("async") || content_lower.contains("await") {
+            capabilities.push("async".to_string());
+        }
+        if content_lower.contains("error") || content_lower.contains("result") {
+            capabilities.push("error_handling".to_string());
+        }
+        if content_lower.contains("test") || content_lower.contains("assert") {
+            capabilities.push("testing".to_string());
+        }
+        if content_lower.contains("config") || content_lower.contains("settings") {
+            capabilities.push("configurable".to_string());
+        }
+        if content_lower.contains("stream") || content_lower.contains("buffer") {
+            capabilities.push("streaming".to_string());
+        }
+        
+        capabilities
+    }
+    
+    /// Record a user fix for ML training
+    #[cfg(feature = "ml")]
+    pub async fn record_user_fix(
+        &self,
+        file_path: &Path,
+        error_position: tree_sitter::Point,
+        original_code: &str,
+        fixed_code: &str,
+    ) -> Result<()> {
+        let language = self.detect_language(file_path)?;
+        let ml_language = self.convert_to_ml_language(&language)?;
+        let ml_components = self.get_or_create_ml_components(&ml_language).await?;
+        
+        // Parse the original code to find the error
+        let mut parser = self.get_cached_parser(&language).await?;
+        if let Some(tree) = parser.parse(original_code, None) {
+            // Find the error node at the given position
+            let error_nodes = self.find_error_nodes(&tree.root_node());
+            
+            for error_node in error_nodes {
+                if error_node.start_position().row == error_position.row &&
+                   error_node.start_position().column == error_position.column {
+                    
+                    // Create ParseError for the ML system
+                    let parse_error = crate::parsers::tree_sitter::ParseError {
+                        message: format!("Error at {}:{}", error_position.row + 1, error_position.column),
+                        start_position: error_position,
+                        end_position: error_node.end_position(),
+                        error_type: self.classify_error_type(&error_node, original_code),
+                        confidence: 0.8,
+                        ml_suggestions: vec![],
+                    };
+                    
+                    // Extract the fix from the diff
+                    let fix = self.extract_fix_from_diff(original_code, fixed_code, error_position);
+                    
+                    // Train the error predictor with this example
+                    ml_components.error_predictor
+                        .add_training_example(&parse_error, &fix)
+                        .await?;
+                    
+                    tracing::info!("Recorded user fix for ML training: {} -> {}", 
+                        parse_error.message, fix);
+                    break;
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Extract the fix from the code diff
+    #[cfg(feature = "ml")]
+    fn extract_fix_from_diff(
+        &self, 
+        original: &str, 
+        fixed: &str, 
+        error_position: tree_sitter::Point
+    ) -> String {
+        let original_lines: Vec<&str> = original.lines().collect();
+        let fixed_lines: Vec<&str> = fixed.lines().collect();
+        
+        // Find the changed line
+        if error_position.row < original_lines.len() && error_position.row < fixed_lines.len() {
+            let original_line = original_lines[error_position.row];
+            let fixed_line = fixed_lines[error_position.row];
+            
+            if original_line != fixed_line {
+                return fixed_line.to_string();
+            }
+        }
+        
+        // If line didn't change, look for nearby changes
+        for (i, (orig, fix)) in original_lines.iter().zip(fixed_lines.iter()).enumerate() {
+            if orig != fix {
+                return format!("Line {}: {}", i + 1, fix);
+            }
+        }
+        
+        // Default to showing the fixed code snippet
+        fixed.to_string()
+    }
+    
+    /// Get model cache statistics (useful for monitoring)
+    pub async fn get_model_cache_stats(&self) -> Result<String> {
+        if !self.config.enable_ml_features {
+            return Ok("ML features disabled - no model cache".to_string());
+        }
+        
+        use crate::parsers::tree_sitter::get_cache_stats;
+        let stats = get_cache_stats().await;
+        
+        Ok(format!(
+            "Model Cache Stats: {} models cached, Feature enabled: {}, Loaded models: {:?}",
+            stats.cached_models_count,
+            stats.feature_enabled,
+            stats.loaded_models
+        ))
+    }
+    
+    /// Get detailed relationship statistics for a project
+    pub async fn get_relationship_stats(&self, project_id: i32) -> Result<String> {
+        use std::collections::HashMap;
+        
+        // Get all relationships for the project
+        let relationships = self.project_db.get_all_relationships(project_id).await?;
+        
+        // Count by relationship type  
+        let mut type_counts: HashMap<String, i32> = HashMap::new();
+        for relationship in &relationships {
+            *type_counts.entry(relationship.relationship_type.clone()).or_insert(0) += 1;
+        }
+        
+        let mut stats = format!("Relationship Stats (project {}): {} total relationships\n", 
+                               project_id, relationships.len());
+        
+        for (rel_type, count) in type_counts.iter() {
+            stats.push_str(&format!("  {}: {}\n", rel_type, count));
+        }
+        
+        Ok(stats)
     }
 }
 

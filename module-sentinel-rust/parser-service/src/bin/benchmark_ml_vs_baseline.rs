@@ -125,7 +125,8 @@ async fn run_analysis_test(test_name: &str, enable_ml: bool) -> Result<Benchmark
     let project_path = "/home/warxh/cpp_mcp_master/test-multi-proj/microservices-demo";
     let result = parsing_service.parse_project(
         Path::new(project_path), 
-        &format!("microservices-demo-{}", test_name)
+        &format!("microservices-demo-{}", test_name),
+        false // Don't force reindex
     ).await?;
     
     let duration = start_time.elapsed();
