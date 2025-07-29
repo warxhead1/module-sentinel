@@ -1,0 +1,103 @@
+[package]
+name = "module-sentinel-parser"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+name = "module_sentinel_parser"
+path = "src/lib.rs"
+
+[[bin]]
+name = "module-sentinel-parser"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_real_models"
+path = "src/bin/test_real_models.rs"
+
+[[bin]]
+name = "test_real_project"
+path = "src/bin/test_real_project.rs"
+
+[[bin]]
+name = "test_sample_files"
+path = "src/bin/test_sample_files.rs"
+
+[[bin]]
+name = "benchmark_ml_vs_baseline"
+path = "src/bin/benchmark_ml_vs_baseline.rs"
+
+[dependencies]
+# Tree-sitter
+tree-sitter = { workspace = true }
+tree-sitter-cpp = { workspace = true }
+tree-sitter-python = { workspace = true }
+tree-sitter-typescript = { workspace = true }
+tree-sitter-javascript = { workspace = true }
+tree-sitter-java = { workspace = true }
+tree-sitter-go = { workspace = true }
+tree-sitter-c-sharp = { workspace = true }
+tree-sitter-rust = { workspace = true }
+
+# Database  
+tokio = { workspace = true, features = ["fs"] }
+tokio-rusqlite = "0.5"
+rusqlite = { version = "0.30", features = ["bundled"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Performance
+rayon = { workspace = true }
+memmap2 = { workspace = true }
+dashmap = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Utilities
+walkdir = { workspace = true }
+glob = { workspace = true }
+once_cell = { workspace = true }
+dirs = "5.0"
+num_cpus = "1.16"
+rand = "0.8"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+edit-distance = "2.1"
+lru = "0.12"
+sha2 = "0.10"
+regex = "1.10"
+petgraph = "0.6"
+
+# ML Integration
+ort = { version = "2.0.0-rc.10", features = ["download-binaries"], optional = true }
+reqwest = { version = "0.11", features = ["json"], optional = true }
+ndarray = { version = "0.15", optional = true }
+
+# Local dependencies
+shared-types = { path = "../shared-types" }
+
+[features]
+default = ["ml"]
+ml = ["ort", "reqwest", "ndarray"]
+
+[dev-dependencies]
+tempfile = "3.15"
+pretty_assertions = "1.4"
+dirs = "5.0"
+num_cpus = "1.16"
+futures = "0.3"
+reqwest = "0.11"

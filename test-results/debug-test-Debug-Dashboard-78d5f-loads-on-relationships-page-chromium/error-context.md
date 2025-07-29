@@ -1,5 +1,0 @@
-# Page snapshot
-
-```yaml
-- text: Module Sentinel Code Analysis Dashboard v2.0
-```

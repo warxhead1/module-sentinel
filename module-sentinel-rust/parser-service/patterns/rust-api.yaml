@@ -1,0 +1,351 @@
+language: rust
+version: "1.70"
+description: "Rust API and cross-language interaction patterns"
+
+patterns:
+  api_calls:
+    # reqwest library patterns
+    - query: |
+        (call_expression
+          function: (field_expression
+            base: (identifier) @client_obj
+            field: (field_identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @endpoint
+            (block)? @config_block
+          )
+        ) @call
+        (#match? @method "^(get|post|put|delete|patch|head)$")
+      confidence: 0.95
+      captures:
+        client_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # reqwest::Client patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (scoped_identifier
+              path: (identifier) @reqwest_mod
+              name: (identifier) @client_type
+            )
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @endpoint
+          )
+        ) @call
+        (#match? @reqwest_mod "^reqwest$")
+        (#match? @client_type "^(Client|blocking)$")
+        (#match? @method "^(get|post|put|delete|patch|head)$")
+      confidence: 0.95
+      captures:
+        reqwest_mod: "ExtractIdentifier"
+        client_type: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # hyper client patterns
+    - query: |
+        (call_expression
+          function: (field_expression
+            base: (identifier) @client_obj
+            field: (field_identifier) @method
+          )
+          arguments: (arguments
+            (call_expression) @request_builder
+          )
+        ) @call
+        (#match? @method "^request$")
+      confidence: 0.85
+      captures:
+        client_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        
+    # ureq library patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @ureq_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @endpoint
+          )
+        ) @call
+        (#match? @ureq_mod "^ureq$")
+        (#match? @method "^(get|post|put|delete|patch|head)$")
+      confidence: 0.90
+      captures:
+        ureq_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+
+  websocket_patterns:
+    # tokio-tungstenite patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (scoped_identifier
+              path: (identifier) @tungstenite_mod
+              name: (identifier) @client_mod
+            )
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @ws_url
+          )
+        ) @call
+        (#match? @tungstenite_mod "^tungstenite$")
+        (#match? @method "^connect$")
+      confidence: 0.95
+      captures:
+        tungstenite_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        ws_url: "ExtractString"
+        
+    # websocket streams
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @ws_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @ws_url
+          )
+        ) @call
+        (#match? @ws_mod "^websocket$")
+        (#match? @method "^(connect|connect_async)$")
+      confidence: 0.90
+      captures:
+        ws_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        ws_url: "ExtractString"
+
+  subprocess_patterns:
+    # std::process::Command patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (scoped_identifier
+              path: (scoped_identifier
+                path: (identifier) @std_mod
+                name: (identifier) @process_mod
+              )
+              name: (identifier) @command_type
+            )
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @command
+          )
+        ) @call
+        (#match? @std_mod "^std$")
+        (#match? @process_mod "^process$")
+        (#match? @command_type "^Command$")
+        (#match? @method "^new$")
+      confidence: 0.95
+      captures:
+        std_mod: "ExtractIdentifier"
+        process_mod: "ExtractIdentifier"
+        command_type: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        command: "ExtractString"
+        
+    # tokio::process patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (scoped_identifier
+              path: (identifier) @tokio_mod
+              name: (identifier) @process_mod
+            )
+            name: (identifier) @command_type
+          )
+          arguments: (arguments
+            (string_literal) @command
+          )
+        ) @call
+        (#match? @tokio_mod "^tokio$")
+        (#match? @process_mod "^process$")
+        (#match? @command_type "^Command$")
+      confidence: 0.95
+      captures:
+        tokio_mod: "ExtractIdentifier"
+        process_mod: "ExtractIdentifier"
+        command_type: "ExtractIdentifier"
+        command: "ExtractString"
+
+  database_patterns:
+    # sqlx patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @sqlx_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @query_string
+            (identifier)* @params
+          )
+        ) @call
+        (#match? @sqlx_mod "^sqlx$")
+        (#match? @method "^(query|query_as|execute)$")
+      confidence: 0.90
+      captures:
+        sqlx_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        query_string: "ExtractString"
+        
+    # diesel patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @diesel_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @query_string
+          )
+        ) @call
+        (#match? @diesel_mod "^diesel$")
+        (#match? @method "^(sql_query|execute)$")
+      confidence: 0.90
+      captures:
+        diesel_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        query_string: "ExtractString"
+
+  ffi_patterns:
+    # extern "C" function calls
+    - query: |
+        (call_expression
+          function: (identifier) @ffi_func
+          arguments: (arguments)
+        ) @call
+      confidence: 0.70
+      captures:
+        ffi_func: "ExtractIdentifier"
+        
+    # libloading patterns
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @libloading_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @library_path
+          )
+        ) @call
+        (#match? @libloading_mod "^libloading$")
+        (#match? @method "^(Library|Symbol)$")
+      confidence: 0.95
+      captures:
+        libloading_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        library_path: "ExtractString"
+
+  endpoint_definitions:
+    # axum route definitions
+    - query: |
+        (call_expression
+          function: (field_expression
+            base: (identifier) @router_obj
+            field: (field_identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @route_path
+            (identifier) @handler_func
+          )
+        ) @route_def
+        (#match? @method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.95
+      captures:
+        router_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        route_path: "ExtractString"
+        handler_func: "ExtractIdentifier"
+        
+    # actix-web route definitions
+    - query: |
+        (call_expression
+          function: (field_expression
+            base: (identifier) @app_obj
+            field: (field_identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @route_path
+          )
+        ) @route_def
+        (#match? @method "^(route|service)$")
+      confidence: 0.85
+      captures:
+        app_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        route_path: "ExtractString"
+        
+    # warp route definitions
+    - query: |
+        (call_expression
+          function: (scoped_identifier
+            path: (identifier) @warp_mod
+            name: (identifier) @method
+          )
+          arguments: (arguments
+            (string_literal) @route_path
+          )
+        ) @call
+        (#match? @warp_mod "^warp$")
+        (#match? @method "^path$")
+      confidence: 0.90
+      captures:
+        warp_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        route_path: "ExtractString"
+
+cross_language_patterns:
+  api_calls:
+    # Generic HTTP client patterns
+    - pattern: "(reqwest|ureq|hyper)::[^:]*::(get|post|put|delete|patch)\\s*\\(\\s*\"([^\"]+)\""
+      confidence: 0.85
+      capture_groups:
+        1: "http_library"
+        2: "http_method"
+        3: "api_endpoint"
+        
+    # Environment variable patterns
+    - pattern: "env::var\\s*\\(\\s*\"([A-Z_]+(?:URL|ENDPOINT|HOST))\""
+      confidence: 0.80
+      capture_groups:
+        1: "env_api_config"
+        
+  subprocess:
+    # Command execution patterns
+    - pattern: "Command::new\\s*\\(\\s*\"([^\"]+)\""
+      confidence: 0.90
+      capture_groups:
+        1: "subprocess_command"
+        
+  ffi_calls:
+    # Dynamic library loading
+    - pattern: "libloading::Library::new\\s*\\(\\s*\"([^\"]+)\""
+      confidence: 0.95
+      capture_groups:
+        1: "shared_library_path"
+        
+    # Extern function declarations
+    - pattern: "extern\\s+\"C\"\\s+\\{[^}]*fn\\s+(\\w+)"
+      confidence: 0.85
+      capture_groups:
+        1: "ffi_function_name"
+        
+  database:
+    # Database connection patterns
+    - pattern: "(?:PgPool::connect|Database::connect)\\s*\\(\\s*\"([^\"]+)\""
+      confidence: 0.85
+      capture_groups:
+        1: "database_url"

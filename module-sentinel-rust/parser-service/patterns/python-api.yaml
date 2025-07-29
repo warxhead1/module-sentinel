@@ -1,0 +1,323 @@
+language: python
+version: "3.12"
+description: "Python API and cross-language interaction patterns"
+
+patterns:
+  api_calls:
+    # requests library patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @lib_name
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @endpoint
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @lib_name "^requests$")
+        (#match? @method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.95
+      captures:
+        lib_name: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # httpx library patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @lib_name
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @endpoint
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @lib_name "^httpx$")
+        (#match? @method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.95
+      captures:
+        lib_name: "ExtractIdentifier"
+        method: "ExtractIdentifier" 
+        endpoint: "ExtractString"
+        
+    # urllib patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (attribute
+              object: (attribute
+                object: (identifier) @urllib
+                attr: (identifier) @request_module
+              )
+              attr: (identifier) @request_class
+            )
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @endpoint
+            (identifier)* @args
+          ]
+        ) @call
+        (#match? @urllib "^urllib$")
+        (#match? @request_module "^request$")
+        (#match? @method "^(urlopen|Request)$")
+      confidence: 0.90
+      captures:
+        urllib: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+        
+    # aiohttp client patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @session_obj
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @endpoint
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.80
+      captures:
+        session_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        endpoint: "ExtractString"
+
+  websocket_patterns:
+    # websockets library
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @ws_lib
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @ws_url
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @ws_lib "^websockets$")
+        (#match? @method "^(connect|serve)$")
+      confidence: 0.95
+      captures:
+        ws_lib: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        ws_url: "ExtractString"
+        
+    # websocket-client library
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @ws_obj
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @ws_url
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @method "^(create_connection|connect)$")
+      confidence: 0.90
+      captures:
+        ws_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        ws_url: "ExtractString"
+
+  subprocess_patterns:
+    # subprocess.run patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @subprocess_mod
+            attr: (identifier) @method
+          )
+          args: [
+            (list) @command_list
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @subprocess_mod "^subprocess$")
+        (#match? @method "^(run|call|check_call|check_output|Popen)$")
+      confidence: 0.95
+      captures:
+        subprocess_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        
+    # os.system patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @os_mod
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @command
+          ]
+        ) @call
+        (#match? @os_mod "^os$")
+        (#match? @method "^system$")
+      confidence: 0.90
+      captures:
+        os_mod: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        command: "ExtractString"
+
+  database_patterns:
+    # SQLAlchemy patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @session_obj
+            attr: (identifier) @method
+          )
+          args: [
+            (identifier) @model_class
+            (keyword_argument)* @kwargs
+          ]
+        ) @call
+        (#match? @method "^(query|add|merge|delete)$")
+      confidence: 0.85
+      captures:
+        session_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        model_class: "ExtractIdentifier"
+        
+    # Raw SQL patterns
+    - query: |
+        (call
+          function: (attribute
+            object: (identifier) @cursor_obj
+            attr: (identifier) @method
+          )
+          args: [
+            (string) @sql_query
+            (tuple)* @params
+          ]
+        ) @call
+        (#match? @method "^(execute|executemany)$")
+      confidence: 0.90
+      captures:
+        cursor_obj: "ExtractIdentifier"
+        method: "ExtractIdentifier"
+        sql_query: "ExtractString"
+
+  endpoint_definitions:
+    # Flask route definitions
+    - query: |
+        (decorated_definition
+          decorator: (decorator
+            decorator: (call
+              function: (attribute
+                object: (identifier) @app_obj
+                attr: (identifier) @route_method
+              )
+              args: [
+                (string) @route_path
+                (keyword_argument)* @kwargs
+              ]
+            )
+          )
+          definition: (function_definition
+            name: (identifier) @handler_name
+          )
+        ) @route_def
+        (#match? @route_method "^route$")
+      confidence: 0.95
+      captures:
+        app_obj: "ExtractIdentifier"
+        route_method: "ExtractIdentifier"
+        route_path: "ExtractString"
+        handler_name: "ExtractIdentifier"
+        
+    # Django URL patterns
+    - query: |
+        (call
+          function: (identifier) @path_func
+          args: [
+            (string) @url_pattern
+            (identifier) @view_func
+            (keyword_argument)* @kwargs
+          ]
+        ) @url_def
+        (#match? @path_func "^(path|re_path|url)$")
+      confidence: 0.90
+      captures:
+        path_func: "ExtractIdentifier"
+        url_pattern: "ExtractString"
+        view_func: "ExtractIdentifier"
+        
+    # FastAPI route definitions  
+    - query: |
+        (decorated_definition
+          decorator: (decorator
+            decorator: (call
+              function: (attribute
+                object: (identifier) @app_obj
+                attr: (identifier) @http_method
+              )
+              args: [
+                (string) @route_path
+                (keyword_argument)* @kwargs
+              ]
+            )
+          )
+          definition: (function_definition
+            name: (identifier) @handler_name
+          )
+        ) @route_def
+        (#match? @http_method "^(get|post|put|delete|patch|head|options)$")
+      confidence: 0.95
+      captures:
+        app_obj: "ExtractIdentifier"
+        http_method: "ExtractIdentifier"
+        route_path: "ExtractString"
+        handler_name: "ExtractIdentifier"
+
+cross_language_patterns:
+  api_calls:
+    # Generic HTTP library patterns
+    - pattern: "(requests|httpx|urllib)\\.(?:request\\.|)?(?:get|post|put|delete|patch)\\s*\\(\\s*[\"']([^\"']+)[\"']"
+      confidence: 0.85
+      capture_groups:
+        1: "http_library"
+        2: "api_endpoint"
+        
+    # Environment variable API URLs
+    - pattern: "os\\.environ(?:\\.get)?\\s*\\(?\\s*[\"']([A-Z_]+(?:URL|ENDPOINT|HOST))[\"']"
+      confidence: 0.80
+      capture_groups:
+        1: "env_api_config"
+        
+  subprocess:
+    # Subprocess command patterns
+    - pattern: "subprocess\\.(?:run|call|check_call|check_output|Popen)\\s*\\(\\s*\\[\\s*[\"']([^\"']+)[\"']"
+      confidence: 0.90
+      capture_groups:
+        1: "subprocess_command"
+        
+    # os.system patterns
+    - pattern: "os\\.system\\s*\\(\\s*[\"']([^\"']+)[\"']"
+      confidence: 0.85
+      capture_groups:
+        1: "system_command"
+        
+  ffi_calls:
+    # ctypes patterns
+    - pattern: "ctypes\\.(?:CDLL|WinDLL|PyDLL)\\s*\\(\\s*[\"']([^\"']+)[\"']"
+      confidence: 0.90
+      capture_groups:
+        1: "shared_library_path"
+        
+  database:
+    # Database connection strings
+    - pattern: "(?:create_engine|connect)\\s*\\(\\s*[\"']([^\"']+://[^\"']+)[\"']"
+      confidence: 0.85
+      capture_groups:
+        1: "database_url"

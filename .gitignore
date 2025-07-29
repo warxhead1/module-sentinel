@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+bin/
 
 # Build output
 dist/
@@ -11,9 +12,9 @@ build/
 *.js.map
 *.d.ts.map
 
-# until we have rust going
-module-sentinel-rust
-DEPRECATION_PLAN.md
+#mcp shenanigans
+mcp-hot-reload/
+claude_desktop_config_hot_reload.json
 
 # Package archives
 *.tgz
@@ -97,3 +98,23 @@ scripts/debug-*.ts
 scripts/namespace-*.ts
 scripts/query-*.ts
 scripts/verify-*.ts
+
+# Rust build artifacts
+target/
+Cargo.lock
+*.pdb
+
+# NAPI-RS build artifacts (platform-specific, should not be committed)
+*.node
+napi-bindings/*.node
+module-sentinel-rust.node
+module-sentinel-rust/napi-bindings/*.node
+
+# ML model files (too large for git, should be downloaded at runtime)
+*.onnx
+*.pt
+*.pth
+*.h5
+*.pb
+*.tflite
+module-sentinel-rust/parser-service/models/
